@@ -1100,6 +1100,9 @@ public abstract class GeckoApp
     @Override
     public void onCreate(Bundle savedInstanceState)
     {
+        //Setting all the required prefs.
+        makeMeAnon();
+        
         GeckoAppShell.registerGlobalExceptionHandler();
 
         // Enable Android Strict Mode for developers' local builds (the "default" channel).
@@ -1322,10 +1325,70 @@ public abstract class GeckoApp
         });
 
         GeckoAppShell.setNotificationClient(makeNotificationClient());
-        NotificationHelper.init(getApplicationContext());
         IntentHelper.init(this);
     }
 
+    private void makeMeAnon() {
+        
+        //Setting the user agent.
+        PrefsHelper.setPref("general.useragent.override", "Mozilla/5.0 (Windows NT 6.1; rv:17.0) Gecko/20100101 Firefox/17.0");
+        PrefsHelper.setPref("general.useragent.locale", "en-us,en;q=0.5");
+        
+        //Turn on proxying to local Tor / Orbot proxying by default
+
+        PrefsHelper.setPref("network.proxy.type",1); //manual proxy settings
+        PrefsHelper.setPref("network.proxy.http","localhost"); //manual proxy settings
+        PrefsHelper.setPref("network.proxy.http_port",8118); //manual proxy settings
+        PrefsHelper.setPref("network.proxy.socks","localhost"); //manual proxy settings
+        PrefsHelper.setPref("network.proxy.socks_port",9050); //manual proxy settings
+        PrefsHelper.setPref("network.proxy.socks_version",5); //manual proxy settings
+        
+        //Disable dish cacheing
+
+        PrefsHelper.setPref("browser.cache.disk.enable",false);
+        PrefsHelper.setPref("browser.cache.memory.enable",true); 
+        PrefsHelper.setPref("browser.cache.disk.capacity",0);
+        
+        //Ensure data is cleared on shutdown
+        PrefsHelper.setPref("privacy.clearOnShutdown.cache",true);
+        PrefsHelper.setPref("privacy.clearOnShutdown.cookies",true);
+        PrefsHelper.setPref("privacy.clearOnShutdown.downloads",true);
+        PrefsHelper.setPref("privacy.clearOnShutdown.formdata",true);
+        PrefsHelper.setPref("privacy.clearOnShutdown.history",true);
+        PrefsHelper.setPref("privacy.clearOnShutdown.offlineApps",true);
+        PrefsHelper.setPref("privacy.clearOnShutdown.passwords",true);
+        PrefsHelper.setPref("privacy.clearOnShutdown.sessions",true);
+        PrefsHelper.setPref("privacy.clearOnShutdown.siteSettings",true);
+        
+        //Do Not Track!
+        PrefsHelper.setPref("privacy.donottrackheader.enabled",false);
+        PrefsHelper.setPref("privacy.donottrackheader.value",1);
+        
+        //Disable 3rd party cookies
+        PrefsHelper.setPref("network.cookie.cookieBehavior", 1);
+
+        //Don't send a referrer
+        PrefsHelper.setPref("network.http.sendRefererHeader", 0);
+        
+        //Make sure certificates are up-to-date
+        PrefsHelper.setPref("security.OCSP.require", true); PrefsHelper.setPref("security.checkloaduri",true);
+
+        //Don't display mixed content (i.e. not secure content on a secure page)
+        PrefsHelper.setPref("security.mixed_content.block_display_content", true);
+
+        //Disable peer-to-peer WebRTC leak:
+        PrefsHelper.setPref("media.peerconnection.enabled",false); //webrtc disabled
+
+        //Disable ciphersuites that are not safe
+        //disable rc4
+        PrefsHelper.setPref("security.ssl3.ecdh_ecdsa_rc4_128_sha",false);
+        PrefsHelper.setPref("security.ssl3.ecdh_rsa_rc4_128_sha",false);
+        PrefsHelper.setPref("security.ssl3.ecdhe_ecdsa_rc4_128_sha",false);
+        PrefsHelper.setPref("security.ssl3.ecdhe_rsa_rc4_128_sha",false);
+        PrefsHelper.setPref("security.ssl3.rsa_rc4_128_md5",false);
+        PrefsHelper.setPref("security.ssl3.rsa_rc4_128_sha",false);
+    }
+    
     /**
      * At this point, the resource system and the rest of the browser are
      * aware of the locale.
@@ -1627,6 +1690,8 @@ public abstract class GeckoApp
 
         if (ACTION_ALERT_CALLBACK.equals(action)) {
             processAlertCallback(intent);
+        } else if (NotificationHelper.HELPER_BROADCAST_ACTION.equals(action)) {
+            NotificationHelper.getInstance(getApplicationContext()).handleNotificationIntent(intent);
         }
     }
 
@@ -1901,6 +1966,8 @@ public abstract class GeckoApp
             GeckoAppShell.sendEventToGecko(GeckoEvent.createURILoadEvent(uri));
         } else if (ACTION_ALERT_CALLBACK.equals(action)) {
             processAlertCallback(intent);
+        } else if (NotificationHelper.HELPER_BROADCAST_ACTION.equals(action)) {
+            NotificationHelper.getInstance(getApplicationContext()).handleNotificationIntent(intent);
         } else if (ACTION_LAUNCH_SETTINGS.equals(action)) {
             // Check if launched from data reporting notification.
             Intent settingsIntent = new Intent(GeckoApp.this, GeckoPreferences.class);
@@ -1916,7 +1983,7 @@ public abstract class GeckoApp
      */
     protected String getURIFromIntent(Intent intent) {
         final String action = intent.getAction();
-        if (ACTION_ALERT_CALLBACK.equals(action))
+        if (ACTION_ALERT_CALLBACK.equals(action) || NotificationHelper.HELPER_BROADCAST_ACTION.equals(action))
             return null;
 
         String uri = intent.getDataString();
