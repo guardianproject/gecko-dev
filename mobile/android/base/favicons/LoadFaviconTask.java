@@ -11,17 +11,23 @@ import android.net.http.AndroidHttpClient;
 import android.os.Handler;
 import android.text.TextUtils;
 import android.util.Log;
+
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
+import org.apache.http.HttpHost;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.HttpGet;
+import org.apache.http.conn.params.ConnRoutePNames;
 import org.mozilla.gecko.GeckoAppShell;
+import org.mozilla.gecko.PrefsHelper;
+import org.mozilla.gecko.PrefsHelper.PrefHandler;
 import org.mozilla.gecko.db.BrowserDB;
 import org.mozilla.gecko.favicons.decoders.FaviconDecoder;
 import org.mozilla.gecko.favicons.decoders.LoadFaviconResult;
 import org.mozilla.gecko.util.GeckoJarReader;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.util.UiAsyncTask;
+
 import static org.mozilla.gecko.favicons.Favicons.context;
 
 import java.io.IOException;
@@ -119,10 +125,46 @@ public class LoadFaviconTask extends UiAsyncTask<Void, Void, Bitmap> {
         visitedLinkSet.add(faviconURI.toString());
         return tryDownloadRecurse(faviconURI, visitedLinkSet);
     }
+    String[] prefs = { "network.proxy.http",
+            "network.proxy.http_port" };
+    String host;
+    int port;
     private HttpResponse tryDownloadRecurse(URI faviconURI, HashSet<String> visited) throws URISyntaxException, IOException {
         if (visited.size() == MAX_REDIRECTS_TO_FOLLOW) {
             return null;
         }
+
+        PrefHandler handler = new PrefHandler() {
+
+            @Override
+            public void prefValue(String pref, String value) {
+                if(pref.equals("network.proxy.http"))
+                    host = value;
+            }
+
+            @Override
+            public void prefValue(String pref, int value) {
+                if(pref.equals(""))
+                    port = value;
+            }
+
+            @Override
+            public void prefValue(String pref, boolean value) {
+            }
+
+            @Override
+            public boolean isObserver() {
+                return false;
+            }
+
+            @Override
+            public void finish() {
+            }
+        };
+        PrefsHelper.getPrefs(prefs, handler);
+
+        HttpHost proxy = new HttpHost(host, port, "http");
+        httpClient.getParams().setParameter(ConnRoutePNames.DEFAULT_PROXY, proxy);
 
         HttpGet request = new HttpGet(faviconURI);
         HttpResponse response = httpClient.execute(request);
