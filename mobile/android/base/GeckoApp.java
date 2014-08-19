@@ -1342,7 +1342,12 @@ public abstract class GeckoApp
         PrefsHelper.setPref("network.proxy.socks","localhost"); //manual proxy settings
         PrefsHelper.setPref("network.proxy.socks_port",9050); //manual proxy settings
         PrefsHelper.setPref("network.proxy.socks_version",5); //manual proxy settings
+	PrefsHelper.setPref("network.proxy.socks_remote_dns",true); //make sure dns is remote
         
+	//turn off any DNS optimization outside of standard flow
+	PrefsHelper.setPref("network.dns.disablePrefetch",true);
+	PrefsHelper.setPref("network.dns.disablePrefetchFromHTTPS",true);
+
         //Disable dish cacheing
 
         PrefsHelper.setPref("browser.cache.disk.enable",false);
@@ -1371,7 +1376,8 @@ public abstract class GeckoApp
         PrefsHelper.setPref("network.http.sendRefererHeader", 0);
         
         //Make sure certificates are up-to-date
-        PrefsHelper.setPref("security.OCSP.require", true); PrefsHelper.setPref("security.checkloaduri",true);
+        PrefsHelper.setPref("security.OCSP.require", true); 
+	PrefsHelper.setPref("security.checkloaduri",true);
 
         //Don't display mixed content (i.e. not secure content on a secure page)
         PrefsHelper.setPref("security.mixed_content.block_display_content", true);
