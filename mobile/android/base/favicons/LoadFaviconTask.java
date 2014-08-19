@@ -125,10 +125,12 @@ public class LoadFaviconTask extends UiAsyncTask<Void, Void, Bitmap> {
         visitedLinkSet.add(faviconURI.toString());
         return tryDownloadRecurse(faviconURI, visitedLinkSet);
     }
+
     String[] prefs = { "network.proxy.http",
             "network.proxy.http_port" };
-    String host;
-    int port;
+    String proxyHost = "localhost"; //default
+    int proxyPort = 8118; //default
+
     private HttpResponse tryDownloadRecurse(URI faviconURI, HashSet<String> visited) throws URISyntaxException, IOException {
         if (visited.size() == MAX_REDIRECTS_TO_FOLLOW) {
             return null;
@@ -139,13 +141,15 @@ public class LoadFaviconTask extends UiAsyncTask<Void, Void, Bitmap> {
             @Override
             public void prefValue(String pref, String value) {
                 if(pref.equals("network.proxy.http"))
-                    host = value;
+                    proxyHost = value;
+		else if (pref.equals("network.proxy.http_port"))
+		    proxyPort = Integer.parseInt(value);
             }
 
             @Override
             public void prefValue(String pref, int value) {
-                if(pref.equals(""))
-                    port = value;
+                if(pref.equals("network.proxy.http_port"))
+                    proxyPort = value;
             }
 
             @Override
@@ -163,7 +167,8 @@ public class LoadFaviconTask extends UiAsyncTask<Void, Void, Bitmap> {
         };
         PrefsHelper.getPrefs(prefs, handler);
 
-        HttpHost proxy = new HttpHost(host, port, "http");
+	//Log.d("OrfoxFennec","set proxy to: " + proxyHost + ":" + proxyPort);
+        HttpHost proxy = new HttpHost(proxyHost, proxyPort);
         httpClient.getParams().setParameter(ConnRoutePNames.DEFAULT_PROXY, proxy);
 
         HttpGet request = new HttpGet(faviconURI);
