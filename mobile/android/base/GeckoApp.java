@@ -1333,22 +1333,8 @@ public abstract class GeckoApp
 	pound_tor(); //default settings from Tor Browser
         
         //Turn on proxying to local Tor / Orbot proxying by default
-        PrefsHelper.setPref("network.proxy.type",1); //manual proxy settings
         PrefsHelper.setPref("network.proxy.http","localhost"); //manual proxy settings
         PrefsHelper.setPref("network.proxy.http_port",8118); //manual proxy settings
-        PrefsHelper.setPref("network.proxy.socks","localhost"); //manual proxy settings
-        PrefsHelper.setPref("network.proxy.socks_port",9050); //manual proxy settings
-        PrefsHelper.setPref("network.proxy.socks_version",5); //manual proxy settings
-	PrefsHelper.setPref("network.proxy.socks_remote_dns",true); //make sure dns is remote
-        
-	//turn off any DNS optimization outside of standard flow
-	PrefsHelper.setPref("network.dns.disablePrefetch",true);
-	PrefsHelper.setPref("network.dns.disablePrefetchFromHTTPS",true);
-
-        //Disable dish cacheing
-        PrefsHelper.setPref("browser.cache.disk.enable",false);
-        PrefsHelper.setPref("browser.cache.memory.enable",true); 
-        PrefsHelper.setPref("browser.cache.disk.capacity",0);
         
         //Ensure data is cleared on shutdown
         PrefsHelper.setPref("privacy.clearOnShutdown.cache",true);
@@ -1361,20 +1347,9 @@ public abstract class GeckoApp
         PrefsHelper.setPref("privacy.clearOnShutdown.sessions",true);
         PrefsHelper.setPref("privacy.clearOnShutdown.siteSettings",true);
         
-        //Do Not Track!
-        PrefsHelper.setPref("privacy.donottrackheader.enabled",false);
-        PrefsHelper.setPref("privacy.donottrackheader.value",1);
-        
-        //Disable 3rd party cookies
-        PrefsHelper.setPref("network.cookie.cookieBehavior", 1);
-
         //Don't send a referrer
         PrefsHelper.setPref("network.http.sendRefererHeader", 0);
         
-        //Make sure certificates are up-to-date
-        PrefsHelper.setPref("security.OCSP.require", true); 
-	PrefsHelper.setPref("security.checkloaduri",true);
-
         //Don't display mixed content (i.e. not secure content on a secure page)
         PrefsHelper.setPref("security.mixed_content.block_display_content", true);
 
@@ -1469,9 +1444,9 @@ pref("general.useragent.vendorSub", "");
 pref("dom.enable_performance", false);
 pref("plugin.expose_full_path", false);
 pref("browser.zoom.siteSpecific", false);
-// pref("intl.accept_languages", "en-us, en"); // Set by Torbutton
-// pref("intl.accept_charsets", "iso-8859-1,*,utf-8"); // Set by Torbutton
-// pref("intl.charsetmenu.browser.cache", "UTF-8"); // Set by Torbutton
+pref("intl.accept_languages", "en-us, en"); // Set by Torbutton
+pref("intl.accept_charsets", "iso-8859-1,*,utf-8"); // Set by Torbutton
+pref("intl.charsetmenu.browser.cache", "UTF-8"); // Set by Torbutton
 
 // Third party stuff
 pref("network.cookie.cookieBehavior", 1);
@@ -1533,8 +1508,8 @@ pref("keyword.URL", "https://startpage.com/do/search?q=");
 // Hacks/workarounds: Direct2D seems to crash w/ lots of video cards w/ MinGW?
 // If only the first one is set to true then the Tor Network Settings are blank
 // on some Windows machines.
-pref("gfx.direct2d.disabled", true);
-pref("layers.acceleration.disabled", true);
+//pref("gfx.direct2d.disabled", true);
+//pref("layers.acceleration.disabled", true);
 
     }
     
