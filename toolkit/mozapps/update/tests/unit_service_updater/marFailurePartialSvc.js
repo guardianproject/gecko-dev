@@ -15,7 +15,7 @@ function run_test() {
   gTestFiles[11].originalFile = "partial.png";
   gTestDirs = gTestDirsPartialSuccess;
   setTestFilesAndDirsForFailure();
-  setupUpdaterTest(FILE_PARTIAL_MAR, false, false);
+  setupUpdaterTest(FILE_PARTIAL_MAR);
 
   createUpdaterINI();
 
@@ -33,7 +33,8 @@ function run_test() {
 }
 
 function setupAppFilesFinished() {
-  runUpdateUsingService(STATE_PENDING_SVC, STATE_FAILED);
+  runUpdateUsingService(STATE_PENDING_SVC,
+                        STATE_FAILED_LOADSOURCE_ERROR_WRONG_SIZE);
 }
 
 /**
@@ -41,25 +42,24 @@ function setupAppFilesFinished() {
  * the test.
  */
 function checkUpdateFinished() {
-  if (IS_MACOSX || IS_WIN) {
-    // Check that the post update process was not launched.
-    do_check_false(getPostUpdateFile(".running").exists());
-  }
-
   if (IS_MACOSX) {
-    logTestInfo("testing last modified time on the apply to directory has " +
-                "changed after a successful update (bug 600098)");
+    debugDump("testing last modified time on the apply to directory has " +
+              "changed after a successful update (bug 600098)");
     let now = Date.now();
     let applyToDir = getApplyDirFile();
     let timeDiff = Math.abs(applyToDir.lastModifiedTime - now);
     do_check_true(timeDiff < MAC_MAX_TIME_DIFFERENCE);
   }
 
-  checkFilesAfterUpdateFailure();
-  // Sorting on Linux is different so skip this check for now.
-  if (!IS_UNIX) {
-    checkUpdateLogContents(LOG_PARTIAL_FAILURE);
+  if (IS_WIN || IS_MACOSX) {
+    let running = getPostUpdateFile(".running");
+    debugDump("checking that the post update process running file doesn't " +
+              "exist. Path: " + running.path);
+    do_check_false(running.exists());
   }
 
+  checkFilesAfterUpdateFailure(getApplyDirFile, false, false);
+  checkUpdateLogContents(LOG_PARTIAL_FAILURE);
+  standardInit();
   checkCallbackServiceLog();
 }

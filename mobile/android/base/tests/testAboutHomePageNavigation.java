@@ -1,6 +1,11 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 package org.mozilla.gecko.tests;
 
-import org.mozilla.gecko.tests.components.AboutHomeComponent.PanelType;
+import org.mozilla.gecko.home.HomeConfig;
+import org.mozilla.gecko.home.HomeConfig.PanelType;
 import org.mozilla.gecko.tests.helpers.DeviceHelper;
 import org.mozilla.gecko.tests.helpers.GeckoHelper;
 

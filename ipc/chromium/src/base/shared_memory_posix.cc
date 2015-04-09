@@ -14,6 +14,7 @@
 #include "base/logging.h"
 #include "base/platform_thread.h"
 #include "base/string_util.h"
+#include "mozilla/UniquePtr.h"
 
 namespace base {
 
@@ -142,7 +143,7 @@ class ScopedFILEClose {
   }
 };
 
-typedef scoped_ptr_malloc<FILE, ScopedFILEClose> ScopedFILE;
+typedef mozilla::UniquePtr<FILE, ScopedFILEClose> ScopedFILE;
 
 }
 
@@ -252,7 +253,7 @@ bool SharedMemory::Unmap() {
   return true;
 }
 
-bool SharedMemory::ShareToProcessCommon(ProcessHandle process,
+bool SharedMemory::ShareToProcessCommon(ProcessId processId,
                                         SharedMemoryHandle *new_handle,
                                         bool close_self) {
   const int new_fd = dup(mapped_file_);

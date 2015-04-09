@@ -2,8 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
-Components.utils.import("resource://gre/modules/Services.jsm");
+Components.utils.import("resource://gre/modules/XPCOMUtils.jsm", this);
+Components.utils.import("resource://gre/modules/Services.jsm", this);
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
@@ -140,6 +140,7 @@ TimerManager.prototype = {
     var callbackToFire = null;
     var earliestIntendedTime = null;
     var skippedFirings = false;
+    var lastUpdateTime = null;
     function tryFire(callback, intendedTime) {
       var selected = false;
       if (intendedTime <= now) {
@@ -184,7 +185,7 @@ TimerManager.prototype = {
                                                                       timerID);
       // Initialize the last update time to 0 when the preference isn't set so
       // the timer will be notified soon after a new profile's first use.
-      let lastUpdateTime = getPref("getIntPref", prefLastUpdate, 0);
+      lastUpdateTime = getPref("getIntPref", prefLastUpdate, 0);
 
       // If the last update time is greater than the current time then reset
       // it to 0 and the timer manager will correct the value when it fires

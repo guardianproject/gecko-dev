@@ -17,24 +17,30 @@ namespace gl {
 class SharedSurface_IOSurface : public SharedSurface
 {
 public:
-    static SharedSurface_IOSurface* Create(MacIOSurface* surface, GLContext* gl, bool hasAlpha);
+    static UniquePtr<SharedSurface_IOSurface> Create(const RefPtr<MacIOSurface>& ioSurf,
+                                                     GLContext* gl,
+                                                     bool hasAlpha);
 
     ~SharedSurface_IOSurface();
 
-    virtual void LockProdImpl() MOZ_OVERRIDE { }
-    virtual void UnlockProdImpl() MOZ_OVERRIDE { }
+    virtual void LockProdImpl() override { }
+    virtual void UnlockProdImpl() override { }
 
-    virtual void Fence() MOZ_OVERRIDE;
-    virtual bool WaitSync() MOZ_OVERRIDE { return true; }
+    virtual void Fence() override;
+    virtual bool WaitSync() override { return true; }
+    virtual bool PollSync() override { return true; }
 
+    virtual bool CopyTexImage2D(GLenum target, GLint level, GLenum internalformat,
+                                GLint x, GLint y, GLsizei width, GLsizei height,
+                                GLint border) override;
     virtual bool ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
-                            GLenum format, GLenum type, GLvoid *pixels) MOZ_OVERRIDE;
+                            GLenum format, GLenum type, GLvoid *pixels) override;
 
-    virtual GLuint ProdTexture() MOZ_OVERRIDE {
+    virtual GLuint ProdTexture() override {
         return mProdTex;
     }
 
-    virtual GLenum ProdTextureTarget() const MOZ_OVERRIDE {
+    virtual GLenum ProdTextureTarget() const override {
         return LOCAL_GL_TEXTURE_RECTANGLE_ARB;
     }
 
@@ -43,31 +49,29 @@ public:
         return static_cast<SharedSurface_IOSurface*>(surf);
     }
 
-    GLuint ConsTexture(GLContext* consGL);
-
-    GLenum ConsTextureTarget() const {
-        return LOCAL_GL_TEXTURE_RECTANGLE_ARB;
+    MacIOSurface* GetIOSurface() const {
+        return mIOSurf;
     }
 
-    MacIOSurface* GetIOSurface() const {
-        return mSurface;
+    virtual bool NeedsIndirectReads() const override {
+        return true;
     }
 
 private:
-    SharedSurface_IOSurface(MacIOSurface* surface, GLContext* gl, const gfx::IntSize& size, bool hasAlpha);
+    SharedSurface_IOSurface(const RefPtr<MacIOSurface>& ioSurf,
+                            GLContext* gl, const gfx::IntSize& size,
+                            bool hasAlpha);
 
-    RefPtr<MacIOSurface> mSurface;
+    RefPtr<MacIOSurface> mIOSurf;
     GLuint mProdTex;
-    const GLContext* mCurConsGL;
-    GLuint mConsTex;
 };
 
 class SurfaceFactory_IOSurface : public SurfaceFactory
 {
 public:
     // Infallible.
-    static SurfaceFactory_IOSurface* Create(GLContext* gl,
-                                            const SurfaceCaps& caps);
+    static UniquePtr<SurfaceFactory_IOSurface> Create(GLContext* gl,
+                                                      const SurfaceCaps& caps);
 protected:
     const gfx::IntSize mMaxDims;
 
@@ -79,7 +83,7 @@ protected:
     {
     }
 
-    virtual SharedSurface* CreateShared(const gfx::IntSize& size) MOZ_OVERRIDE;
+    virtual UniquePtr<SharedSurface> CreateShared(const gfx::IntSize& size) override;
 };
 
 } /* namespace gfx */

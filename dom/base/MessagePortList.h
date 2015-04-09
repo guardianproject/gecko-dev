@@ -18,8 +18,8 @@
 namespace mozilla {
 namespace dom {
 
-class MessagePortList MOZ_FINAL : public nsISupports
-                                , public nsWrapperCache
+class MessagePortList final : public nsISupports
+                            , public nsWrapperCache
 {
   ~MessagePortList() {}
 
@@ -32,7 +32,6 @@ public:
     : mOwner(aOwner)
     , mPorts(aPorts)
   {
-    SetIsDOMBinding();
   }
 
   nsISupports*
@@ -42,7 +41,7 @@ public:
   }
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   uint32_t
   Length() const

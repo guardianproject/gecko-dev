@@ -51,12 +51,12 @@ template<class SmartPtr>
 class PointerClearer : public ShutdownObserver
 {
 public:
-  PointerClearer(SmartPtr* aPtr)
+  explicit PointerClearer(SmartPtr* aPtr)
     : mPtr(aPtr)
   {
   }
 
-  virtual void Shutdown()
+  virtual void Shutdown() override
   {
     if (mPtr) {
       *mPtr = nullptr;

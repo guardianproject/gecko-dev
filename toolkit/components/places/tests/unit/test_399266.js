@@ -26,7 +26,7 @@ add_task(function test_execute()
                     transition: TRANSITION_FRAMED_LINK });
     }
   }
-  yield promiseAddVisits(places);
+  yield PlacesTestUtils.addVisits(places);
 
   // test our optimized query for the "Most Visited" item
   // in the "Smart Bookmarks" folder
@@ -60,13 +60,13 @@ add_task(function test_execute()
   // http://www.test-19.com/
   // ...
   // http://www.test-10.com/
-  let options = PlacesUtils.history.getNewQueryOptions();
+  options = PlacesUtils.history.getNewQueryOptions();
   options.sortingMode = options.SORT_BY_VISITCOUNT_DESCENDING;
   options.resultType = options.RESULTS_AS_URI;
-  let root = PlacesUtils.history.executeQuery(PlacesUtils.history.getNewQuery(),
+  root = PlacesUtils.history.executeQuery(PlacesUtils.history.getNewQuery(),
                                               options).root;
   root.containerOpen = true;
-  let cc = root.childCount;
+  cc = root.childCount;
   do_check_eq(cc, TOTAL_SITES);
   for (let i = 0; i < 10; i++) {
     let node = root.getChild(i);

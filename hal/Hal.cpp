@@ -6,6 +6,7 @@
 
 #include "Hal.h"
 #include "HalImpl.h"
+#include "HalLog.h"
 #include "HalSandbox.h"
 #include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
@@ -129,7 +130,7 @@ Vibrate(const nsTArray<uint32_t>& pattern, const WindowIdentifier &id)
   // only the window corresponding to the bottommost process has its
   // visibility state set correctly.
   if (!id.HasTraveledThroughIPC() && !WindowIsActive(id.GetWindow())) {
-    HAL_LOG(("Vibrate: Window is inactive, dropping vibrate."));
+    HAL_LOG("Vibrate: Window is inactive, dropping vibrate.");
     return;
   }
 
@@ -860,16 +861,11 @@ SetAlarm(int32_t aSeconds, int32_t aNanoseconds)
 }
 
 void
-SetProcessPriority(int aPid,
-                   ProcessPriority aPriority,
-                   ProcessCPUPriority aCPUPriority,
-                   uint32_t aBackgroundLRU)
+SetProcessPriority(int aPid, ProcessPriority aPriority, uint32_t aLRU)
 {
   // n.b. The sandboxed implementation crashes; SetProcessPriority works only
   // from the main process.
-  MOZ_ASSERT(aBackgroundLRU == 0 || aPriority == PROCESS_PRIORITY_BACKGROUND);
-  PROXY_IF_SANDBOXED(SetProcessPriority(aPid, aPriority, aCPUPriority,
-                                        aBackgroundLRU));
+  PROXY_IF_SANDBOXED(SetProcessPriority(aPid, aPriority, aLRU));
 }
 
 void
@@ -919,96 +915,16 @@ ThreadPriorityToString(ThreadPriority aPriority)
   }
 }
 
-// From HalTypes.h.
-const char*
-ProcessPriorityToString(ProcessPriority aPriority,
-                        ProcessCPUPriority aCPUPriority)
-{
-  // Sorry this is ugly.  At least it's all in one place.
-  //
-  // We intentionally fall through if aCPUPriority is invalid; we won't hit any
-  // of the if statements further down, so it's OK.
-
-  switch (aPriority) {
-  case PROCESS_PRIORITY_MASTER:
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
-      return "MASTER:CPU_NORMAL";
-    }
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
-      return "MASTER:CPU_LOW";
-    }
-  case PROCESS_PRIORITY_PREALLOC:
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
-      return "PREALLOC:CPU_NORMAL";
-    }
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
-      return "PREALLOC:CPU_LOW";
-    }
-  case PROCESS_PRIORITY_FOREGROUND_HIGH:
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
-      return "FOREGROUND_HIGH:CPU_NORMAL";
-    }
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
-      return "FOREGROUND_HIGH:CPU_LOW";
-    }
-  case PROCESS_PRIORITY_FOREGROUND:
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
-      return "FOREGROUND:CPU_NORMAL";
-    }
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
-      return "FOREGROUND:CPU_LOW";
-    }
-  case PROCESS_PRIORITY_FOREGROUND_KEYBOARD:
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
-      return "FOREGROUND_KEYBOARD:CPU_NORMAL";
-    }
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
-      return "FOREGROUND_KEYBOARD:CPU_LOW";
-    }
-  case PROCESS_PRIORITY_BACKGROUND_PERCEIVABLE:
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
-      return "BACKGROUND_PERCEIVABLE:CPU_NORMAL";
-    }
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
-      return "BACKGROUND_PERCEIVABLE:CPU_LOW";
-    }
-  case PROCESS_PRIORITY_BACKGROUND_HOMESCREEN:
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
-      return "BACKGROUND_HOMESCREEN:CPU_NORMAL";
-    }
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
-      return "BACKGROUND_HOMESCREEN:CPU_LOW";
-    }
-  case PROCESS_PRIORITY_BACKGROUND:
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
-      return "BACKGROUND:CPU_NORMAL";
-    }
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
-      return "BACKGROUND:CPU_LOW";
-    }
-  case PROCESS_PRIORITY_UNKNOWN:
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_NORMAL) {
-      return "UNKNOWN:CPU_NORMAL";
-    }
-    if (aCPUPriority == PROCESS_CPU_PRIORITY_LOW) {
-      return "UNKNOWN:CPU_LOW";
-    }
-  default:
-    // Fall through.  (|default| is here to silence warnings.)
-    break;
-  }
-
-  MOZ_ASSERT(false);
-  return "???";
-}
-
 static StaticAutoPtr<ObserverList<FMRadioOperationInformation> > sFMRadioObservers;
+static StaticAutoPtr<ObserverList<FMRadioRDSGroup> > sFMRadioRDSObservers;
 
 static void
 InitializeFMRadioObserver()
 {
   if (!sFMRadioObservers) {
     sFMRadioObservers = new ObserverList<FMRadioOperationInformation>;
+    sFMRadioRDSObservers = new ObserverList<FMRadioRDSGroup>;
+    ClearOnShutdown(&sFMRadioRDSObservers);
     ClearOnShutdown(&sFMRadioObservers);
   }
 }
@@ -1034,6 +950,27 @@ NotifyFMRadioStatus(const FMRadioOperationInformation& aFMRadioState) {
 }
 
 void
+RegisterFMRadioRDSObserver(FMRadioRDSObserver* aFMRadioRDSObserver) {
+  AssertMainThread();
+  InitializeFMRadioObserver();
+  sFMRadioRDSObservers->AddObserver(aFMRadioRDSObserver);
+}
+
+void
+UnregisterFMRadioRDSObserver(FMRadioRDSObserver* aFMRadioRDSObserver) {
+  AssertMainThread();
+  InitializeFMRadioObserver();
+  sFMRadioRDSObservers->RemoveObserver(aFMRadioRDSObserver);
+}
+
+
+void
+NotifyFMRadioRDSGroup(const FMRadioRDSGroup& aRDSGroup) {
+  InitializeFMRadioObserver();
+  sFMRadioRDSObservers->Broadcast(aRDSGroup);
+}
+
+void
 EnableFMRadio(const FMRadioSettings& aInfo) {
   AssertMainThread();
   PROXY_IF_SANDBOXED(EnableFMRadio(aInfo));
@@ -1047,7 +984,6 @@ DisableFMRadio() {
 
 void
 FMRadioSeek(const FMRadioSeekDirection& aDirection) {
-  AssertMainThread();
   PROXY_IF_SANDBOXED(FMRadioSeek(aDirection));
 }
 
@@ -1059,7 +995,6 @@ GetFMRadioSettings(FMRadioSettings* aInfo) {
 
 void
 SetFMRadioFrequency(const uint32_t aFrequency) {
-  AssertMainThread();
   PROXY_IF_SANDBOXED(SetFMRadioFrequency(aFrequency));
 }
 
@@ -1085,6 +1020,18 @@ void
 CancelFMRadioSeek() {
   AssertMainThread();
   PROXY_IF_SANDBOXED(CancelFMRadioSeek());
+}
+
+bool
+EnableRDS(uint32_t aMask) {
+  AssertMainThread();
+  RETURN_PROXY_IF_SANDBOXED(EnableRDS(aMask), false);
+}
+
+void
+DisableRDS() {
+  AssertMainThread();
+  PROXY_IF_SANDBOXED(DisableRDS());
 }
 
 FMRadioSettings
@@ -1205,10 +1152,10 @@ GetFMBandSettings(FMRadioCountry aCountry) {
     return settings;
 }
 
-void FactoryReset()
+void FactoryReset(mozilla::dom::FactoryResetReason& aReason)
 {
   AssertMainThread();
-  PROXY_IF_SANDBOXED(FactoryReset());
+  PROXY_IF_SANDBOXED(FactoryReset(aReason));
 }
 
 void

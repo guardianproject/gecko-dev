@@ -9,14 +9,14 @@ const NETWORK_ERROR_OFFLINE = 111;
 function run_test() {
   setupTestCommon();
 
-  logTestInfo("testing when an update check fails because the network is " +
-              "offline that we check again when the network comes online " +
-              "(Bug 794211).");
+  debugDump("testing when an update check fails because the network is " +
+            "offline that we check again when the network comes online " +
+            "(Bug 794211).");
 
   setUpdateURLOverride();
   Services.prefs.setBoolPref(PREF_APP_UPDATE_AUTO, false);
 
-  overrideXHR(null);
+  overrideXHR(xhr_pt1);
   overrideUpdatePrompt(updatePrompt);
   standardInit();
 
@@ -26,47 +26,46 @@ function run_test() {
 function run_test_pt1() {
   gResponseBody = null;
   gCheckFunc = check_test_pt1;
-  gXHRCallback = xhr_pt1;
   gUpdateChecker.checkForUpdates(updateCheckListener, true);
 }
 
-function xhr_pt1() {
-  gXHR.status = AUS_Cr.NS_ERROR_OFFLINE;
-  gXHR.onerror({ target: gXHR });
+function xhr_pt1(aXHR) {
+  aXHR.status = Cr.NS_ERROR_OFFLINE;
+  aXHR.onerror({ target: aXHR });
 }
 
 function check_test_pt1(request, update) {
-  do_check_eq(gStatusCode, AUS_Cr.NS_ERROR_OFFLINE);
+  do_check_eq(gStatusCode, Cr.NS_ERROR_OFFLINE);
   do_check_eq(update.errorCode, NETWORK_ERROR_OFFLINE);
 
   // Forward the error to AUS, which should register the online observer
   gAUS.onError(request, update);
 
   // Trigger another check by notifying the offline status observer
-  gXHRCallback = xhr_pt2;
+  overrideXHR(xhr_pt2);
   Services.obs.notifyObservers(gAUS, "network:offline-status-changed", "online");
 }
 
-var updatePrompt = {
+const updatePrompt = {
   showUpdateAvailable: function(update) {
     check_test_pt2(update);
   }
 };
 
-function xhr_pt2() {
-  var patches = getLocalPatchString();
-  var updates = getLocalUpdateString(patches);
-  var responseBody = getLocalUpdatesXMLString(updates);
+function xhr_pt2(aXHR) {
+  let patches = getLocalPatchString();
+  let updates = getLocalUpdateString(patches);
+  let responseBody = getLocalUpdatesXMLString(updates);
 
-  gXHR.status = 200;
-  gXHR.responseText = responseBody;
+  aXHR.status = 200;
+  aXHR.responseText = responseBody;
   try {
-    var parser = AUS_Cc["@mozilla.org/xmlextras/domparser;1"].
-                 createInstance(AUS_Ci.nsIDOMParser);
-    gXHR.responseXML = parser.parseFromString(responseBody, "application/xml");
+    let parser = Cc["@mozilla.org/xmlextras/domparser;1"].
+                 createInstance(Ci.nsIDOMParser);
+    aXHR.responseXML = parser.parseFromString(responseBody, "application/xml");
   } catch (e) {
   }
-  gXHR.onload({ target: gXHR });
+  aXHR.onload({ target: aXHR });
 }
 
 function check_test_pt2(update) {

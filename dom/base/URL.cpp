@@ -6,8 +6,8 @@
 #include "URL.h"
 
 #include "nsGlobalWindow.h"
-#include "nsDOMFile.h"
 #include "DOMMediaStream.h"
+#include "mozilla/dom/File.h"
 #include "mozilla/dom/MediaSource.h"
 #include "mozilla/dom/URLBinding.h"
 #include "nsHostObjectProtocolHandler.h"
@@ -46,10 +46,10 @@ URL::URL(nsIURI* aURI)
 {
 }
 
-JSObject*
-URL::WrapObject(JSContext* aCx)
+bool
+URL::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto, JS::MutableHandle<JSObject*> aReflector)
 {
-  return URLBinding::Wrap(aCx, this);
+  return URLBinding::Wrap(aCx, this, aGivenProto, aReflector);
 }
 
 /* static */ already_AddRefed<URL>
@@ -111,15 +111,12 @@ URL::Constructor(const GlobalObject& aGlobal, const nsAString& aUrl,
 
 void
 URL::CreateObjectURL(const GlobalObject& aGlobal,
-                     nsIDOMBlob* aBlob,
+                     File& aBlob,
                      const objectURLOptions& aOptions,
-                     nsString& aResult,
+                     nsAString& aResult,
                      ErrorResult& aError)
 {
-  DOMFile* blob = static_cast<DOMFile*>(aBlob);
-  MOZ_ASSERT(blob);
-
-  CreateObjectURLInternal(aGlobal, blob->Impl(),
+  CreateObjectURLInternal(aGlobal, aBlob.Impl(),
                           NS_LITERAL_CSTRING(BLOBURI_SCHEME), aOptions, aResult,
                           aError);
 }
@@ -127,7 +124,7 @@ URL::CreateObjectURL(const GlobalObject& aGlobal,
 void
 URL::CreateObjectURL(const GlobalObject& aGlobal, DOMMediaStream& aStream,
                      const mozilla::dom::objectURLOptions& aOptions,
-                     nsString& aResult,
+                     nsAString& aResult,
                      ErrorResult& aError)
 {
   CreateObjectURLInternal(aGlobal, &aStream,
@@ -138,7 +135,7 @@ URL::CreateObjectURL(const GlobalObject& aGlobal, DOMMediaStream& aStream,
 void
 URL::CreateObjectURL(const GlobalObject& aGlobal, MediaSource& aSource,
                      const objectURLOptions& aOptions,
-                     nsString& aResult,
+                     nsAString& aResult,
                      ErrorResult& aError)
 {
   CreateObjectURLInternal(aGlobal, &aSource,
@@ -150,11 +147,11 @@ void
 URL::CreateObjectURLInternal(const GlobalObject& aGlobal, nsISupports* aObject,
                              const nsACString& aScheme,
                              const objectURLOptions& aOptions,
-                             nsString& aResult, ErrorResult& aError)
+                             nsAString& aResult, ErrorResult& aError)
 {
   nsCOMPtr<nsIPrincipal> principal = nsContentUtils::ObjectPrincipal(aGlobal.Get());
 
-  nsCString url;
+  nsAutoCString url;
   nsresult rv = nsHostObjectProtocolHandler::AddDataEntry(aScheme, aObject,
                                                           principal, url);
   if (NS_FAILED(rv)) {
@@ -204,7 +201,7 @@ URL::RevokeObjectURL(const GlobalObject& aGlobal, const nsAString& aURL)
 }
 
 void
-URL::GetHref(nsString& aHref, ErrorResult& aRv) const
+URL::GetHref(nsAString& aHref, ErrorResult& aRv) const
 {
   aHref.Truncate();
 
@@ -218,7 +215,7 @@ URL::GetHref(nsString& aHref, ErrorResult& aRv) const
 void
 URL::SetHref(const nsAString& aHref, ErrorResult& aRv)
 {
-  nsCString href = NS_ConvertUTF16toUTF8(aHref);
+  NS_ConvertUTF16toUTF8 href(aHref);
 
   nsresult rv;
   nsCOMPtr<nsIIOService> ioService(do_GetService(NS_IOSERVICE_CONTRACTID, &rv));
@@ -240,15 +237,15 @@ URL::SetHref(const nsAString& aHref, ErrorResult& aRv)
 }
 
 void
-URL::GetOrigin(nsString& aOrigin, ErrorResult& aRv) const
+URL::GetOrigin(nsAString& aOrigin, ErrorResult& aRv) const
 {
-  nsContentUtils::GetUTFNonNullOrigin(mURI, aOrigin);
+  nsContentUtils::GetUTFOrigin(mURI, aOrigin);
 }
 
 void
-URL::GetProtocol(nsString& aProtocol, ErrorResult& aRv) const
+URL::GetProtocol(nsAString& aProtocol, ErrorResult& aRv) const
 {
-  nsCString protocol;
+  nsAutoCString protocol;
   if (NS_SUCCEEDED(mURI->GetScheme(protocol))) {
     aProtocol.Truncate();
   }
@@ -305,7 +302,7 @@ URL::SetProtocol(const nsAString& aProtocol, ErrorResult& aRv)
   }
 
 void
-URL::GetUsername(nsString& aUsername, ErrorResult& aRv) const
+URL::GetUsername(nsAString& aUsername, ErrorResult& aRv) const
 {
   URL_GETTER(aUsername, GetUsername);
 }
@@ -317,7 +314,7 @@ URL::SetUsername(const nsAString& aUsername, ErrorResult& aRv)
 }
 
 void
-URL::GetPassword(nsString& aPassword, ErrorResult& aRv) const
+URL::GetPassword(nsAString& aPassword, ErrorResult& aRv) const
 {
   URL_GETTER(aPassword, GetPassword);
 }
@@ -329,7 +326,7 @@ URL::SetPassword(const nsAString& aPassword, ErrorResult& aRv)
 }
 
 void
-URL::GetHost(nsString& aHost, ErrorResult& aRv) const
+URL::GetHost(nsAString& aHost, ErrorResult& aRv) const
 {
   URL_GETTER(aHost, GetHostPort);
 }
@@ -341,9 +338,10 @@ URL::SetHost(const nsAString& aHost, ErrorResult& aRv)
 }
 
 void
-URL::URLSearchParamsUpdated()
+URL::URLSearchParamsUpdated(URLSearchParams* aSearchParams)
 {
   MOZ_ASSERT(mSearchParams);
+  MOZ_ASSERT(mSearchParams == aSearchParams);
 
   nsAutoString search;
   mSearchParams->Serialize(search);
@@ -370,20 +368,10 @@ URL::UpdateURLSearchParams()
 }
 
 void
-URL::GetHostname(nsString& aHostname, ErrorResult& aRv) const
+URL::GetHostname(nsAString& aHostname, ErrorResult& aRv) const
 {
   aHostname.Truncate();
-  nsAutoCString tmp;
-  nsresult rv = mURI->GetHost(tmp);
-  if (NS_SUCCEEDED(rv)) {
-    if (tmp.FindChar(':') != -1) { // Escape IPv6 address
-      MOZ_ASSERT(!tmp.Length() ||
-        (tmp[0] !='[' && tmp[tmp.Length() - 1] != ']'));
-      tmp.Insert('[', 0);
-      tmp.Append(']');
-    }
-    CopyUTF8toUTF16(tmp, aHostname);
-  }
+  nsContentUtils::GetHostOrIPv6WithBrackets(mURI, aHostname);
 }
 
 void
@@ -395,7 +383,7 @@ URL::SetHostname(const nsAString& aHostname, ErrorResult& aRv)
 }
 
 void
-URL::GetPort(nsString& aPort, ErrorResult& aRv) const
+URL::GetPort(nsAString& aPort, ErrorResult& aRv) const
 {
   aPort.Truncate();
 
@@ -427,7 +415,7 @@ URL::SetPort(const nsAString& aPort, ErrorResult& aRv)
 }
 
 void
-URL::GetPathname(nsString& aPathname, ErrorResult& aRv) const
+URL::GetPathname(nsAString& aPathname, ErrorResult& aRv) const
 {
   aPathname.Truncate();
 
@@ -458,7 +446,7 @@ URL::SetPathname(const nsAString& aPathname, ErrorResult& aRv)
 }
 
 void
-URL::GetSearch(nsString& aSearch, ErrorResult& aRv) const
+URL::GetSearch(nsAString& aSearch, ErrorResult& aRv) const
 {
   aSearch.Truncate();
 
@@ -519,15 +507,17 @@ URL::SetSearchParams(URLSearchParams& aSearchParams)
 }
 
 void
-URL::GetHash(nsString& aHash, ErrorResult& aRv) const
+URL::GetHash(nsAString& aHash, ErrorResult& aRv) const
 {
   aHash.Truncate();
 
   nsAutoCString ref;
   nsresult rv = mURI->GetRef(ref);
   if (NS_SUCCEEDED(rv) && !ref.IsEmpty()) {
-    NS_UnescapeURL(ref); // XXX may result in random non-ASCII bytes!
     aHash.Assign(char16_t('#'));
+    if (nsContentUtils::EncodeDecodeURLHash()) {
+      NS_UnescapeURL(ref); // XXX may result in random non-ASCII bytes!
+    }
     AppendUTF8toUTF16(ref, aHash);
   }
 }

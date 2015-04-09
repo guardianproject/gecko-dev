@@ -17,6 +17,7 @@
 #include "nsIStandardURL.h"
 #include "nsMimeTypes.h"
 #include "nsNetUtil.h"
+#include "nsNullPrincipal.h"
 #include "mozilla/Monitor.h"
 #include <gio/gio.h>
 #include <algorithm>
@@ -135,7 +136,7 @@ static void mount_operation_ask_password (GMountOperation   *mount_op,
                                           gpointer          user_data);
 //-----------------------------------------------------------------------------
 
-class nsGIOInputStream MOZ_FINAL : public nsIInputStream
+class nsGIOInputStream final : public nsIInputStream
 {
    ~nsGIOInputStream() { Close(); }
 
@@ -143,7 +144,7 @@ class nsGIOInputStream MOZ_FINAL : public nsIInputStream
     NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSIINPUTSTREAM
 
-    nsGIOInputStream(const nsCString &uriSpec)
+    explicit nsGIOInputStream(const nsCString &uriSpec)
       : mSpec(uriSpec)
       , mChannel(nullptr)
       , mHandle(nullptr)
@@ -874,15 +875,15 @@ mount_operation_ask_password (GMountOperation   *mount_op,
   /* GIO should accept UTF8 */
   g_mount_operation_set_username(mount_op, NS_ConvertUTF16toUTF8(user).get());
   g_mount_operation_set_password(mount_op, NS_ConvertUTF16toUTF8(pass).get());
-  nsMemory::Free(user);
-  nsMemory::Free(pass);
+  free(user);
+  free(pass);
   g_mount_operation_reply(mount_op, G_MOUNT_OPERATION_HANDLED);
 }
 
 //-----------------------------------------------------------------------------
 
-class nsGIOProtocolHandler MOZ_FINAL : public nsIProtocolHandler
-                                     , public nsIObserver
+class nsGIOProtocolHandler final : public nsIProtocolHandler
+                                 , public nsIObserver
 {
   public:
     NS_DECL_ISUPPORTS
@@ -1045,7 +1046,9 @@ nsGIOProtocolHandler::NewURI(const nsACString &aSpec,
 }
 
 NS_IMETHODIMP
-nsGIOProtocolHandler::NewChannel(nsIURI *aURI, nsIChannel **aResult)
+nsGIOProtocolHandler::NewChannel2(nsIURI* aURI,
+                                  nsILoadInfo* aLoadInfo,
+                                  nsIChannel** aResult)
 {
   NS_ENSURE_ARG_POINTER(aURI);
   nsresult rv;
@@ -1056,22 +1059,26 @@ nsGIOProtocolHandler::NewChannel(nsIURI *aURI, nsIChannel **aResult)
     return rv;
 
   nsRefPtr<nsGIOInputStream> stream = new nsGIOInputStream(spec);
-  if (!stream)
-  {
-    rv = NS_ERROR_OUT_OF_MEMORY;
+  if (!stream) {
+    return NS_ERROR_OUT_OF_MEMORY;
   }
-  else
-  {
-    // start out assuming an unknown content-type.  we'll set the content-type
-    // to something better once we open the URI.
-    rv = NS_NewInputStreamChannel(aResult,
-                                  aURI,
-                                  stream,
-                                  NS_LITERAL_CSTRING(UNKNOWN_CONTENT_TYPE));
-    if (NS_SUCCEEDED(rv))
-      stream->SetChannel(*aResult);
+
+  rv = NS_NewInputStreamChannelInternal(aResult,
+                                        aURI,
+                                        stream,
+                                        NS_LITERAL_CSTRING(UNKNOWN_CONTENT_TYPE),
+                                        EmptyCString(), // aContentCharset
+                                        aLoadInfo);
+  if (NS_SUCCEEDED(rv)) {
+    stream->SetChannel(*aResult);
   }
   return rv;
+}
+
+NS_IMETHODIMP
+nsGIOProtocolHandler::NewChannel(nsIURI *aURI, nsIChannel **aResult)
+{
+    return NewChannel2(aURI, nullptr, aResult);
 }
 
 NS_IMETHODIMP

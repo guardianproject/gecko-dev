@@ -16,7 +16,7 @@ const TEST_URI = "data:text/html;charset=utf-8," +
   " </pre>" +
   "</blockquote>";
 
-let test = asyncTest(function*() {
+add_task(function*() {
   info ("Starting the test with the pref set to true before toolbox is opened");
   yield setUserAgentStylesPref(true);
 
@@ -66,16 +66,16 @@ function* userAgentStylesVisible(inspector, view) {
   yield selectNode("pre", inspector);
   yield compareAppliedStylesWithUI(inspector, view, "ua");
 
-  let userRules = view._elementStyle.rules.filter(rule=>rule.editor.isEditable);
-  let uaRules = view._elementStyle.rules.filter(rule=>!rule.editor.isEditable);
+  userRules = view._elementStyle.rules.filter(rule=>rule.editor.isEditable);
+  uaRules = view._elementStyle.rules.filter(rule=>!rule.editor.isEditable);
   is (userRules.length, 1, "Correct number of user rules");
   ok (uaRules.length > 0, "Has UA rules");
 
   yield selectNode("a", inspector);
   yield compareAppliedStylesWithUI(inspector, view, "ua");
 
-  let userRules = view._elementStyle.rules.filter(rule=>rule.editor.isEditable);
-  let uaRules = view._elementStyle.rules.filter(rule=>!rule.editor.isEditable);
+  userRules = view._elementStyle.rules.filter(rule=>rule.editor.isEditable);
+  uaRules = view._elementStyle.rules.filter(rule=>!rule.editor.isEditable);
   is (userRules.length, 1, "Correct number of user rules");
 
   ok (userRules.some(rule=> rule.matchedSelectors.length === 0),
@@ -103,16 +103,16 @@ function* userAgentStylesNotVisible(inspector, view) {
   yield selectNode("pre", inspector);
   yield compareAppliedStylesWithUI(inspector, view);
 
-  let userRules = view._elementStyle.rules.filter(rule=>rule.editor.isEditable);
-  let uaRules = view._elementStyle.rules.filter(rule=>!rule.editor.isEditable);
+  userRules = view._elementStyle.rules.filter(rule=>rule.editor.isEditable);
+  uaRules = view._elementStyle.rules.filter(rule=>!rule.editor.isEditable);
   is (userRules.length, 1, "Correct number of user rules");
   is (uaRules.length, 0, "No UA rules");
 
   yield selectNode("a", inspector);
   yield compareAppliedStylesWithUI(inspector, view);
 
-  let userRules = view._elementStyle.rules.filter(rule=>rule.editor.isEditable);
-  let uaRules = view._elementStyle.rules.filter(rule=>!rule.editor.isEditable);
+  userRules = view._elementStyle.rules.filter(rule=>rule.editor.isEditable);
+  uaRules = view._elementStyle.rules.filter(rule=>!rule.editor.isEditable);
   is (userRules.length, 1, "Correct number of user rules");
   is (uaRules.length, 0, "No UA rules");
 }

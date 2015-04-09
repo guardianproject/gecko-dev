@@ -8,6 +8,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/FxAccounts.jsm");
 Cu.import("resource://gre/modules/FxAccountsClient.jsm");
 Cu.import("resource://gre/modules/FxAccountsCommon.js");
+Cu.import("resource://gre/modules/FxAccountsOAuthGrantClient.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/Log.jsm");
 
@@ -25,6 +26,18 @@ log.level = Log.Level.Debug;
 
 // See verbose logging from FxAccounts.jsm
 Services.prefs.setCharPref("identity.fxaccounts.loglevel", "DEBUG");
+
+// The oauth server is mocked, but set these prefs to pass param checks
+Services.prefs.setCharPref("identity.fxaccounts.remote.oauth.uri", "https://example.com/v1");
+Services.prefs.setCharPref("identity.fxaccounts.oauth.client_id", "abc123");
+
+
+const PROFILE_SERVER_URL = "http://example.com/v1";
+const CONTENT_URL = "http://accounts.example.com/";
+
+Services.prefs.setCharPref("identity.fxaccounts.remote.profile.uri", PROFILE_SERVER_URL);
+Services.prefs.setCharPref("identity.fxaccounts.settings.uri", CONTENT_URL);
+
 
 function run_test() {
   run_next_test();
@@ -103,6 +116,12 @@ MockStorage.prototype = Object.freeze({
   get: function () {
     return Promise.resolve(this.data);
   },
+  getOAuthTokens() {
+    return Promise.resolve(null);
+  },
+  setOAuthTokens(contents) {
+    return Promise.resolve();
+  },
 });
 
 /*
@@ -128,6 +147,21 @@ function MockFxAccounts() {
     fxAccountsClient: new MockFxAccountsClient()
   });
 }
+
+add_test(function test_non_https_remote_server_uri_with_requireHttps_false() {
+  Services.prefs.setBoolPref(
+    "identity.fxaccounts.allowHttp",
+    true);
+  Services.prefs.setCharPref(
+    "identity.fxaccounts.remote.signup.uri",
+    "http://example.com/browser/browser/base/content/test/general/accounts_testRemoteCommands.html");
+  do_check_eq(fxAccounts.getAccountsSignUpURI(),
+              "http://example.com/browser/browser/base/content/test/general/accounts_testRemoteCommands.html");
+
+  Services.prefs.clearUserPref("identity.fxaccounts.remote.signup.uri");
+  Services.prefs.clearUserPref("identity.fxaccounts.allowHttp");
+  run_next_test();
+});
 
 add_test(function test_non_https_remote_server_uri() {
   Services.prefs.setCharPref(
@@ -162,7 +196,7 @@ add_task(function test_get_signed_in_user_initially_unset() {
 
   yield account.setSignedInUser(credentials);
 
-  let result = yield account.getSignedInUser();
+  result = yield account.getSignedInUser();
   do_check_eq(result.email, credentials.email);
   do_check_eq(result.assertion, credentials.assertion);
   do_check_eq(result.kB, credentials.kB);
@@ -170,7 +204,7 @@ add_task(function test_get_signed_in_user_initially_unset() {
   // Delete the memory cache and force the user
   // to be read and parsed from storage (e.g. disk via JSONStorage).
   delete account.internal.signedInUser;
-  let result = yield account.getSignedInUser();
+  result = yield account.getSignedInUser();
   do_check_eq(result.email, credentials.email);
   do_check_eq(result.assertion, credentials.assertion);
   do_check_eq(result.kB, credentials.kB);
@@ -180,9 +214,48 @@ add_task(function test_get_signed_in_user_initially_unset() {
   yield account.signOut(localOnly);
 
   // user should be undefined after sign out
-  let result = yield account.getSignedInUser();
+  result = yield account.getSignedInUser();
   do_check_eq(result, null);
 });
+
+add_task(function test_getCertificate() {
+  _("getCertificate()");
+  // This test, unlike the rest, uses an un-mocked FxAccounts instance.
+  // However, we still need to pass an object to the constructor to
+  // force it to expose "internal".
+  let fxa = new FxAccounts({onlySetInternal: true});
+  let credentials = {
+    email: "foo@example.com",
+    uid: "1234@lcip.org",
+    assertion: "foobar",
+    sessionToken: "dead",
+    kA: "beef",
+    kB: "cafe",
+    verified: true
+  };
+  yield fxa.setSignedInUser(credentials);
+
+  // Test that an expired cert throws if we're offline.
+  fxa.internal.currentAccountState.cert = {
+    validUntil: Date.parse("Mon, 13 Jan 2000 21:45:06 GMT")
+  };
+  let offline = Services.io.offline;
+  Services.io.offline = true;
+  // This call would break from missing parameters ...
+  fxa.internal.currentAccountState.getCertificate().then(
+    result => {
+      Services.io.offline = offline;
+      do_throw("Unexpected success");
+    },
+    err => {
+      Services.io.offline = offline;
+      // ... so we have to check the error string.
+      do_check_eq(err, "Error: OFFLINE");
+    }
+  );
+  _("----- DONE ----\n");
+});
+
 
 // Sanity-check that our mocked client is working correctly
 add_test(function test_client_mock() {
@@ -263,7 +336,6 @@ add_test(function test_polling_timeout() {
   });
 
   fxa.internal.POLL_SESSION = 1;
-  fxa.internal.POLL_STEP = 2;
 
   let p = fxa.internal.whenVerified({});
 
@@ -628,6 +700,409 @@ add_test(function test_sign_out_with_remote_error() {
   fxa.signOut();
 });
 
+add_test(function test_getOAuthToken() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+  let getTokenFromAssertionCalled = false;
+
+  fxa.internal._d_signCertificate.resolve("cert1");
+
+  // create a mock oauth client
+  let client = new FxAccountsOAuthGrantClient({
+    serverURL: "http://example.com/v1",
+    client_id: "abc123"
+  });
+  client.getTokenFromAssertion = function () {
+    getTokenFromAssertionCalled = true;
+    return Promise.resolve({ access_token: "token" });
+  };
+
+  fxa.setSignedInUser(alice).then(
+    () => {
+      fxa.getOAuthToken({ scope: "profile", client: client }).then(
+        (result) => {
+           do_check_true(getTokenFromAssertionCalled);
+           do_check_eq(result, "token");
+           run_next_test();
+        }
+      )
+    }
+  );
+
+});
+
+add_test(function test_getOAuthTokenScoped() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+  let getTokenFromAssertionCalled = false;
+
+  fxa.internal._d_signCertificate.resolve("cert1");
+
+  // create a mock oauth client
+  let client = new FxAccountsOAuthGrantClient({
+    serverURL: "http://example.com/v1",
+    client_id: "abc123"
+  });
+  client.getTokenFromAssertion = function (assertion, scopeString) {
+    equal(scopeString, "foo bar");
+    getTokenFromAssertionCalled = true;
+    return Promise.resolve({ access_token: "token" });
+  };
+
+  fxa.setSignedInUser(alice).then(
+    () => {
+      fxa.getOAuthToken({ scope: ["foo", "bar"], client: client }).then(
+        (result) => {
+           do_check_true(getTokenFromAssertionCalled);
+           do_check_eq(result, "token");
+           run_next_test();
+        }
+      )
+    }
+  );
+
+});
+
+add_task(function* test_getOAuthTokenCached() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+  let numTokenFromAssertionCalls = 0;
+
+  fxa.internal._d_signCertificate.resolve("cert1");
+
+  // create a mock oauth client
+  let client = new FxAccountsOAuthGrantClient({
+    serverURL: "http://example.com/v1",
+    client_id: "abc123"
+  });
+  client.getTokenFromAssertion = function () {
+    numTokenFromAssertionCalls += 1;
+    return Promise.resolve({ access_token: "token" });
+  };
+
+  yield fxa.setSignedInUser(alice);
+  let result = yield fxa.getOAuthToken({ scope: "profile", client: client, service: "test-service" });
+  do_check_eq(numTokenFromAssertionCalls, 1);
+  do_check_eq(result, "token");
+
+  // requesting it again should not re-fetch the token.
+  result = yield fxa.getOAuthToken({ scope: "profile", client: client, service: "test-service" });
+  do_check_eq(numTokenFromAssertionCalls, 1);
+  do_check_eq(result, "token");
+  // But requesting the same service and a different scope *will* get a new one.
+  result = yield fxa.getOAuthToken({ scope: "something-else", client: client, service: "test-service" });
+  do_check_eq(numTokenFromAssertionCalls, 2);
+  do_check_eq(result, "token");
+});
+
+add_task(function* test_getOAuthTokenCachedScopeNormalization() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+  let numTokenFromAssertionCalls = 0;
+
+  fxa.internal._d_signCertificate.resolve("cert1");
+
+  // create a mock oauth client
+  let client = new FxAccountsOAuthGrantClient({
+    serverURL: "http://example.com/v1",
+    client_id: "abc123"
+  });
+  client.getTokenFromAssertion = function () {
+    numTokenFromAssertionCalls += 1;
+    return Promise.resolve({ access_token: "token" });
+  };
+
+  yield fxa.setSignedInUser(alice);
+  let result = yield fxa.getOAuthToken({ scope: ["foo", "bar"], client: client, service: "test-service" });
+  do_check_eq(numTokenFromAssertionCalls, 1);
+  do_check_eq(result, "token");
+
+  // requesting it again with the scope array in a different order not re-fetch the token.
+  result = yield fxa.getOAuthToken({ scope: ["bar", "foo"], client: client, service: "test-service" });
+  do_check_eq(numTokenFromAssertionCalls, 1);
+  do_check_eq(result, "token");
+  // requesting it again with the scope array in different case not re-fetch the token.
+  result = yield fxa.getOAuthToken({ scope: ["Bar", "Foo"], client: client, service: "test-service" });
+  do_check_eq(numTokenFromAssertionCalls, 1);
+  do_check_eq(result, "token");
+  // But requesting with a new entry in the array does fetch one.
+  result = yield fxa.getOAuthToken({ scope: ["foo", "bar", "etc"], client: client, service: "test-service" });
+  do_check_eq(numTokenFromAssertionCalls, 2);
+  do_check_eq(result, "token");
+});
+
+
+Services.prefs.setCharPref("identity.fxaccounts.remote.oauth.uri", "https://example.com/v1");
+add_test(function test_getOAuthToken_invalid_param() {
+  let fxa = new MockFxAccounts();
+
+  fxa.getOAuthToken()
+    .then(null, err => {
+       do_check_eq(err.message, "INVALID_PARAMETER");
+       run_next_test();
+    });
+});
+
+add_test(function test_getOAuthToken_invalid_scope_array() {
+  let fxa = new MockFxAccounts();
+
+  fxa.getOAuthToken({scope: []})
+    .then(null, err => {
+       do_check_eq(err.message, "INVALID_PARAMETER");
+       run_next_test();
+    });
+});
+
+add_test(function test_getOAuthToken_misconfigure_oauth_uri() {
+  let fxa = new MockFxAccounts();
+
+  Services.prefs.deleteBranch("identity.fxaccounts.remote.oauth.uri");
+
+  fxa.getOAuthToken()
+    .then(null, err => {
+       do_check_eq(err.message, "INVALID_PARAMETER");
+       // revert the pref
+       Services.prefs.setCharPref("identity.fxaccounts.remote.oauth.uri", "https://example.com/v1");
+       run_next_test();
+    });
+});
+
+add_test(function test_getOAuthToken_no_account() {
+  let fxa = new MockFxAccounts();
+
+  fxa.internal.currentAccountState.getUserAccountData = function () {
+    return Promise.resolve(null);
+  };
+
+  fxa.getOAuthToken({ scope: "profile" })
+    .then(null, err => {
+       do_check_eq(err.message, "NO_ACCOUNT");
+       run_next_test();
+    });
+});
+
+add_test(function test_getOAuthToken_unverified() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+
+  fxa.setSignedInUser(alice).then(() => {
+    fxa.getOAuthToken({ scope: "profile" })
+      .then(null, err => {
+         do_check_eq(err.message, "UNVERIFIED_ACCOUNT");
+         run_next_test();
+      });
+  });
+});
+
+add_test(function test_getOAuthToken_network_error() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+
+  fxa.internal._d_signCertificate.resolve("cert1");
+
+  // create a mock oauth client
+  let client = new FxAccountsOAuthGrantClient({
+    serverURL: "http://example.com/v1",
+    client_id: "abc123"
+  });
+  client.getTokenFromAssertion = function () {
+    return Promise.reject(new FxAccountsOAuthGrantClientError({
+      error: ERROR_NETWORK,
+      errno: ERRNO_NETWORK
+    }));
+  };
+
+  fxa.setSignedInUser(alice).then(() => {
+    fxa.getOAuthToken({ scope: "profile", client: client })
+      .then(null, err => {
+         do_check_eq(err.message, "NETWORK_ERROR");
+         do_check_eq(err.details.errno, ERRNO_NETWORK);
+         run_next_test();
+      });
+  });
+});
+
+add_test(function test_getOAuthToken_auth_error() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+
+  fxa.internal._d_signCertificate.resolve("cert1");
+
+  // create a mock oauth client
+  let client = new FxAccountsOAuthGrantClient({
+    serverURL: "http://example.com/v1",
+    client_id: "abc123"
+  });
+  client.getTokenFromAssertion = function () {
+    return Promise.reject(new FxAccountsOAuthGrantClientError({
+      error: ERROR_INVALID_FXA_ASSERTION,
+      errno: ERRNO_INVALID_FXA_ASSERTION
+    }));
+  };
+
+  fxa.setSignedInUser(alice).then(() => {
+    fxa.getOAuthToken({ scope: "profile", client: client })
+      .then(null, err => {
+         do_check_eq(err.message, "AUTH_ERROR");
+         do_check_eq(err.details.errno, ERRNO_INVALID_FXA_ASSERTION);
+         run_next_test();
+      });
+  });
+});
+
+add_test(function test_getOAuthToken_unknown_error() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+
+  fxa.internal._d_signCertificate.resolve("cert1");
+
+  // create a mock oauth client
+  let client = new FxAccountsOAuthGrantClient({
+    serverURL: "http://example.com/v1",
+    client_id: "abc123"
+  });
+  client.getTokenFromAssertion = function () {
+    return Promise.reject("boom");
+  };
+
+  fxa.setSignedInUser(alice).then(() => {
+    fxa.getOAuthToken({ scope: "profile", client: client })
+      .then(null, err => {
+         do_check_eq(err.message, "UNKNOWN_ERROR");
+         run_next_test();
+      });
+  });
+});
+
+add_test(function test_accountState_initProfile() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+
+  fxa.internal.getOAuthToken = function (opts) {
+    return Promise.resolve("token");
+  };
+
+  fxa.setSignedInUser(alice).then(() => {
+    let accountState = fxa.internal.currentAccountState;
+
+    accountState.initProfile(options)
+      .then(result => {
+         do_check_true(!!accountState.profile);
+         run_next_test();
+      });
+  });
+
+});
+
+add_test(function test_accountState_getProfile() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+
+  let mockProfile = {
+    getProfile: function () {
+      return Promise.resolve({ avatar: "image" });
+    }
+  };
+
+  fxa.setSignedInUser(alice).then(() => {
+    let accountState = fxa.internal.currentAccountState;
+    accountState.profile = mockProfile;
+    accountState.initProfilePromise = new Promise((resolve, reject) => resolve(mockProfile));
+
+    accountState.getProfile()
+      .then(result => {
+         do_check_true(!!result);
+         do_check_eq(result.avatar, "image");
+         run_next_test();
+      });
+  });
+
+});
+
+add_test(function test_getSignedInUserProfile_ok() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+
+  fxa.setSignedInUser(alice).then(() => {
+    let accountState = fxa.internal.currentAccountState;
+    accountState.getProfile = function () {
+      return Promise.resolve({ avatar: "image" });
+    };
+
+    fxa.getSignedInUserProfile()
+      .then(result => {
+         do_check_eq(result.avatar, "image");
+         run_next_test();
+      });
+  });
+
+});
+
+add_test(function test_getSignedInUserProfile_error_uses_account_data() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+  alice.verified = true;
+
+  fxa.internal.getSignedInUser = function () {
+    return Promise.resolve({ email: "foo@bar.com" });
+  };
+
+  fxa.setSignedInUser(alice).then(() => {
+    let accountState = fxa.internal.currentAccountState;
+    accountState.getProfile = function () {
+      return Promise.reject("boom");
+    };
+
+    fxa.getSignedInUserProfile()
+      .catch(error => {
+         do_check_eq(error.message, "UNKNOWN_ERROR");
+         run_next_test();
+      });
+  });
+
+});
+
+add_test(function test_getSignedInUserProfile_unverified_account() {
+  let fxa = new MockFxAccounts();
+  let alice = getTestUser("alice");
+
+  fxa.setSignedInUser(alice).then(() => {
+    let accountState = fxa.internal.currentAccountState;
+
+    fxa.getSignedInUserProfile()
+      .catch(error => {
+         do_check_eq(error.message, "UNVERIFIED_ACCOUNT");
+         run_next_test();
+      });
+  });
+
+});
+
+add_test(function test_getSignedInUserProfile_no_account_data() {
+  let fxa = new MockFxAccounts();
+
+  fxa.internal.getSignedInUser = function () {
+    return Promise.resolve(null);
+  };
+
+  fxa.getSignedInUserProfile()
+    .catch(error => {
+       do_check_eq(error.message, "NO_ACCOUNT");
+       run_next_test();
+    });
+
+});
+
 /*
  * End of tests.
  * Utility functions follow.
@@ -690,7 +1165,7 @@ function do_check_throws(func, result, stack)
     if (ex.name == result) {
       return;
     }
-    do_throw("Expected result " + result + ", caught " + ex, stack);
+    do_throw("Expected result " + result + ", caught " + ex.name, stack);
   }
 
   if (result) {

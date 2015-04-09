@@ -38,6 +38,9 @@ namespace dom {
 class AudioContext;
 class Element;
 }
+namespace gfx {
+class VRHMDInfo;
+}
 }
 
 // Popup control state enum. The values in this enum must go from most
@@ -60,8 +63,8 @@ enum UIStateChangeType
 };
 
 #define NS_PIDOMWINDOW_IID \
-{ 0x71412748, 0x6368, 0x4332, \
-  { 0x82, 0x66, 0xff, 0xaa, 0x19, 0xda, 0x09, 0x7c } }
+{ 0x2485d4d7, 0xf7cb, 0x481e, \
+  { 0x9c, 0x89, 0xb2, 0xa8, 0x12, 0x67, 0x7f, 0x97 } }
 
 class nsPIDOMWindow : public nsIDOMWindowInternal
 {
@@ -93,6 +96,17 @@ public:
   }
 
   // Outer windows only.
+  void SetDesktopModeViewport(bool aDesktopModeViewport)
+  {
+    MOZ_ASSERT(IsOuterWindow());
+    mDesktopModeViewport = aDesktopModeViewport;
+  }
+  bool IsDesktopModeViewport() const
+  {
+    MOZ_ASSERT(IsOuterWindow());
+    return mDesktopModeViewport;
+  }
+
   virtual void SetIsBackground(bool aIsBackground)
   {
     MOZ_ASSERT(IsOuterWindow());
@@ -147,7 +161,6 @@ public:
   }
 
   virtual void MaybeUpdateTouchState() {}
-  virtual void UpdateTouchState() {}
 
   nsIDocument* GetExtantDoc() const
   {
@@ -175,6 +188,18 @@ public:
 
   float GetAudioGlobalVolume();
 
+  virtual void SetServiceWorkersTestingEnabled(bool aEnabled)
+  {
+    MOZ_ASSERT(IsOuterWindow());
+    mServiceWorkersTestingEnabled = aEnabled;
+  }
+
+  bool GetServiceWorkersTestingEnabled()
+  {
+    MOZ_ASSERT(IsOuterWindow());
+    return mServiceWorkersTestingEnabled;
+  }
+
 protected:
   // Lazily instantiate an about:blank document if necessary, and if
   // we have what it takes to do so.
@@ -192,12 +217,7 @@ public:
 
   bool IsLoadingOrRunningTimeout() const
   {
-    const nsPIDOMWindow *win = GetCurrentInnerWindow();
-
-    if (!win) {
-      win = this;
-    }
-
+    const nsPIDOMWindow* win = IsInnerWindow() ? this : GetCurrentInnerWindow();
     return !win->mIsDocumentLoaded || win->mRunningTimeout;
   }
 
@@ -299,6 +319,7 @@ public:
 
   nsPIDOMWindow *GetCurrentInnerWindow() const
   {
+    MOZ_ASSERT(IsOuterWindow());
     return mInnerWindow;
   }
 
@@ -435,28 +456,10 @@ public:
    */
   void SetHasTouchEventListeners()
   {
-    mMayHaveTouchEventListener = true;
-    MaybeUpdateTouchState();
-  }
-
-  bool HasTouchEventListeners()
-  {
-    return mMayHaveTouchEventListener;
-  }
-
-   /**
-   * Will be called when touch caret visibility has changed. mMayHaveTouchCaret
-   * is set if that some node (this window, its document, or content in that
-   * document) has a visible touch caret.
-   */
-  void SetMayHaveTouchCaret(bool aSetValue)
-  {
-    mMayHaveTouchCaret = aSetValue;
-  }
-
-  bool MayHaveTouchCaret()
-  {
-    return mMayHaveTouchCaret;
+    if (!mMayHaveTouchEventListener) {
+      mMayHaveTouchEventListener = true;
+      MaybeUpdateTouchState();
+    }
   }
 
   /**
@@ -464,9 +467,13 @@ public:
    * otherwise exits fullscreen. If aRequireTrust is true, this method only
    * changes window state in a context trusted for write.
    *
+   * If aHMD is not null, the window is made full screen on the given VR HMD
+   * device instead of its currrent display.
+   *
    * Outer windows only.
    */
-  virtual nsresult SetFullScreenInternal(bool aIsFullScreen, bool aRequireTrust) = 0;
+  virtual nsresult SetFullScreenInternal(bool aIsFullScreen, bool aRequireTrust,
+                                         mozilla::gfx::VRHMDInfo *aHMD = nullptr) = 0;
 
   /**
    * Call this to check whether some node (this window, its document,
@@ -724,12 +731,13 @@ public:
   {
     return mMarkedCCGeneration;
   }
+
 protected:
   // The nsPIDOMWindow constructor. The aOuterWindow argument should
   // be null if and only if the created window itself is an outer
   // window. In all other cases aOuterWindow should be the outer
   // window for the inner window that is being created.
-  nsPIDOMWindow(nsPIDOMWindow *aOuterWindow);
+  explicit nsPIDOMWindow(nsPIDOMWindow *aOuterWindow);
 
   ~nsPIDOMWindow();
 
@@ -775,7 +783,6 @@ protected:
   bool                   mIsInnerWindow;
   bool                   mMayHavePaintEventListener;
   bool                   mMayHaveTouchEventListener;
-  bool                   mMayHaveTouchCaret;
   bool                   mMayHaveMouseEnterLeaveEventListener;
   bool                   mMayHavePointerEnterLeaveEventListener;
 
@@ -795,8 +802,11 @@ protected:
   bool                   mAudioMuted;
   float                  mAudioVolume;
 
+  // current desktop mode flag.
+  bool                   mDesktopModeViewport;
+
   // And these are the references between inner and outer windows.
-  nsPIDOMWindow         *mInnerWindow;
+  nsPIDOMWindow* MOZ_NON_OWNING_REF mInnerWindow;
   nsCOMPtr<nsPIDOMWindow> mOuterWindow;
 
   // the element within the document that is currently focused when this
@@ -815,6 +825,10 @@ protected:
   bool mHasNotifiedGlobalCreated;
 
   uint32_t mMarkedCCGeneration;
+
+  // Let the service workers plumbing know that some feature are enabled while
+  // testing.
+  bool mServiceWorkersTestingEnabled;
 };
 
 
@@ -842,7 +856,7 @@ class NS_AUTO_POPUP_STATE_PUSHER
 {
 public:
 #ifdef MOZILLA_INTERNAL_API
-  NS_AUTO_POPUP_STATE_PUSHER(PopupControlState aState, bool aForce = false)
+  explicit NS_AUTO_POPUP_STATE_PUSHER(PopupControlState aState, bool aForce = false)
     : mOldState(::PushPopupControlState(aState, aForce))
   {
   }

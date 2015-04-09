@@ -15,19 +15,21 @@
 #ifndef SCREEN_BUFFER_H_
 #define SCREEN_BUFFER_H_
 
-#include "SurfaceTypes.h"
-#include "SurfaceStream.h"
 #include "GLContextTypes.h"
 #include "GLDefs.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Point.h"
+#include "mozilla/UniquePtr.h"
+#include "SharedSurface.h"
+#include "SurfaceTypes.h"
 
 namespace mozilla {
 namespace gl {
 
 class GLContext;
 class SharedSurface;
-class SurfaceStream;
+class ShSurfHandle;
+class SurfaceFactory;
 
 class DrawBuffer
 {
@@ -38,12 +40,13 @@ public:
                        const SurfaceCaps& caps,
                        const GLFormats& formats,
                        const gfx::IntSize& size,
-                       DrawBuffer** out_buffer);
+                       UniquePtr<DrawBuffer>* out_buffer);
 
 protected:
     GLContext* const mGL;
 public:
     const gfx::IntSize mSize;
+    const GLsizei mSamples;
     const GLuint mFB;
 protected:
     const GLuint mColorMSRB;
@@ -52,12 +55,14 @@ protected:
 
     DrawBuffer(GLContext* gl,
                const gfx::IntSize& size,
+               GLsizei samples,
                GLuint fb,
                GLuint colorMSRB,
                GLuint depthRB,
                GLuint stencilRB)
         : mGL(gl)
         , mSize(size)
+        , mSamples(samples)
         , mFB(fb)
         , mColorMSRB(colorMSRB)
         , mDepthRB(depthRB)
@@ -72,10 +77,10 @@ class ReadBuffer
 {
 public:
     // Infallible, always non-null.
-    static ReadBuffer* Create(GLContext* gl,
-                              const SurfaceCaps& caps,
-                              const GLFormats& formats,
-                              SharedSurface* surf);
+    static UniquePtr<ReadBuffer> Create(GLContext* gl,
+                                        const SurfaceCaps& caps,
+                                        const GLFormats& formats,
+                                        SharedSurface* surf);
 
 protected:
     GLContext* const mGL;
@@ -86,7 +91,7 @@ protected:
     const GLuint mDepthRB;
     const GLuint mStencilRB;
     // note no mColorRB here: this is provided by mSurf.
-    SharedSurface* mSurf; // Owned by GLScreenBuffer's SurfaceStream.
+    SharedSurface* mSurf;
 
     ReadBuffer(GLContext* gl,
                GLuint fb,
@@ -111,6 +116,8 @@ public:
     SharedSurface* SharedSurf() const {
         return mSurf;
     }
+
+    void SetReadBuffer(GLenum mode) const;
 };
 
 
@@ -118,22 +125,26 @@ class GLScreenBuffer
 {
 public:
     // Infallible.
-    static GLScreenBuffer* Create(GLContext* gl,
-                                  const gfx::IntSize& size,
-                                  const SurfaceCaps& caps);
+    static UniquePtr<GLScreenBuffer> Create(GLContext* gl,
+                                            const gfx::IntSize& size,
+                                            const SurfaceCaps& caps);
 
 protected:
-    GLContext* const mGL;         // Owns us.
+    GLContext* const mGL; // Owns us.
 public:
     const SurfaceCaps mCaps;
 protected:
-    SurfaceFactory* mFactory;  // Owned by us.
-    RefPtr<SurfaceStream> mStream;
+    UniquePtr<SurfaceFactory> mFactory;
 
-    DrawBuffer* mDraw;            // Owned by us.
-    ReadBuffer* mRead;            // Owned by us.
+    RefPtr<ShSurfHandle> mBack;
+    RefPtr<ShSurfHandle> mFront;
+
+    UniquePtr<DrawBuffer> mDraw;
+    UniquePtr<ReadBuffer> mRead;
 
     bool mNeedsBlit;
+
+    GLenum mUserReadBufferMode;
 
     // Below are the parts that help us pretend to be framebuffer 0:
     GLuint mUserDrawFB;
@@ -148,15 +159,12 @@ protected:
 
     GLScreenBuffer(GLContext* gl,
                    const SurfaceCaps& caps,
-                   SurfaceFactory* factory,
-                   SurfaceStream* stream)
+                   UniquePtr<SurfaceFactory> factory)
         : mGL(gl)
         , mCaps(caps)
-        , mFactory(factory)
-        , mStream(stream)
-        , mDraw(nullptr)
-        , mRead(nullptr)
+        , mFactory(Move(factory))
         , mNeedsBlit(true)
+        , mUserReadBufferMode(LOCAL_GL_BACK)
         , mUserDrawFB(0)
         , mUserReadFB(0)
         , mInternalDrawFB(0)
@@ -170,12 +178,12 @@ protected:
 public:
     virtual ~GLScreenBuffer();
 
-    SurfaceStream* Stream() const {
-        return mStream;
+    SurfaceFactory* Factory() const {
+        return mFactory.get();
     }
 
-    SurfaceFactory* Factory() const {
-        return mFactory;
+    ShSurfHandle* Front() const {
+        return mFront;
     }
 
     SharedSurface* SharedSurf() const {
@@ -183,7 +191,7 @@ public:
         return mRead->SharedSurf();
     }
 
-    bool PreserveBuffer() const {
+    bool ShouldPreserveBuffer() const {
         return mCaps.preserve;
     }
 
@@ -196,6 +204,13 @@ public:
 
     GLuint ReadFB() const {
         return mRead->mFB;
+    }
+
+    GLsizei Samples() const {
+        if (!mDraw)
+            return 1;
+
+        return mDraw->mSamples;
     }
 
     void DeletingFB(GLuint fb);
@@ -213,6 +228,11 @@ public:
     void AfterDrawCall();
     void BeforeReadCall();
 
+    bool CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x,
+                        GLint y, GLsizei width, GLsizei height, GLint border);
+
+    void SetReadBuffer(GLenum userMode);
+
     /**
      * Attempts to read pixels from the current bound framebuffer, if
      * it is backed by a SharedSurface.
@@ -223,19 +243,8 @@ public:
     bool ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                     GLenum format, GLenum type, GLvoid *pixels);
 
-    /* Morph swaps out our SurfaceStream mechanism and replaces it with
-     * one best suited to our platform and compositor configuration.
-     *
-     * Must be called on the producing thread.
-     * We haven't made any guarantee that rendering is actually
-     * done when Morph is run, just that it can't run concurrently
-     * with rendering. This means that we can't just drop the contents
-     * of the buffer, since we may only be partially done rendering.
-     *
-     * Once you pass newFactory into Morph, newFactory will be owned by
-     * GLScreenBuffer, so `forget` any references to it that still exist.
-     */
-    void Morph(SurfaceFactory* newFactory, SurfaceStreamType streamType);
+    // Morph changes the factory used to create surfaces.
+    void Morph(UniquePtr<SurfaceFactory> newFactory);
 
 protected:
     // Returns false on error or inability to resize.
@@ -246,13 +255,11 @@ public:
 
     bool Resize(const gfx::IntSize& size);
 
-    void Readback(SharedSurface* src, gfx::DataSourceSurface* dest);
-
 protected:
-    bool Attach(SharedSurface* surface, const gfx::IntSize& size);
+    bool Attach(SharedSurface* surf, const gfx::IntSize& size);
 
-    bool CreateDraw(const gfx::IntSize& size, DrawBuffer** out_buffer);
-    ReadBuffer* CreateRead(SharedSurface* surf);
+    bool CreateDraw(const gfx::IntSize& size, UniquePtr<DrawBuffer>* out_buffer);
+    UniquePtr<ReadBuffer> CreateRead(SharedSurface* surf);
 
 public:
     /* `fb` in these functions is the framebuffer the GLContext is hoping to
@@ -269,8 +276,12 @@ public:
 
     // Here `fb` is the actual framebuffer you want bound. Binding 0 will
     // bind the (generally useless) default framebuffer.
+    void BindFB_Internal(GLuint fb);
     void BindDrawFB_Internal(GLuint fb);
     void BindReadFB_Internal(GLuint fb);
+
+    bool IsDrawFramebufferDefault() const;
+    bool IsReadFramebufferDefault() const;
 };
 
 }   // namespace gl

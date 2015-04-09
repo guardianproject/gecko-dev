@@ -25,7 +25,7 @@ using namespace android;
 namespace mozilla {
 namespace layers {
 
-uint32_t GrallocImage::sColorIdMap[] = {
+int32_t GrallocImage::sColorIdMap[] = {
     HAL_PIXEL_FORMAT_YCbCr_420_P, OMX_COLOR_FormatYUV420Planar,
     HAL_PIXEL_FORMAT_YCbCr_422_P, OMX_COLOR_FormatYUV422Planar,
     HAL_PIXEL_FORMAT_YCbCr_420_SP, OMX_COLOR_FormatYUV420SemiPlanar,
@@ -76,6 +76,8 @@ GrallocImage::SetData(const Data& aData)
        new GrallocTextureClientOGL(ImageBridgeChild::GetSingleton(),
                                    gfx::SurfaceFormat::UNKNOWN,
                                    gfx::BackendType::NONE);
+  // GrallocImages are all YUV and don't support alpha.
+  textureClient->SetIsOpaque(true);
   bool result =
     textureClient->AllocateGralloc(mData.mYSize,
                                    HAL_PIXEL_FORMAT_YV12,
@@ -134,6 +136,13 @@ GrallocImage::SetData(const Data& aData)
     }
   }
   graphicBuffer->unlock();
+  // Initialze the channels' addresses.
+  // Do not cache the addresses when gralloc buffer is not locked.
+  // gralloc hal could map gralloc buffer only when the buffer is locked,
+  // though some gralloc hals implementation maps it when it is allocated.
+  mData.mYChannel     = nullptr;
+  mData.mCrChannel    = nullptr;
+  mData.mCbChannel    = nullptr;
 }
 
 void GrallocImage::SetData(const GrallocData& aData)
@@ -265,10 +274,11 @@ static status_t
 ConvertOmxYUVFormatToRGB565(android::sp<GraphicBuffer>& aBuffer,
                             gfx::DataSourceSurface *aSurface,
                             gfx::DataSourceSurface::MappedSurface *aMappedSurface,
-                            const layers::PlanarYCbCrData& aYcbcrData,
-                            int aOmxFormat)
+                            const layers::PlanarYCbCrData& aYcbcrData)
 {
-  if (!aOmxFormat) {
+  uint32_t omxFormat =
+    GrallocImage::GetOmxFormat(aBuffer->getPixelFormat());
+  if (!omxFormat) {
     NS_WARNING("Unknown color format");
     return BAD_VALUE;
   }
@@ -317,24 +327,50 @@ ConvertOmxYUVFormatToRGB565(android::sp<GraphicBuffer>& aBuffer,
   }
 
   if (format == HAL_PIXEL_FORMAT_YV12) {
-    gfx::ConvertYCbCrToRGB(aYcbcrData,
+    // Depend on platforms, it is possible for HW decoder to output YV12 format.
+    // It means the mData won't be configured during the SetData API because the
+    // yuv data has already stored in GraphicBuffer. Here we try to confgiure the
+    // mData if it doesn't contain valid configuration.
+    layers::PlanarYCbCrData ycbcrData = aYcbcrData;
+    if (!ycbcrData.mYChannel) {
+      ycbcrData.mYChannel     = buffer;
+      ycbcrData.mYSkip        = 0;
+      ycbcrData.mYStride      = aBuffer->getStride();
+      ycbcrData.mYSize        = aSurface->GetSize();
+      ycbcrData.mCbSkip       = 0;
+      ycbcrData.mCbCrSize     = aSurface->GetSize() / 2;
+      ycbcrData.mPicSize      = aSurface->GetSize();
+      ycbcrData.mCrChannel    = buffer + ycbcrData.mYStride * aBuffer->getHeight();
+      ycbcrData.mCrSkip       = 0;
+      // Align to 16 bytes boundary
+      ycbcrData.mCbCrStride   = ALIGN(ycbcrData.mYStride / 2, 16);
+      ycbcrData.mCbChannel    = ycbcrData.mCrChannel + (ycbcrData.mCbCrStride * aBuffer->getHeight() / 2);
+    } else {
+      // Update channels' address.
+      // Gralloc buffer could map gralloc buffer only when the buffer is locked.
+      ycbcrData.mYChannel     = buffer;
+      ycbcrData.mCrChannel    = buffer + ycbcrData.mYStride * aBuffer->getHeight();
+      ycbcrData.mCbChannel    = ycbcrData.mCrChannel + (ycbcrData.mCbCrStride * aBuffer->getHeight() / 2);
+    }
+    gfx::ConvertYCbCrToRGB(ycbcrData,
                            aSurface->GetFormat(),
                            aSurface->GetSize(),
-                           aSurface->GetData(),
-                           aSurface->Stride());
+                           aMappedSurface->mData,
+                           aMappedSurface->mStride);
     return OK;
   }
 
-  android::ColorConverter colorConverter((OMX_COLOR_FORMATTYPE)aOmxFormat,
+  android::ColorConverter colorConverter((OMX_COLOR_FORMATTYPE)omxFormat,
                                          OMX_COLOR_Format16bitRGB565);
   if (!colorConverter.isValid()) {
     NS_WARNING("Invalid color conversion");
     return BAD_VALUE;
   }
 
+  uint32_t pixelStride = aMappedSurface->mStride/gfx::BytesPerPixel(gfx::SurfaceFormat::R5G6B5);
   rv = colorConverter.convert(buffer, width, height,
                               0, 0, width - 1, height - 1 /* source crop */,
-                              aMappedSurface->mData, width, height,
+                              aMappedSurface->mData, pixelStride, height,
                               0, 0, width - 1, height - 1 /* dest crop */);
   if (rv) {
     NS_WARNING("OMX color conversion failed");
@@ -356,8 +392,7 @@ GrallocImage::GetAsSourceSurface()
 
   RefPtr<gfx::DataSourceSurface> surface =
     gfx::Factory::CreateDataSourceSurface(GetSize(), gfx::SurfaceFormat::R5G6B5);
-  if (!surface) {
-    NS_WARNING("Failed to create SourceSurface.");
+  if (NS_WARN_IF(!surface)) {
     return nullptr;
   }
 
@@ -368,25 +403,16 @@ GrallocImage::GetAsSourceSurface()
   }
 
   int32_t rv;
-  uint32_t omxFormat = 0;
-
-  omxFormat = GrallocImage::GetOmxFormat(graphicBuffer->getPixelFormat());
-  if (!omxFormat) {
-    rv = ConvertVendorYUVFormatToRGB565(graphicBuffer, surface, &mappedSurface);
+  rv = ConvertOmxYUVFormatToRGB565(graphicBuffer, surface, &mappedSurface, mData);
+  if (rv == OK) {
     surface->Unmap();
-
-    if (rv != OK) {
-      NS_WARNING("Unknown color format");
-      return nullptr;
-    }
-
     return surface;
   }
 
-  rv = ConvertOmxYUVFormatToRGB565(graphicBuffer, surface, &mappedSurface, mData, omxFormat);
+  rv = ConvertVendorYUVFormatToRGB565(graphicBuffer, surface, &mappedSurface);
   surface->Unmap();
-
   if (rv != OK) {
+    NS_WARNING("Unknown color format");
     return nullptr;
   }
 

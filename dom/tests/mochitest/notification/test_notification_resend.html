@@ -18,6 +18,8 @@
   var notifications = [];
   var manifestURL;
 
+  SimpleTest.requestFlakyTimeout("untriaged");
+
   var steps = [
     function (done) {
       if (window.Notification) {
@@ -87,6 +89,35 @@
     },
 
     function (done) {
+      info("Sending one non-resendable notification");
+      var behavior = {
+        showOnlyOnce: true
+      };
+      var notif = new Notification("title", { mozbehavior: behavior });
+      ok(notif, "Notification object is valid");
+      notifications.push(notif);
+
+      var promise = Notification.get();
+      promise.then(function (notifications) {
+        is(notifications.length, 1, "one notification has been sent");
+        done();
+      });
+    },
+
+    function (done) {
+      info("Trying to resend non-resendable notification");
+      var notif = notifications.pop();
+      notif.onclose = function() {
+        done();
+      };
+
+      navigator.mozChromeNotifications.mozResendAllNotifications(function(number) {
+        is(number, 0, "One notification not resent");
+        notif.close();
+      });
+    },
+
+    function (done) {
       info("Sending two notifications, closing one");
       var notif1 = new Notification("title1");
       ok(notif1, "Notification object is valid");
@@ -94,13 +125,8 @@
         done();
       };
 
-      var payload = {
-        body: "Body",
-        tag: "fakeTag",
-        icon: "icon.jpg",
-        lang: "en-US",
-        dir: "ltr"
-      };
+      var payload = NotificationTest.payload;
+
       var notif2 = new Notification("Title2", payload);
       ok(notif2, "Notification object is valid");
       notifications.push(notif2);
@@ -156,6 +182,16 @@
         is(notif.dir, "ltr", "Notification dir is valid: " + notif.dir);
         is(notif.tag, "fakeTag", "Notification tag is valid: " + notif.tag);
         ok((notif.timestamp >= now), "Notification timestamp is valid: (" + notif.timestamp + " >= " + now + ")");
+
+        var scContainer =
+          SpecialPowers.Cc["@mozilla.org/docshell/structured-clone-container;1"].
+            createInstance(SpecialPowers.Ci.nsIStructuredCloneContainer);
+        scContainer.initFromBase64(notif.data, 4);
+
+        var dataObj = scContainer.deserializeToVariant().SpecialPowers_wrappedObject;
+        ok(NotificationTest.customDataMatches(dataObj),
+           "Notification data is valid");
+
         notif2.close();
       });
     }

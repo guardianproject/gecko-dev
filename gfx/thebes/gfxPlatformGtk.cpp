@@ -63,7 +63,8 @@ gfxPlatformGtk::gfxPlatformGtk()
     if (!sFontconfigUtils)
         sFontconfigUtils = gfxFontconfigUtils::GetFontconfigUtils();
 #ifdef MOZ_X11
-    sUseXRender = mozilla::Preferences::GetBool("gfx.xrender.enabled");
+    sUseXRender = (GDK_IS_X11_DISPLAY(gdk_display_get_default())) ? 
+                    mozilla::Preferences::GetBool("gfx.xrender.enabled") : false;
 #endif
 
     uint32_t canvasMask = BackendTypeBit(BackendType::CAIRO) | BackendTypeBit(BackendType::SKIA);
@@ -93,7 +94,9 @@ gfxPlatformGtk::CreateOffscreenSurface(const IntSize& size,
     // we should try to match
     GdkScreen *gdkScreen = gdk_screen_get_default();
     if (gdkScreen) {
-        if (UseXRender()) {
+        // When forcing PaintedLayers to use image surfaces for content,
+        // force creation of gfxImageSurface surfaces.
+        if (UseXRender() && !UseImageOffscreenSurfaces()) {
             Screen *screen = gdk_x11_screen_get_xscreen(gdkScreen);
             XRenderPictFormat* xrenderFormat =
                 gfxXlibSurface::FindRenderFormat(DisplayOfScreen(screen),
@@ -101,12 +104,12 @@ gfxPlatformGtk::CreateOffscreenSurface(const IntSize& size,
 
             if (xrenderFormat) {
                 newSurface = gfxXlibSurface::Create(screen, xrenderFormat,
-                                                    ThebesIntSize(size));
+                                                    size);
             }
         } else {
             // We're not going to use XRender, so we don't need to
             // search for a render format
-            newSurface = new gfxImageSurface(ThebesIntSize(size), imageFormat);
+            newSurface = new gfxImageSurface(size, imageFormat);
             // The gfxImageSurface ctor zeroes this for us, no need to
             // waste time clearing again
             needsClear = false;
@@ -118,7 +121,7 @@ gfxPlatformGtk::CreateOffscreenSurface(const IntSize& size,
         // We couldn't create a native surface for whatever reason;
         // e.g., no display, no RENDER, bad size, etc.
         // Fall back to image surface for the data.
-        newSurface = new gfxImageSurface(ThebesIntSize(size), imageFormat);
+        newSurface = new gfxImageSurface(size, imageFormat);
     }
 
     if (newSurface->CairoStatus()) {
@@ -162,18 +165,26 @@ gfxPlatformGtk::CreateFontGroup(const FontFamilyList& aFontFamilyList,
 }
 
 gfxFontEntry*
-gfxPlatformGtk::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                const nsAString& aFontName)
+gfxPlatformGtk::LookupLocalFont(const nsAString& aFontName,
+                                uint16_t aWeight,
+                                int16_t aStretch,
+                                bool aItalic)
 {
-    return gfxPangoFontGroup::NewFontEntry(*aProxyEntry, aFontName);
+    return gfxPangoFontGroup::NewFontEntry(aFontName, aWeight,
+                                           aStretch, aItalic);
 }
 
 gfxFontEntry* 
-gfxPlatformGtk::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry, 
-                                 const uint8_t *aFontData, uint32_t aLength)
+gfxPlatformGtk::MakePlatformFont(const nsAString& aFontName,
+                                 uint16_t aWeight,
+                                 int16_t aStretch,
+                                 bool aItalic,
+                                 const uint8_t* aFontData,
+                                 uint32_t aLength)
 {
     // passing ownership of the font data to the new font entry
-    return gfxPangoFontGroup::NewFontEntry(*aProxyEntry,
+    return gfxPangoFontGroup::NewFontEntry(aFontName, aWeight,
+                                           aStretch, aItalic,
                                            aFontData, aLength);
 }
 
@@ -188,9 +199,7 @@ gfxPlatformGtk::IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags)
     // Pango doesn't apply features from AAT TrueType extensions.
     // Assume that if this is the only SFNT format specified,
     // then AAT extensions are required for complex script support.
-    if (aFormatFlags & (gfxUserFontSet::FLAG_FORMAT_WOFF     |
-                        gfxUserFontSet::FLAG_FORMAT_OPENTYPE | 
-                        gfxUserFontSet::FLAG_FORMAT_TRUETYPE)) {
+    if (aFormatFlags & gfxUserFontSet::FLAG_FORMATS_COMMON) {
         return true;
     }
 
@@ -219,6 +228,16 @@ gfxPlatformGtk::GetDPI()
         }
     }
     return sDPI;
+}
+
+double
+gfxPlatformGtk::GetDPIScale()
+{
+    // We want to set the default CSS to device pixel ratio as the
+    // closest _integer_ multiple, so round the ratio of actual dpi
+    // to CSS dpi (96)
+    int32_t dpi = GetDPI();
+    return (dpi > 96) ? round(dpi/96.0) : 1.0;
 }
 
 gfxImageFormat
@@ -258,11 +277,15 @@ gfxPlatformGtk::GetPlatformCMSOutputProfile(void *&mem, size_t &size)
     size = 0;
 
 #ifdef MOZ_X11
+    GdkDisplay *display = gdk_display_get_default();
+    if (!GDK_IS_X11_DISPLAY(display))
+        return;
+
     const char EDID1_ATOM_NAME[] = "XFree86_DDC_EDID1_RAWDATA";
     const char ICC_PROFILE_ATOM_NAME[] = "_ICC_PROFILE";
 
     Atom edidAtom, iccAtom;
-    Display *dpy = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
+    Display *dpy = GDK_DISPLAY_XDISPLAY(display);
     // In xpcshell tests, we never initialize X and hence don't have a Display.
     // In this case, there's no output colour management to be done, so we just
     // return with nullptr.

@@ -5,7 +5,8 @@ var symbols = [
     Symbol(),
     Symbol("one"),
     Symbol.for("two"),
-    Symbol.iterator
+    Symbol.iterator,
+    Object(Symbol())
 ];
 
 for (var sym of symbols) {

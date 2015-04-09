@@ -13,7 +13,7 @@
 
 #include <stdio.h>
 
-#ifdef XP_WIN
+#if defined(_MSC_VER) && _MSC_VER < 1900
 #define snprintf _snprintf
 #endif
 
@@ -1159,7 +1159,8 @@ CompressWhitespace(nsAString& aString)
   char16_t* start;
   uint32_t len = NS_StringGetMutableData(aString, UINT32_MAX, &start);
   char16_t* end = start + len;
-  char16_t* from = start, *to = start;
+  char16_t* from = start;
+  char16_t* to = start;
 
   // Skip any leading whitespace
   while (from < end && NS_IsAsciiWhitespace(*from)) {

@@ -13,6 +13,7 @@ Test if Nuwa process created successfully.
 "use strict";
 
 SimpleTest.waitForExplicitFinish();
+SimpleTest.requestFlakyTimeout("untriaged");
 
 function TestLoader() {}
 
@@ -50,7 +51,7 @@ function setPref(pref, value) {
 
 setPref('dom.ipc.processPriorityManager.testMode', true);
 setPref('dom.ipc.processPriorityManager.enabled', true);
-setPref('dom.ipc.processPriorityManager.backgroundLRUPoolLevels', 2);
+setPref('dom.ipc.processPriorityManager.BACKGROUND.LRUPoolLevels', 2);
 setPref('dom.ipc.processPrelaunch.testMode', true);  // For testing deadlock.
 
 function runTest()
@@ -77,7 +78,7 @@ function runTest()
   let timeout = setTimeout(function() {
     ok(false, "Nuwa process is not launched");
     testEnd();
-  }, 90000);
+  }, 240000);
 
   function testEnd() {
     cpmm.removeMessageListener("TEST-ONLY:nuwa-ready", msgHandler);

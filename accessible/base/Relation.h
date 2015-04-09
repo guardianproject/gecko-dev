@@ -23,10 +23,10 @@ class Relation
 public:
   Relation() : mFirstIter(nullptr), mLastIter(nullptr) { }
 
-  Relation(AccIterable* aIter) :
+  explicit Relation(AccIterable* aIter) :
     mFirstIter(aIter), mLastIter(aIter) { }
 
-  Relation(Accessible* aAcc) :
+  explicit Relation(Accessible* aAcc) :
     mFirstIter(nullptr), mLastIter(nullptr)
     { AppendTarget(aAcc); }
 
@@ -95,8 +95,8 @@ public:
   }
 
 private:
-  Relation& operator = (const Relation&) MOZ_DELETE;
-  Relation(const Relation&) MOZ_DELETE;
+  Relation& operator = (const Relation&) = delete;
+  Relation(const Relation&) = delete;
 
   nsAutoPtr<AccIterable> mFirstIter;
   AccIterable* mLastIter;

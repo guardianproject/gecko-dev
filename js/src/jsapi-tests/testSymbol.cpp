@@ -79,4 +79,3 @@ BEGIN_TEST(testSymbol_GetWellKnownSymbol)
     return true;
 }
 END_TEST(testSymbol_GetWellKnownSymbol)
-

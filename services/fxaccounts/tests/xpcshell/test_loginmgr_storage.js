@@ -84,7 +84,7 @@ add_task(function test_MPLocked() {
   };
 
   // tell the storage that the MP is locked.
-  fxa.internal.signedInUserStorage.__defineGetter__("_isLoggedIn", function() false);
+  fxa.internal.signedInUserStorage.__defineGetter__("_isLoggedIn", () => false);
   yield fxa.setSignedInUser(creds);
 
   // This should have stored stuff in the .json, and the login manager stuff
@@ -128,7 +128,7 @@ add_task(function test_migrationMPUnlocked() {
   Assert.deepEqual(data, creds, "we got all the data back");
 
   // and verify it was actually migrated - re-read signedInUser back.
-  let data = yield CommonUtils.readJSON(path);
+  data = yield CommonUtils.readJSON(path);
 
   Assert.strictEqual(data.accountData.email, creds.email, "correct email in the clear text");
   Assert.strictEqual(data.accountData.sessionToken, creds.sessionToken, "correct sessionToken in the clear text");
@@ -173,7 +173,7 @@ add_task(function test_migrationMPLocked() {
   yield CommonUtils.writeJSON(toWrite, path);
 
   // pretend the MP is locked.
-  fxa.internal.signedInUserStorage.__defineGetter__("_isLoggedIn", function() false);
+  fxa.internal.signedInUserStorage.__defineGetter__("_isLoggedIn", () => false);
 
   // now load it - it should *not* migrate, but should only give the JSON-safe
   // data back.
@@ -186,7 +186,7 @@ add_task(function test_migrationMPLocked() {
   Assert.deepEqual(data, toWrite);
 
   // Now "unlock" and re-ask for the signedInUser - it should migrate.
-  fxa.internal.signedInUserStorage.__defineGetter__("_isLoggedIn", function() true);
+  fxa.internal.signedInUserStorage.__defineGetter__("_isLoggedIn", () => true);
   data = yield fxa.getSignedInUser();
   // this time we should have got all the data, not just the JSON-safe fields.
   Assert.strictEqual(data.kA, creds.kA);
@@ -240,7 +240,7 @@ add_task(function test_consistentWithMPEdgeCases() {
 
   // tell the storage that the MP is locked - this will prevent logout from
   // being able to clear the data.
-  fxa.internal.signedInUserStorage.__defineGetter__("_isLoggedIn", function() false);
+  fxa.internal.signedInUserStorage.__defineGetter__("_isLoggedIn", () => false);
 
   // now set the second credentials.
   yield fxa.setSignedInUser(creds2);
@@ -255,7 +255,7 @@ add_task(function test_consistentWithMPEdgeCases() {
   // Make a new FxA instance (otherwise the values in memory will be used.)
   // Because we haven't overridden _isLoggedIn for this new instance it will
   // treat the MP as unlocked.
-  let fxa = new FxAccounts({});
+  fxa = new FxAccounts({});
 
   let accountData = yield fxa.getSignedInUser();
   Assert.strictEqual(accountData.email, creds2.email);

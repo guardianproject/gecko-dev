@@ -69,6 +69,7 @@ nsHttpConnection::nsHttpConnection()
     , mExperienced(false)
     , mInSpdyTunnel(false)
     , mForcePlainText(false)
+    , mTrafficStamp(false)
     , mHttp1xTransactionCount(0)
     , mRemainingConnectionUses(0xffffffff)
     , mClassification(nsAHttpTransaction::CLASS_GENERAL)
@@ -179,10 +180,10 @@ nsHttpConnection::StartSpdy(uint8_t spdyVersion)
 
     if (rv == NS_ERROR_ALREADY_OPENED) {
         // Has the interface for TakeSubTransactions() changed?
-        LOG(("TakeSubTranscations somehow called after "
+        LOG(("TakeSubTransactions somehow called after "
              "nsAHttpTransaction began processing\n"));
         MOZ_ASSERT(false,
-                   "TakeSubTranscations somehow called after "
+                   "TakeSubTransactions somehow called after "
                    "nsAHttpTransaction began processing");
         mTransaction->Close(NS_ERROR_ABORT);
         return;
@@ -310,21 +311,19 @@ nsHttpConnection::EnsureNPNComplete()
         return false;
     }
 
-    if (NS_FAILED(rv)) {
-        goto npnComplete;
-    }
-    LOG(("nsHttpConnection::EnsureNPNComplete %p [%s] negotiated to '%s'%s\n",
-         this, mConnInfo->HashKey().get(), negotiatedNPN.get(),
-         mTLSFilter ? " [Double Tunnel]" : ""));
-
-    uint8_t spdyVersion;
-    rv = gHttpHandler->SpdyInfo()->GetNPNVersionIndex(negotiatedNPN,
-                                                      &spdyVersion);
     if (NS_SUCCEEDED(rv)) {
-        StartSpdy(spdyVersion);
-    }
+        LOG(("nsHttpConnection::EnsureNPNComplete %p [%s] negotiated to '%s'%s\n",
+             this, mConnInfo->HashKey().get(), negotiatedNPN.get(),
+             mTLSFilter ? " [Double Tunnel]" : ""));
 
-    Telemetry::Accumulate(Telemetry::SPDY_NPN_CONNECT, UsingSpdy());
+        uint32_t infoIndex;
+        const SpdyInformation *info = gHttpHandler->SpdyInfo();
+        if (NS_SUCCEEDED(info->GetNPNIndex(negotiatedNPN, &infoIndex))) {
+            StartSpdy(info->Version[infoIndex]);
+        }
+
+        Telemetry::Accumulate(Telemetry::SPDY_NPN_CONNECT, UsingSpdy());
+    }
 
 npnComplete:
     LOG(("nsHttpConnection::EnsureNPNComplete setting complete to true"));
@@ -475,24 +474,56 @@ nsHttpConnection::SetupSSL()
     }
 }
 
+// The naming of NPN is historical - this function creates the basic
+// offer list for both NPN and ALPN. ALPN validation callbacks are made
+// now before the handshake is complete, and NPN validation callbacks
+// are made during the handshake.
 nsresult
 nsHttpConnection::SetupNPNList(nsISSLSocketControl *ssl, uint32_t caps)
 {
     nsTArray<nsCString> protocolArray;
 
-    // The first protocol is used as the fallback if none of the
-    // protocols supported overlap with the server's list.
-    // In the case of overlap, matching priority is driven by
-    // the order of the server's advertisement.
-    protocolArray.AppendElement(NS_LITERAL_CSTRING("http/1.1"));
+    nsCString npnToken = mConnInfo->GetNPNToken();
+    if (npnToken.IsEmpty()) {
+        // The first protocol is used as the fallback if none of the
+        // protocols supported overlap with the server's list.
+        // When using ALPN the advertised preferences are protocolArray indicies
+        // {1, .., N, 0} in decreasing order.
+        // For NPN, In the case of overlap, matching priority is driven by
+        // the order of the server's advertisement - with index 0 used when
+        // there is no match.
+        protocolArray.AppendElement(NS_LITERAL_CSTRING("http/1.1"));
 
-    if (gHttpHandler->IsSpdyEnabled() &&
-        !(caps & NS_HTTP_DISALLOW_SPDY)) {
-        LOG(("nsHttpConnection::SetupSSL Allow SPDY NPN selection"));
-        for (uint32_t index = 0; index < SpdyInformation::kCount; ++index) {
-            if (gHttpHandler->SpdyInfo()->ProtocolEnabled(index))
-                protocolArray.AppendElement(
-                    gHttpHandler->SpdyInfo()->VersionString[index]);
+        if (gHttpHandler->IsSpdyEnabled() &&
+            !(caps & NS_HTTP_DISALLOW_SPDY)) {
+            LOG(("nsHttpConnection::SetupSSL Allow SPDY NPN selection"));
+            const SpdyInformation *info = gHttpHandler->SpdyInfo();
+            for (uint32_t index = SpdyInformation::kCount; index > 0; --index) {
+                if (info->ProtocolEnabled(index - 1) &&
+                    info->ALPNCallbacks[index - 1](ssl)) {
+                    protocolArray.AppendElement(info->VersionString[index - 1]);
+                }
+            }
+        }
+    } else {
+        LOG(("nsHttpConnection::SetupSSL limiting NPN selection to %s",
+             npnToken.get()));
+        protocolArray.AppendElement(npnToken);
+    }
+
+    nsCString authHost = mConnInfo->GetAuthenticationHost();
+    int32_t   authPort = mConnInfo->GetAuthenticationPort();
+
+    if (!authHost.IsEmpty()) {
+        ssl->SetAuthenticationName(authHost);
+        ssl->SetAuthenticationPort(authPort);
+    }
+
+    if (mConnInfo->GetRelaxed()) { // http:// over tls
+        if (authHost.IsEmpty() || authHost.Equals(mConnInfo->GetHost())) {
+            LOG(("nsHttpConnection::SetupSSL %p TLS-Relaxed "
+                 "with Same Host Auth Bypass", this));
+            ssl->SetBypassAuthentication(true);
         }
     }
 
@@ -522,6 +553,14 @@ nsHttpConnection::AddTransaction(nsAHttpTransaction *httpTransaction,
 
     LOG(("nsHttpConnection::AddTransaction for SPDY%s",
          needTunnel ? " over tunnel" : ""));
+
+    // do a runtime check here just for defense in depth
+    if (transCI->GetRelaxed() &&
+        httpTransaction->RequestHead() && httpTransaction->RequestHead()->IsHTTPS()) {
+        LOG(("This Cannot happen - https on relaxed tls stream\n"));
+        MOZ_ASSERT(false, "https:// on tls relaxed");
+        return NS_ERROR_FAILURE;
+    }
 
     if (!mSpdySession->AddStream(httpTransaction, priority,
                                  needTunnel, mCallbacks)) {
@@ -613,17 +652,6 @@ nsHttpConnection::InitSSLParams(bool connectingToProxy, bool proxyStartSSL)
     if (NS_SUCCEEDED(SetupNPNList(ssl, mTransactionCaps))) {
         LOG(("InitSSLParams Setting up SPDY Negotiation OK"));
         mNPNComplete = false;
-    }
-
-    // transaction caps apply only to origin. we don't track
-    // proxy history.
-    if (!connectingToProxy &&
-        (mTransactionCaps & NS_HTTP_ALLOW_RSA_FALSESTART)) {
-        LOG(("nsHttpConnection::InitSSLParams %p "
-             ">= RSA Key Exchange Expected\n", this));
-        ssl->SetKEAExpected(ssl_kea_rsa);
-    } else {
-        ssl->SetKEAExpected(nsISSLSocketControl::KEY_EXCHANGE_UNKNOWN);
     }
 
     return NS_OK;
@@ -976,12 +1004,15 @@ nsHttpConnection::OnHeadersAvailable(nsAHttpTransaction *trans,
         MOZ_ASSERT(!mUsingSpdyVersion,
                    "SPDY NPN Complete while using proxy connect stream");
         mProxyConnectStream = nullptr;
+        bool isHttps =
+            mTransaction ? mTransaction->ConnectionInfo()->EndToEndSSL() :
+            mConnInfo->EndToEndSSL();
+
         if (responseStatus == 200) {
-            LOG(("proxy CONNECT succeeded! endtoendssl=%s\n",
-                 mConnInfo->EndToEndSSL() ? "true" :"false"));
+            LOG(("proxy CONNECT succeeded! endtoendssl=%d\n", isHttps));
             *reset = true;
             nsresult rv;
-            if (mConnInfo->EndToEndSSL()) {
+            if (isHttps) {
                 if (mConnInfo->UsingHttpsProxy()) {
                     LOG(("%p new TLSFilterTransaction %s %d\n",
                          this, mConnInfo->Host(), mConnInfo->Port()));
@@ -998,8 +1029,7 @@ nsHttpConnection::OnHeadersAvailable(nsAHttpTransaction *trans,
             MOZ_ASSERT(NS_SUCCEEDED(rv), "mSocketOut->AsyncWait failed");
         }
         else {
-            LOG(("proxy CONNECT failed! endtoendssl=%s\n",
-                 mConnInfo->EndToEndSSL() ? "true" :"false"));
+            LOG(("proxy CONNECT failed! endtoendssl=%d\n", isHttps));
             mTransaction->SetProxyConnectFailed();
         }
     }
@@ -1082,15 +1112,25 @@ nsHttpConnection::TakeTransport(nsISocketTransport  **aTransport,
         }
     }
 
-    NS_IF_ADDREF(*aTransport = mSocketTransport);
-    NS_IF_ADDREF(*aInputStream = mSocketIn);
-    NS_IF_ADDREF(*aOutputStream = mSocketOut);
-
     mSocketTransport->SetSecurityCallbacks(nullptr);
     mSocketTransport->SetEventSink(nullptr, nullptr);
-    mSocketTransport = nullptr;
-    mSocketIn = nullptr;
-    mSocketOut = nullptr;
+
+    // The nsHttpConnection will go away soon, so if there is a TLS Filter
+    // being used (e.g. for wss CONNECT tunnel from a proxy connected to
+    // via https) that filter needs to take direct control of the
+    // streams
+    if (mTLSFilter) {
+        nsCOMPtr<nsIAsyncInputStream>  ref1(mSocketIn);
+        nsCOMPtr<nsIAsyncOutputStream> ref2(mSocketOut);
+        mTLSFilter->newIODriver(ref1, ref2,
+                                getter_AddRefs(mSocketIn),
+                                getter_AddRefs(mSocketOut));
+        mTLSFilter = nullptr;
+    }
+
+    mSocketTransport.forget(aTransport);
+    mSocketIn.forget(aInputStream);
+    mSocketOut.forget(aOutputStream);
 
     return NS_OK;
 }
@@ -1387,6 +1427,12 @@ nsHttpConnection::EndIdleMonitoring()
     }
 }
 
+uint32_t
+nsHttpConnection::Version()
+{
+    return mUsingSpdyVersion  ? mUsingSpdyVersion : mLastHttpResponseVersion;
+}
+
 //-----------------------------------------------------------------------------
 // nsHttpConnection <private>
 //-----------------------------------------------------------------------------
@@ -1542,7 +1588,7 @@ nsHttpConnection::OnSocketWritable()
             if (mSocketOutCondition == NS_BASE_STREAM_WOULD_BLOCK) {
                 if (mTLSFilter) {
                     LOG(("  blocked tunnel (handshake?)\n"));
-                    mTLSFilter->NudgeTunnel(this);
+                    rv = mTLSFilter->NudgeTunnel(this);
                 } else {
                     rv = mSocketOut->AsyncWait(this, 0, 0, nullptr); // continue writing
                 }
@@ -1587,7 +1633,8 @@ nsHttpConnection::OnWriteSegment(char *buf,
         return NS_ERROR_FAILURE; // stop iterating
     }
 
-    if (ChaosMode::isActive() && ChaosMode::randomUint32LessThan(2)) {
+    if (ChaosMode::isActive(ChaosMode::IOAmounts) &&
+        ChaosMode::randomUint32LessThan(2)) {
         // read 1...count bytes
         count = ChaosMode::randomUint32LessThan(count) + 1;
     }
@@ -1719,10 +1766,19 @@ nsHttpConnection::SetupSecondaryTLS()
     MOZ_ASSERT(!mTLSFilter);
     LOG(("nsHttpConnection %p SetupSecondaryTLS %s %d\n",
          this, mConnInfo->Host(), mConnInfo->Port()));
+
+    nsHttpConnectionInfo *ci = nullptr;
+    if (mTransaction) {
+        ci = mTransaction->ConnectionInfo();
+    }
+    if (!ci) {
+        ci = mConnInfo;
+    }
+    MOZ_ASSERT(ci);
+
     mTLSFilter = new TLSFilterTransaction(mTransaction,
-                                          mConnInfo->Host(),
-                                          mConnInfo->Port(),
-                                          this, this);
+                                          ci->Host(), ci->Port(), this, this);
+
     if (mTransaction) {
         mTransaction = mTLSFilter;
     }
@@ -2024,8 +2080,8 @@ nsHttpConnection::OnOutputStreamReady(nsIAsyncOutputStream *out)
 NS_IMETHODIMP
 nsHttpConnection::OnTransportStatus(nsITransport *trans,
                                     nsresult status,
-                                    uint64_t progress,
-                                    uint64_t progressMax)
+                                    int64_t progress,
+                                    int64_t progressMax)
 {
     if (mTransaction)
         mTransaction->OnTransportStatus(trans, status, progress);
@@ -2059,6 +2115,24 @@ nsHttpConnection::GetInterface(const nsIID &iid, void **result)
     if (callbacks)
         return callbacks->GetInterface(iid, result);
     return NS_ERROR_NO_INTERFACE;
+}
+
+void
+nsHttpConnection::CheckForTraffic(bool check)
+{
+    if (check) {
+        if (mSpdySession) {
+            // Send a ping to verify it is still alive
+            mSpdySession->SendPing();
+        } else {
+            // If not SPDY, Store snapshot amount of data right now
+            mTrafficCount = mTotalBytesWritten + mTotalBytesRead;
+            mTrafficStamp = true;
+        }
+    } else {
+        // mark it as not checked
+        mTrafficStamp = false;
+    }
 }
 
 } // namespace mozilla::net

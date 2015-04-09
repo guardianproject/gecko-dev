@@ -4,11 +4,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gfxBlur.h"
+
+#include "gfx2DGlue.h"
 #include "gfxContext.h"
 #include "gfxPlatform.h"
-
-#include "mozilla/gfx/Blur.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/Blur.h"
+#include "mozilla/gfx/PathHelpers.h"
+#include "mozilla/UniquePtr.h"
 #include "nsExpirationTracker.h"
 #include "nsClassHashtable.h"
 
@@ -16,14 +19,12 @@ using namespace mozilla;
 using namespace mozilla::gfx;
 
 gfxAlphaBoxBlur::gfxAlphaBoxBlur()
- : mBlur(nullptr)
 {
 }
 
 gfxAlphaBoxBlur::~gfxAlphaBoxBlur()
 {
   mContext = nullptr;
-  delete mBlur;
 }
 
 gfxContext*
@@ -37,31 +38,34 @@ gfxAlphaBoxBlur::Init(const gfxRect& aRect,
                             Float(aRect.width), Float(aRect.height));
     IntSize spreadRadius(aSpreadRadius.width, aSpreadRadius.height);
     IntSize blurRadius(aBlurRadius.width, aBlurRadius.height);
-    nsAutoPtr<mozilla::gfx::Rect> dirtyRect;
+    UniquePtr<Rect> dirtyRect;
     if (aDirtyRect) {
-      dirtyRect = new mozilla::gfx::Rect(Float(aDirtyRect->x),
-                                         Float(aDirtyRect->y),
-                                         Float(aDirtyRect->width),
-                                         Float(aDirtyRect->height));
+      dirtyRect = MakeUnique<Rect>(Float(aDirtyRect->x),
+                                   Float(aDirtyRect->y),
+                                   Float(aDirtyRect->width),
+                                   Float(aDirtyRect->height));
     }
-    nsAutoPtr<mozilla::gfx::Rect> skipRect;
+    UniquePtr<Rect> skipRect;
     if (aSkipRect) {
-      skipRect = new mozilla::gfx::Rect(Float(aSkipRect->x),
-                                        Float(aSkipRect->y),
-                                        Float(aSkipRect->width),
-                                        Float(aSkipRect->height));
+      skipRect = MakeUnique<Rect>(Float(aSkipRect->x),
+                                  Float(aSkipRect->y),
+                                  Float(aSkipRect->width),
+                                  Float(aSkipRect->height));
     }
 
-    mBlur = new AlphaBoxBlur(rect, spreadRadius, blurRadius, dirtyRect, skipRect);
-    int32_t blurDataSize = mBlur->GetSurfaceAllocationSize();
-    if (blurDataSize <= 0)
+    mBlur = MakeUnique<AlphaBoxBlur>(rect, spreadRadius, blurRadius, dirtyRect.get(), skipRect.get());
+    size_t blurDataSize = mBlur->GetSurfaceAllocationSize();
+    if (blurDataSize == 0)
         return nullptr;
 
     IntSize size = mBlur->GetSize();
 
     // Make an alpha-only surface to draw on. We will play with the data after
     // everything is drawn to create a blur effect.
-    mData = new unsigned char[blurDataSize];
+    mData = new (std::nothrow) unsigned char[blurDataSize];
+    if (!mData) {
+        return nullptr;
+    }
     memset(mData, 0, blurDataSize);
 
     mozilla::RefPtr<DrawTarget> dt =
@@ -76,7 +80,7 @@ gfxAlphaBoxBlur::Init(const gfxRect& aRect,
     gfxPoint topleft(irect.TopLeft().x, irect.TopLeft().y);
 
     mContext = new gfxContext(dt);
-    mContext->Translate(-topleft);
+    mContext->SetMatrix(gfxMatrix::Translation(-topleft));
 
     return mContext;
 }
@@ -94,7 +98,7 @@ DrawBlur(gfxContext* aDestinationCtx,
 
     Matrix oldTransform = dest->GetTransform();
     Matrix newTransform = oldTransform;
-    newTransform.Translate(aTopLeft.x, aTopLeft.y);
+    newTransform.PreTranslate(aTopLeft.x, aTopLeft.y);
 
     // Avoid a semi-expensive clip operation if we can, otherwise
     // clip to the dirty rect
@@ -172,7 +176,7 @@ struct BlurCacheKey : public PLDHashEntryHdr {
     , mBackend(aBackend)
   { }
 
-  BlurCacheKey(const BlurCacheKey* aOther)
+  explicit BlurCacheKey(const BlurCacheKey* aOther)
     : mRect(aOther->mRect)
     , mBlurRadius(aOther->mBlurRadius)
     , mSkipRect(aOther->mSkipRect)
@@ -241,7 +245,7 @@ struct BlurCacheData {
  *
  * An entry stays in the cache as long as it is used often.
  */
-class BlurCache MOZ_FINAL : public nsExpirationTracker<BlurCacheData,4>
+class BlurCache final : public nsExpirationTracker<BlurCacheData,4>
 {
   public:
     BlurCache()
@@ -360,47 +364,45 @@ gfxAlphaBoxBlur::ShutdownBlurCache()
 /* static */ void
 gfxAlphaBoxBlur::BlurRectangle(gfxContext *aDestinationCtx,
                                const gfxRect& aRect,
-                               gfxCornerSizes* aCornerRadii,
+                               RectCornerRadii* aCornerRadii,
                                const gfxPoint& aBlurStdDev,
                                const gfxRGBA& aShadowColor,
                                const gfxRect& aDirtyRect,
                                const gfxRect& aSkipRect)
 {
+  DrawTarget& aDrawTarget = *aDestinationCtx->GetDrawTarget();
+
   gfxIntSize blurRadius = CalculateBlurRadius(aBlurStdDev);
-    
-  DrawTarget *dt = aDestinationCtx->GetDrawTarget();
-  if (!dt) {
-    NS_WARNING("Blurring not supported for Thebes contexts!");
-    return;
-  }
 
   IntPoint topLeft;
-  RefPtr<SourceSurface> surface = GetCachedBlur(dt, aRect, blurRadius, aSkipRect, aDirtyRect, &topLeft);
+  RefPtr<SourceSurface> surface = GetCachedBlur(&aDrawTarget, aRect, blurRadius, aSkipRect, aDirtyRect, &topLeft);
   if (!surface) {
     // Create the temporary surface for blurring
     gfxAlphaBoxBlur blur;
-    gfxContext *dest = blur.Init(aRect, gfxIntSize(), blurRadius, &aDirtyRect, &aSkipRect);
-
-    if (!dest) {
+    gfxContext* blurCtx = blur.Init(aRect, gfxIntSize(), blurRadius, &aDirtyRect, &aSkipRect);
+    if (!blurCtx) {
       return;
     }
+    DrawTarget* blurDT = blurCtx->GetDrawTarget();
 
-    gfxRect shadowGfxRect = aRect;
+    Rect shadowGfxRect = ToRect(aRect);
     shadowGfxRect.Round();
 
-    dest->NewPath();
+    ColorPattern black(Color(0.f, 0.f, 0.f, 1.f)); // For masking, so no ToDeviceColor!
     if (aCornerRadii) {
-      dest->RoundedRectangle(shadowGfxRect, *aCornerRadii);
+      RefPtr<Path> roundedRect = MakePathForRoundedRect(*blurDT,
+                                                        shadowGfxRect,
+                                                        *aCornerRadii);
+      blurDT->Fill(roundedRect, black);
     } else {
-      dest->Rectangle(shadowGfxRect);
+      blurDT->FillRect(shadowGfxRect, black);
     }
-    dest->Fill();
 
-    surface = blur.DoBlur(dt, &topLeft);
+    surface = blur.DoBlur(&aDrawTarget, &topLeft);
     if (!surface) {
       return;
     }
-    CacheBlur(dt, aRect, blurRadius, aSkipRect, surface, topLeft, aDirtyRect);
+    CacheBlur(&aDrawTarget, aRect, blurRadius, aSkipRect, surface, topLeft, aDirtyRect);
   }
 
   aDestinationCtx->SetColor(aShadowColor);

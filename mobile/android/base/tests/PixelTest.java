@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 package org.mozilla.gecko.tests;
 
 import org.mozilla.gecko.Actions;
@@ -8,7 +12,7 @@ abstract class PixelTest extends BaseTest {
 
     protected final PaintedSurface loadAndGetPainted(String url) {
         Actions.RepeatedEventExpecter paintExpecter = mActions.expectPaint();
-        inputAndLoadUrl(url);
+        loadUrl(url);
         verifyHomePagerHidden();
         paintExpecter.blockUntilClear(PAINT_CLEAR_DELAY);
         paintExpecter.unregisterListener();
@@ -29,8 +33,8 @@ abstract class PixelTest extends BaseTest {
         Actions.RepeatedEventExpecter paintExpecter = mActions.expectPaint();
 
         mActions.sendSpecialKey(Actions.SpecialKey.MENU);
-        waitForText("Reload");
-        mSolo.clickOnText("Reload");
+        waitForText(mStringHelper.RELOAD_LABEL);
+        mSolo.clickOnText(mStringHelper.RELOAD_LABEL);
 
         paintExpecter.blockUntilClear(PAINT_CLEAR_DELAY);
         paintExpecter.unregisterListener();
@@ -51,17 +55,16 @@ abstract class PixelTest extends BaseTest {
         Actions.EventExpecter tabEventExpecter = mActions.expectGeckoEvent("Tab:Added");
         Actions.EventExpecter contentEventExpecter = mActions.expectGeckoEvent("DOMContentLoaded");
         if (isPrivate) {
-            selectMenuItem(StringHelper.NEW_PRIVATE_TAB_LABEL);
+            selectMenuItem(mStringHelper.NEW_PRIVATE_TAB_LABEL);
         } else {
-            selectMenuItem(StringHelper.NEW_TAB_LABEL);
+            selectMenuItem(mStringHelper.NEW_TAB_LABEL);
         }
         tabEventExpecter.blockForEvent();
         contentEventExpecter.blockForEvent();
-        waitForText(StringHelper.TITLE_PLACE_HOLDER);
+        waitForText(mStringHelper.TITLE_PLACE_HOLDER);
         loadAndPaint(url);
         tabEventExpecter.unregisterListener();
         contentEventExpecter.unregisterListener();
-        mAsserter.ok(waitForText(title), "Checking that the page has loaded", "The page has loaded");
     }
 
     protected final PaintedSurface waitForPaint(Actions.RepeatedEventExpecter expecter) {

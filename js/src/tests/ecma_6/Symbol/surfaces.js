@@ -21,6 +21,11 @@ assertEq(desc.configurable, true);
 assertEq(desc.enumerable, false);
 assertEq(desc.writable, true);
 
+desc = Object.getOwnPropertyDescriptor(Symbol, "iterator");
+assertEq(desc.configurable, false);
+assertEq(desc.enumerable, false);
+assertEq(desc.writable, false);
+
 assertEq(Symbol.for.length, 1);
 assertEq(Symbol.prototype.toString.length, 0);
 assertEq(Symbol.prototype.valueOf.length, 0);

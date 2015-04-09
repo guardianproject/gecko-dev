@@ -25,15 +25,15 @@ USING_WORKERS_NAMESPACE
 
 namespace {
 
-class DelayedEventRunnable MOZ_FINAL : public WorkerRunnable
+class DelayedEventRunnable final : public WorkerRunnable
 {
-  nsRefPtr<MessagePort> mMessagePort;
+  nsRefPtr<mozilla::dom::workers::MessagePort> mMessagePort;
   nsTArray<nsCOMPtr<nsIDOMEvent>> mEvents;
 
 public:
   DelayedEventRunnable(WorkerPrivate* aWorkerPrivate,
                        TargetAndBusyBehavior aBehavior,
-                       MessagePort* aMessagePort,
+                       mozilla::dom::workers::MessagePort* aMessagePort,
                        nsTArray<nsCOMPtr<nsIDOMEvent>>& aEvents)
   : WorkerRunnable(aWorkerPrivate, aBehavior), mMessagePort(aMessagePort)
   {
@@ -72,6 +72,8 @@ public:
 
 } // anonymous namespace
 
+BEGIN_WORKERS_NAMESPACE
+
 MessagePort::MessagePort(nsPIDOMWindow* aWindow, SharedWorker* aSharedWorker,
                          uint64_t aSerial)
 : MessagePortBase(aWindow), mSharedWorker(aSharedWorker),
@@ -79,14 +81,12 @@ MessagePort::MessagePort(nsPIDOMWindow* aWindow, SharedWorker* aSharedWorker,
 {
   AssertIsOnMainThread();
   MOZ_ASSERT(aSharedWorker);
-  SetIsDOMBinding();
 }
 
 MessagePort::MessagePort(WorkerPrivate* aWorkerPrivate, uint64_t aSerial)
 : mWorkerPrivate(aWorkerPrivate), mSerial(aSerial), mStarted(false)
 {
   aWorkerPrivate->AssertIsOnWorkerThread();
-  SetIsDOMBinding();
 }
 
 MessagePort::~MessagePort()
@@ -261,11 +261,11 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(MessagePort,
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 JSObject*
-MessagePort::WrapObject(JSContext* aCx)
+MessagePort::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
   AssertCorrectThread();
 
-  return MessagePortBinding::Wrap(aCx, this);
+  return MessagePortBinding::Wrap(aCx, this, aGivenProto);
 }
 
 nsresult
@@ -280,7 +280,7 @@ MessagePort::PreHandleEvent(EventChainPreVisitor& aVisitor)
 
     if (IsClosed()) {
       preventDispatch = true;
-    } else if (NS_IsMainThread() && mSharedWorker->IsSuspended()) {
+    } else if (NS_IsMainThread() && mSharedWorker->IsFrozen()) {
       mSharedWorker->QueueEvent(event);
       preventDispatch = true;
     } else if (!mStarted) {
@@ -297,6 +297,8 @@ MessagePort::PreHandleEvent(EventChainPreVisitor& aVisitor)
 
   return DOMEventTargetHelper::PreHandleEvent(aVisitor);
 }
+
+END_WORKERS_NAMESPACE
 
 bool
 DelayedEventRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)

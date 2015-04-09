@@ -1,18 +1,22 @@
-package org.mozilla.gecko.tests;
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+package org.mozilla.gecko.tests;
 
 public class testMailToContextMenu extends ContentContextMenuTest {
 
     // Test website strings
     private static String MAILTO_PAGE_URL;
-    private static final String MAILTO_PAGE_TITLE = "Big Mailto";
     private static final String mailtoMenuItems [] = {"Copy Email Address", "Share Email Address"};
 
     public void testMailToContextMenu() {
+        final String MAILTO_PAGE_TITLE = mStringHelper.ROBOCOP_BIG_MAILTO_TITLE;
+
         blockForGeckoReady();
 
-        MAILTO_PAGE_URL=getAbsoluteUrl("/robocop/robocop_big_mailto.html");
-        inputAndLoadUrl(MAILTO_PAGE_URL);
+        MAILTO_PAGE_URL=getAbsoluteUrl(mStringHelper.ROBOCOP_BIG_MAILTO_URL);
+        loadUrlAndWait(MAILTO_PAGE_URL);
         waitForText(MAILTO_PAGE_TITLE);
 
         verifyContextMenuItems(mailtoMenuItems);

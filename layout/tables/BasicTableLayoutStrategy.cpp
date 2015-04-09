@@ -10,12 +10,15 @@
  */
 
 #include "BasicTableLayoutStrategy.h"
+
+#include <algorithm>
+
 #include "nsTableFrame.h"
 #include "nsTableCellFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsGkAtoms.h"
 #include "SpanningCellSorter.h"
-#include <algorithm>
+#include "nsIContent.h"
 
 using namespace mozilla;
 using namespace mozilla::layout;
@@ -28,7 +31,7 @@ BasicTableLayoutStrategy::BasicTableLayoutStrategy(nsTableFrame *aTableFrame)
   : nsITableLayoutStrategy(nsITableLayoutStrategy::Auto)
   , mTableFrame(aTableFrame)
 {
-    MarkIntrinsicWidthsDirty();
+    MarkIntrinsicISizesDirty();
 }
 
 /* virtual */
@@ -37,16 +40,16 @@ BasicTableLayoutStrategy::~BasicTableLayoutStrategy()
 }
 
 /* virtual */ nscoord
-BasicTableLayoutStrategy::GetMinWidth(nsRenderingContext* aRenderingContext)
+BasicTableLayoutStrategy::GetMinISize(nsRenderingContext* aRenderingContext)
 {
     DISPLAY_MIN_WIDTH(mTableFrame, mMinWidth);
     if (mMinWidth == NS_INTRINSIC_WIDTH_UNKNOWN)
-        ComputeIntrinsicWidths(aRenderingContext);
+        ComputeIntrinsicISizes(aRenderingContext);
     return mMinWidth;
 }
 
 /* virtual */ nscoord
-BasicTableLayoutStrategy::GetPrefWidth(nsRenderingContext* aRenderingContext,
+BasicTableLayoutStrategy::GetPrefISize(nsRenderingContext* aRenderingContext,
                                        bool aComputingSize)
 {
     DISPLAY_PREF_WIDTH(mTableFrame, mPrefWidth);
@@ -54,7 +57,7 @@ BasicTableLayoutStrategy::GetPrefWidth(nsRenderingContext* aRenderingContext,
                  (mPrefWidthPctExpand == NS_INTRINSIC_WIDTH_UNKNOWN),
                  "dirtyness out of sync");
     if (mPrefWidth == NS_INTRINSIC_WIDTH_UNKNOWN)
-        ComputeIntrinsicWidths(aRenderingContext);
+        ComputeIntrinsicISizes(aRenderingContext);
     return aComputingSize ? mPrefWidthPctExpand : mPrefWidth;
 }
 
@@ -90,8 +93,8 @@ GetWidthInfo(nsRenderingContext *aRenderingContext,
         // wrapping inside of it should not apply font size inflation.
         AutoMaybeDisableFontInflation an(aFrame);
 
-        minCoord = aFrame->GetMinWidth(aRenderingContext);
-        prefCoord = aFrame->GetPrefWidth(aRenderingContext);
+        minCoord = aFrame->GetMinISize(aRenderingContext);
+        prefCoord = aFrame->GetPrefISize(aRenderingContext);
         // Until almost the end of this function, minCoord and prefCoord
         // represent the box-sizing based width values (which mean they
         // should include horizontal padding and border width when
@@ -100,7 +103,7 @@ GetWidthInfo(nsRenderingContext *aRenderingContext,
         // outer edges near the end of this function.
 
         // XXX Should we ignore percentage padding?
-        nsIFrame::IntrinsicWidthOffsetData offsets = aFrame->IntrinsicWidthOffsets(aRenderingContext);
+        nsIFrame::IntrinsicISizeOffsetData offsets = aFrame->IntrinsicISizeOffsets(aRenderingContext);
 
         // In quirks mode, table cell width should be content-box,
         // but height should be border box.
@@ -266,7 +269,7 @@ GetColWidthInfo(nsRenderingContext *aRenderingContext,
  * browsers are).
  */
 void
-BasicTableLayoutStrategy::ComputeColumnIntrinsicWidths(nsRenderingContext* aRenderingContext)
+BasicTableLayoutStrategy::ComputeColumnIntrinsicISizes(nsRenderingContext* aRenderingContext)
 {
     nsTableFrame *tableFrame = mTableFrame;
     nsTableCellMap *cellMap = tableFrame->GetCellMap();
@@ -333,7 +336,7 @@ BasicTableLayoutStrategy::ComputeColumnIntrinsicWidths(nsRenderingContext* aRend
 #endif
     }
 #ifdef DEBUG_TABLE_STRATEGY
-    printf("ComputeColumnIntrinsicWidths single\n");
+    printf("ComputeColumnIntrinsicISizes single\n");
     mTableFrame->Dump(false, true, false);
 #endif
 
@@ -421,15 +424,15 @@ BasicTableLayoutStrategy::ComputeColumnIntrinsicWidths(nsRenderingContext* aRend
     }
 
 #ifdef DEBUG_TABLE_STRATEGY
-    printf("ComputeColumnIntrinsicWidths spanning\n");
+    printf("ComputeColumnIntrinsicISizes spanning\n");
     mTableFrame->Dump(false, true, false);
 #endif
 }
 
 void
-BasicTableLayoutStrategy::ComputeIntrinsicWidths(nsRenderingContext* aRenderingContext)
+BasicTableLayoutStrategy::ComputeIntrinsicISizes(nsRenderingContext* aRenderingContext)
 {
-    ComputeColumnIntrinsicWidths(aRenderingContext);
+    ComputeColumnIntrinsicISizes(aRenderingContext);
 
     nsTableCellMap *cellMap = mTableFrame->GetCellMap();
     nscoord min = 0, pref = 0, max_small_pct_pref = 0, nonpct_pref_total = 0;
@@ -437,7 +440,7 @@ BasicTableLayoutStrategy::ComputeIntrinsicWidths(nsRenderingContext* aRenderingC
     int32_t colCount = cellMap->GetColCount();
     // add a total of (colcount + 1) lots of cellSpacingX for columns where a
     // cell originates
-    nscoord add = mTableFrame->GetCellSpacingX(colCount);
+    nscoord add = mTableFrame->GetColSpacing(colCount);
 
     for (int32_t col = 0; col < colCount; ++col) {
         nsTableColFrame *colFrame = mTableFrame->GetColFrame(col);
@@ -446,7 +449,7 @@ BasicTableLayoutStrategy::ComputeIntrinsicWidths(nsRenderingContext* aRenderingC
             continue;
         }
         if (mTableFrame->ColumnHasCellSpacingBefore(col)) {
-            add += mTableFrame->GetCellSpacingX(col - 1);
+            add += mTableFrame->GetColSpacing(col - 1);
         }
         min += colFrame->GetMinCoord();
         pref = NSCoordSaturatingAdd(pref, colFrame->GetPrefCoord());
@@ -511,7 +514,7 @@ BasicTableLayoutStrategy::ComputeIntrinsicWidths(nsRenderingContext* aRenderingC
 }
 
 /* virtual */ void
-BasicTableLayoutStrategy::MarkIntrinsicWidthsDirty()
+BasicTableLayoutStrategy::MarkIntrinsicISizesDirty()
 {
     mMinWidth = NS_INTRINSIC_WIDTH_UNKNOWN;
     mPrefWidth = NS_INTRINSIC_WIDTH_UNKNOWN;
@@ -536,7 +539,7 @@ BasicTableLayoutStrategy::ComputeColumnWidths(const nsHTMLReflowState& aReflowSt
                  "dirtyness out of sync");
     // XXX Is this needed?
     if (mMinWidth == NS_INTRINSIC_WIDTH_UNKNOWN)
-        ComputeIntrinsicWidths(aReflowState.rendContext);
+        ComputeIntrinsicISizes(aReflowState.rendContext);
 
     nsTableCellMap *cellMap = mTableFrame->GetCellMap();
     int32_t colCount = cellMap->GetColCount();
@@ -662,15 +665,15 @@ BasicTableLayoutStrategy::DistributeWidthToColumns(nscoord aWidth,
     for (int32_t col = aFirstCol + 1; col < aFirstCol + aColCount; ++col) {
         if (mTableFrame->ColumnHasCellSpacingBefore(col)) {
             // border-spacing isn't part of the basis for percentages.
-            subtract += mTableFrame->GetCellSpacingX(col - 1);
+            subtract += mTableFrame->GetColSpacing(col - 1);
         }
     }
     if (aWidthType == BTLS_FINAL_WIDTH) {
         // If we're computing final col-width, then aWidth initially includes
         // border spacing on the table's far left + far right edge, too.  Need
         // to subtract those out, too.
-        subtract += (mTableFrame->GetCellSpacingX(-1) +
-                     mTableFrame->GetCellSpacingX(aColCount));
+        subtract += (mTableFrame->GetColSpacing(-1) +
+                     mTableFrame->GetColSpacing(aColCount));
     }
     aWidth = NSCoordSaturatingSubtract(aWidth, subtract, nscoord_MAX);
 

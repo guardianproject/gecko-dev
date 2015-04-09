@@ -10,29 +10,56 @@
 #define LIR_COMMON_OPCODE_LIST(_)   \
     _(Label)                        \
     _(Nop)                          \
+    _(Mop)                          \
     _(OsiPoint)                     \
     _(MoveGroup)                    \
     _(Integer)                      \
     _(Pointer)                      \
     _(Double)                       \
     _(Float32)                      \
+    _(SimdBox)                      \
+    _(SimdUnbox)                    \
+    _(SimdSplatX4)                  \
+    _(Int32x4)                      \
+    _(Float32x4)                    \
+    _(SimdReinterpretCast)          \
+    _(SimdExtractElementI)          \
+    _(SimdExtractElementF)          \
+    _(SimdInsertElementI)           \
+    _(SimdInsertElementF)           \
+    _(SimdSignMaskX4)               \
+    _(SimdGeneralShuffleI)          \
+    _(SimdGeneralShuffleF)          \
+    _(SimdSwizzleI)                 \
+    _(SimdSwizzleF)                 \
+    _(SimdShuffle)                  \
+    _(SimdUnaryArithIx4)            \
+    _(SimdUnaryArithFx4)            \
+    _(SimdBinaryCompIx4)            \
+    _(SimdBinaryCompFx4)            \
+    _(SimdBinaryArithIx4)           \
+    _(SimdBinaryArithFx4)           \
+    _(SimdBinaryBitwiseX4)          \
+    _(SimdShift)                    \
+    _(SimdSelect)                   \
     _(Value)                        \
     _(CloneLiteral)                 \
     _(Parameter)                    \
     _(Callee)                       \
+    _(IsConstructing)               \
     _(TableSwitch)                  \
     _(TableSwitchV)                 \
     _(Goto)                         \
     _(NewArray)                     \
+    _(NewArrayCopyOnWrite)          \
+    _(NewArrayDynamicLength)        \
     _(ArraySplice)                  \
     _(NewObject)                    \
+    _(NewTypedObject)               \
     _(NewDeclEnvObject)             \
     _(NewCallObject)                \
     _(NewSingletonCallObject)       \
     _(NewStringObject)              \
-    _(NewPar)                       \
-    _(NewDenseArrayPar)             \
-    _(NewCallObjectPar)             \
     _(NewDerivedTypedObject)        \
     _(InitElem)                     \
     _(InitElemGetterSetter)         \
@@ -40,7 +67,6 @@
     _(InitProp)                     \
     _(InitPropGetterSetter)         \
     _(CheckOverRecursed)            \
-    _(CheckOverRecursedPar)         \
     _(DefVar)                       \
     _(DefFun)                       \
     _(CallKnown)                    \
@@ -49,6 +75,7 @@
     _(ApplyArgsGeneric)             \
     _(Bail)                         \
     _(Unreachable)                  \
+    _(EncodeSnapshot)               \
     _(GetDynamicName)               \
     _(FilterArgumentsOrEvalS)       \
     _(FilterArgumentsOrEvalV)       \
@@ -80,7 +107,7 @@
     _(TestVAndBranch)               \
     _(TestOAndBranch)               \
     _(FunctionDispatch)             \
-    _(TypeObjectDispatch)           \
+    _(ObjectGroupDispatch)          \
     _(Compare)                      \
     _(CompareAndBranch)             \
     _(CompareD)                     \
@@ -95,18 +122,20 @@
     _(CompareVAndBranch)            \
     _(CompareVM)                    \
     _(BitAndAndBranch)              \
-    _(IsNullOrLikeUndefined)        \
-    _(IsNullOrLikeUndefinedAndBranch)\
-    _(EmulatesUndefined)            \
-    _(EmulatesUndefinedAndBranch)   \
+    _(IsNullOrLikeUndefinedV)       \
+    _(IsNullOrLikeUndefinedT)       \
+    _(IsNullOrLikeUndefinedAndBranchV)\
+    _(IsNullOrLikeUndefinedAndBranchT)\
     _(MinMaxI)                      \
     _(MinMaxD)                      \
+    _(MinMaxF)                      \
     _(NegI)                         \
     _(NegD)                         \
     _(NegF)                         \
     _(AbsI)                         \
     _(AbsD)                         \
     _(AbsF)                         \
+    _(ClzI)                         \
     _(SqrtD)                        \
     _(SqrtF)                        \
     _(Atan2D)                       \
@@ -129,7 +158,6 @@
     _(ModD)                         \
     _(BinaryV)                      \
     _(Concat)                       \
-    _(ConcatPar)                    \
     _(CharCodeAt)                   \
     _(FromCharCode)                 \
     _(StringSplit)                  \
@@ -148,6 +176,9 @@
     _(IntToString)                  \
     _(DoubleToString)               \
     _(ValueToString)                \
+    _(ValueToObjectOrNull)          \
+    _(Int32x4ToFloat32x4)           \
+    _(Float32x4ToInt32x4)           \
     _(Start)                        \
     _(OsrEntry)                     \
     _(OsrValue)                     \
@@ -159,24 +190,26 @@
     _(RegExpTest)                   \
     _(RegExpReplace)                \
     _(StringReplace)                \
+    _(Substr)                       \
     _(Lambda)                       \
     _(LambdaArrow)                  \
     _(LambdaForSingleton)           \
-    _(LambdaPar)                    \
     _(Slots)                        \
     _(Elements)                     \
     _(ConvertElementsToDoubles)     \
     _(MaybeToDoubleElement)         \
+    _(MaybeCopyElementsForWrite)    \
     _(LoadSlotV)                    \
     _(LoadSlotT)                    \
     _(StoreSlotV)                   \
     _(StoreSlotT)                   \
     _(GuardShape)                   \
-    _(GuardShapePolymorphic)        \
-    _(GuardObjectType)              \
+    _(GuardReceiverPolymorphic)     \
+    _(GuardObjectGroup)             \
     _(GuardObjectIdentity)          \
     _(GuardClass)                   \
-    _(GuardThreadExclusive)         \
+    _(GuardUnboxedExpando)          \
+    _(LoadUnboxedExpando)           \
     _(TypeBarrierV)                 \
     _(TypeBarrierO)                 \
     _(MonitorTypes)                 \
@@ -184,28 +217,36 @@
     _(PostWriteBarrierV)            \
     _(InitializedLength)            \
     _(SetInitializedLength)         \
-    _(NeuterCheck)                  \
     _(BoundsCheck)                  \
     _(BoundsCheckRange)             \
     _(BoundsCheckLower)             \
     _(LoadElementV)                 \
     _(LoadElementT)                 \
     _(LoadElementHole)              \
+    _(LoadUnboxedScalar)            \
+    _(LoadUnboxedPointerV)          \
+    _(LoadUnboxedPointerT)          \
+    _(UnboxObjectOrNull)            \
     _(StoreElementV)                \
     _(StoreElementT)                \
+    _(StoreUnboxedScalar)           \
+    _(StoreUnboxedPointer)          \
+    _(ConvertUnboxedObjectToNative) \
     _(ArrayPopShiftV)               \
     _(ArrayPopShiftT)               \
     _(ArrayPushV)                   \
     _(ArrayPushT)                   \
     _(ArrayConcat)                  \
+    _(ArrayJoin)                    \
     _(StoreElementHoleV)            \
     _(StoreElementHoleT)            \
-    _(LoadTypedArrayElement)        \
     _(LoadTypedArrayElementHole)    \
     _(LoadTypedArrayElementStatic)  \
-    _(StoreTypedArrayElement)       \
     _(StoreTypedArrayElementHole)   \
     _(StoreTypedArrayElementStatic) \
+    _(CompareExchangeTypedArrayElement) \
+    _(AtomicTypedArrayElementBinop) \
+    _(AtomicTypedArrayElementBinopForEffect) \
     _(EffectiveAddress)             \
     _(ClampIToUint8)                \
     _(ClampDToUint8)                \
@@ -215,8 +256,6 @@
     _(StoreFixedSlotV)              \
     _(StoreFixedSlotT)              \
     _(FunctionEnvironment)          \
-    _(ForkJoinContext)              \
-    _(ForkJoinGetSlice)             \
     _(GetPropertyCacheV)            \
     _(GetPropertyCacheT)            \
     _(GetPropertyPolymorphicV)      \
@@ -227,7 +266,6 @@
     _(CallGetProperty)              \
     _(GetNameCache)                 \
     _(CallGetIntrinsicValue)        \
-    _(CallsiteCloneCache)           \
     _(CallGetElement)               \
     _(CallSetElement)               \
     _(CallInitElementArray)         \
@@ -242,14 +280,14 @@
     _(SetPropertyPolymorphicT)      \
     _(CallIteratorStart)            \
     _(IteratorStart)                \
-    _(IteratorNext)                 \
     _(IteratorMore)                 \
+    _(IsNoIterAndBranch)            \
     _(IteratorEnd)                  \
     _(ArrayLength)                  \
     _(SetArrayLength)               \
     _(TypedArrayLength)             \
     _(TypedArrayElements)           \
-    _(TypedObjectProto)             \
+    _(TypedObjectDescr)             \
     _(TypedObjectElements)          \
     _(SetTypedObjectOffset)         \
     _(StringLength)                 \
@@ -260,7 +298,6 @@
     _(SetFrameArgumentV)            \
     _(RunOncePrologue)              \
     _(Rest)                         \
-    _(RestPar)                      \
     _(TypeOfV)                      \
     _(ToIdV)                        \
     _(Floor)                        \
@@ -275,15 +312,16 @@
     _(InstanceOfV)                  \
     _(CallInstanceOf)               \
     _(InterruptCheck)               \
+    _(AsmJSInterruptCheck)          \
     _(InterruptCheckImplicit)       \
-    _(ProfilerStackOp)              \
     _(GetDOMProperty)               \
-    _(GetDOMMember)                 \
+    _(GetDOMMemberV)                \
+    _(GetDOMMemberT)                \
     _(SetDOMProperty)               \
     _(CallDOMNative)                \
     _(IsCallable)                   \
     _(IsObject)                     \
-    _(HaveSameClass)                \
+    _(IsObjectAndBranch)            \
     _(HasClass)                     \
     _(AsmJSLoadHeap)                \
     _(AsmJSStoreHeap)               \
@@ -295,12 +333,21 @@
     _(AsmJSVoidReturn)              \
     _(AsmJSPassStackArg)            \
     _(AsmJSCall)                    \
-    _(InterruptCheckPar)            \
+    _(AsmJSCompareExchangeHeap)     \
+    _(AsmJSAtomicBinopHeap)         \
+    _(AsmJSAtomicBinopHeapForEffect)\
     _(RecompileCheck)               \
+    _(MemoryBarrier)                \
     _(AssertRangeI)                 \
     _(AssertRangeD)                 \
     _(AssertRangeF)                 \
-    _(AssertRangeV)
+    _(AssertRangeV)                 \
+    _(AssertResultV)                \
+    _(AssertResultT)                \
+    _(LexicalCheck)                 \
+    _(ThrowUninitializedLexical)    \
+    _(NurseryObject)                \
+    _(Debugger)
 
 #if defined(JS_CODEGEN_X86)
 # include "jit/x86/LOpcodes-x86.h"
@@ -310,6 +357,8 @@
 # include "jit/arm/LOpcodes-arm.h"
 #elif defined(JS_CODEGEN_MIPS)
 # include "jit/mips/LOpcodes-mips.h"
+#elif defined(JS_CODEGEN_NONE)
+# include "jit/none/LOpcodes-none.h"
 #else
 # error "Unknown architecture!"
 #endif

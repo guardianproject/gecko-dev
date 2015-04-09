@@ -13,6 +13,7 @@
 #include "nsContentUtils.h"
 #include "nsPIDOMWindow.h"
 #include "js/TypeDecls.h"
+#include "js/RootingAPI.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/DOMEventTargetHelper.h"
 
@@ -21,13 +22,14 @@ class nsPerformance;
 class nsIHttpChannel;
 
 namespace mozilla {
+class ErrorResult;
 namespace dom {
   class PerformanceEntry;
 }
 }
 
 // Script "performance.timing" object
-class nsPerformanceTiming MOZ_FINAL : public nsWrapperCache
+class nsPerformanceTiming final : public nsWrapperCache
 {
 public:
   typedef mozilla::TimeStamp TimeStamp;
@@ -116,7 +118,7 @@ public:
     return duration.ToMilliseconds() + mZeroTime;
   }
 
-  virtual JSObject* WrapObject(JSContext *cx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto) override;
 
   // PerformanceNavigation WebIDL methods
   DOMTimeMilliSec NavigationStart() const {
@@ -139,8 +141,18 @@ public:
   }
 
   uint16_t GetRedirectCount() const;
-  bool IsSameOriginAsReferral() const;
-  void CheckRedirectCrossOrigin(nsIHttpChannel* aResourceChannel);
+  // Checks if the resource is either same origin as the page that started
+  // the load, or if the response contains the Timing-Allow-Origin header
+  // with a value of * or matching the domain of the loading Principal
+  bool CheckAllowedOrigin(nsIHttpChannel* aResourceChannel, nsITimedChannel* aChannel);
+  // Cached result of CheckAllowedOrigin. If false, security sensitive
+  // attributes of the resourceTiming object will be set to 0
+  bool TimingAllowed() const;
+
+  // If this is false the values of redirectStart/End will be 0
+  // This is false if no redirects occured, or if any of the responses failed
+  // the timing-allow-origin check in HttpBaseChannel::TimingAllowCheck
+  bool ShouldReportCrossOriginRedirect() const;
 
   // High resolution (used by resource timing)
   DOMHighResTimeStamp FetchStartHighRes();
@@ -212,19 +224,40 @@ public:
 private:
   ~nsPerformanceTiming();
   bool IsInitialized() const;
+  void InitializeTimingInfo(nsITimedChannel* aChannel);
   nsRefPtr<nsPerformance> mPerformance;
-  nsCOMPtr<nsITimedChannel> mChannel;
   DOMHighResTimeStamp mFetchStart;
   // This is an offset that will be added to each timing ([ms] resolution).
   // There are only 2 possible values: (1) logicaly equal to navigationStart
   // TimeStamp (results are absolute timstamps - wallclock); (2) "0" (results
   // are relative to the navigation start).
   DOMHighResTimeStamp mZeroTime;
-  bool mReportCrossOriginResources;
+
+  TimeStamp mAsyncOpen;
+  TimeStamp mRedirectStart;
+  TimeStamp mRedirectEnd;
+  TimeStamp mDomainLookupStart;
+  TimeStamp mDomainLookupEnd;
+  TimeStamp mConnectStart;
+  TimeStamp mConnectEnd;
+  TimeStamp mRequestStart;
+  TimeStamp mResponseStart;
+  TimeStamp mCacheReadStart;
+  TimeStamp mResponseEnd;
+  TimeStamp mCacheReadEnd;
+  uint16_t mRedirectCount;
+  bool mTimingAllowed;
+  bool mAllRedirectsSameOrigin;
+  bool mInitialized;
+
+  // If the resourceTiming object should have non-zero redirectStart and
+  // redirectEnd attributes. It is false if there were no redirects, or if
+  // any of the responses didn't pass the timing-allow-check
+  bool mReportCrossOriginRedirect;
 };
 
 // Script "performance.navigation" object
-class nsPerformanceNavigation MOZ_FINAL : public nsWrapperCache
+class nsPerformanceNavigation final : public nsWrapperCache
 {
 public:
   explicit nsPerformanceNavigation(nsPerformance* aPerformance);
@@ -239,7 +272,7 @@ public:
     return mPerformance;
   }
 
-  virtual JSObject* WrapObject(JSContext *cx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto) override;
 
   // PerformanceNavigation WebIDL methods
   uint16_t Type() const {
@@ -255,7 +288,7 @@ private:
 };
 
 // Script "performance" object
-class nsPerformance MOZ_FINAL : public mozilla::DOMEventTargetHelper
+class nsPerformance final : public mozilla::DOMEventTargetHelper
 {
 public:
   typedef mozilla::dom::PerformanceEntry PerformanceEntry;
@@ -265,7 +298,7 @@ public:
                 nsPerformance* aParentPerformance);
 
   NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsPerformance, DOMEventTargetHelper)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(nsPerformance, DOMEventTargetHelper)
 
   nsDOMNavigationTiming* GetDOMTiming() const
   {
@@ -287,7 +320,7 @@ public:
     return mWindow.get();
   }
 
-  virtual JSObject* WrapObject(JSContext *cx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext *cx, JS::Handle<JSObject*> aGivenProto) override;
 
   // Performance WebIDL methods
   DOMHighResTimeStamp Now();
@@ -304,12 +337,28 @@ public:
                 nsITimedChannel* timedChannel);
   void ClearResourceTimings();
   void SetResourceTimingBufferSize(uint64_t maxSize);
+  void Mark(const nsAString& aName, mozilla::ErrorResult& aRv);
+  void ClearMarks(const mozilla::dom::Optional<nsAString>& aName);
+  void Measure(const nsAString& aName,
+               const mozilla::dom::Optional<nsAString>& aStartMark,
+               const mozilla::dom::Optional<nsAString>& aEndMark,
+               mozilla::ErrorResult& aRv);
+  void ClearMeasures(const mozilla::dom::Optional<nsAString>& aName);
+
+  void GetMozMemory(JSContext *aCx, JS::MutableHandle<JSObject*> aObj);
+
   IMPL_EVENT_HANDLER(resourcetimingbufferfull)
 
 private:
   ~nsPerformance();
+  bool IsPerformanceTimingAttribute(const nsAString& aName);
+  DOMHighResTimeStamp ResolveTimestampFromName(const nsAString& aName, mozilla::ErrorResult& aRv);
+  DOMTimeMilliSec GetPerformanceTimingFromString(const nsAString& aTimingName);
+  DOMHighResTimeStamp ConvertDOMMilliSecToHighRes(const DOMTimeMilliSec aTime);
   void DispatchBufferFullEvent();
-
+  void InsertPerformanceEntry(PerformanceEntry* aEntry, bool aShouldPrint);
+  void ClearEntries(const mozilla::dom::Optional<nsAString>& aEntryName,
+                    const nsAString& aEntryType);
   nsCOMPtr<nsPIDOMWindow> mWindow;
   nsRefPtr<nsDOMNavigationTiming> mDOMTiming;
   nsCOMPtr<nsITimedChannel> mChannel;
@@ -318,6 +367,7 @@ private:
   nsTArray<nsRefPtr<PerformanceEntry> > mEntries;
   nsRefPtr<nsPerformance> mParentPerformance;
   uint64_t mPrimaryBufferSize;
+  JS::Heap<JSObject*> mMozMemory;
 
   static const uint64_t kDefaultBufferSize = 150;
 

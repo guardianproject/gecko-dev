@@ -6,7 +6,6 @@
 #ifndef PROFILER_FUNCS_H
 #define PROFILER_FUNCS_H
 
-#include "mozilla/NullPtr.h"
 #include "js/TypeDecls.h"
 #include "js/ProfilingStack.h"
 #include <stdint.h>
@@ -44,6 +43,8 @@ void mozilla_sampler_free_backtrace(ProfilerBacktrace* aBacktrace);
 
 bool mozilla_sampler_is_active();
 
+bool mozilla_sampler_feature_active(const char* aName);
+
 void mozilla_sampler_responsiveness(const mozilla::TimeStamp& time);
 
 void mozilla_sampler_frame_number(int frameNumber);
@@ -56,7 +57,11 @@ char* mozilla_sampler_get_profile();
 
 JSObject *mozilla_sampler_get_profile_data(JSContext *aCx);
 
-void mozilla_sampler_save_profile_to_file(const char* aFilename);
+// Make this function easily callable from a debugger in a build without
+// debugging information (work around http://llvm.org/bugs/show_bug.cgi?id=22211)
+extern "C" {
+  void mozilla_sampler_save_profile_to_file(const char* aFilename);
+}
 
 const char** mozilla_sampler_get_features();
 
@@ -94,6 +99,8 @@ void mozilla_sampler_tracing(const char* aCategory, const char* aInfo,
 void mozilla_sampler_tracing(const char* aCategory, const char* aInfo,
                              ProfilerBacktrace* aCause,
                              TracingMetadata aMetaData);
+
+void mozilla_sampler_log(const char *fmt, va_list args);
 
 #endif
 

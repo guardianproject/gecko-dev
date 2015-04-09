@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 package org.mozilla.gecko.tests;
 
 import org.json.JSONObject;
@@ -31,7 +35,7 @@ public class testAdobeFlash extends PixelTest {
 
         blockForGeckoReady();
 
-        String url = getAbsoluteUrl(StringHelper.ROBOCOP_ADOBE_FLASH_URL);
+        String url = getAbsoluteUrl(mStringHelper.ROBOCOP_ADOBE_FLASH_URL);
         PaintedSurface painted = loadAndGetPainted(url);
 
         mAsserter.ispixel(painted.getPixelAt(0, 0), 0, 0xff, 0, "Pixel at 0, 0");

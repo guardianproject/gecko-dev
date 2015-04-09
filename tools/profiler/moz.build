@@ -15,11 +15,13 @@ if CONFIG['MOZ_ENABLE_PROFILER_SPS']:
     EXPORTS += [
         'GeckoProfilerFunc.h',
         'GeckoProfilerImpl.h',
+        'JSStreamWriter.h',
+        'ProfilerBacktrace.h',
         'ProfilerMarkers.h',
         'PseudoStack.h',
         'shared-libraries.h',
     ]
-    EXTRA_JS_MODULES = [
+    EXTRA_JS_MODULES += [
         'Profiler.jsm',
     ]
     UNIFIED_SOURCES += [
@@ -27,6 +29,7 @@ if CONFIG['MOZ_ENABLE_PROFILER_SPS']:
         'JSStreamWriter.cpp',
         'nsProfiler.cpp',
         'nsProfilerFactory.cpp',
+        'nsProfilerStartParams.cpp',
         'platform.cpp',
         'ProfileEntry.cpp',
         'ProfilerBacktrace.cpp',
@@ -80,6 +83,7 @@ if CONFIG['MOZ_ENABLE_PROFILER_SPS']:
         ]
 
     LOCAL_INCLUDES += [
+        '/docshell/base',
         '/ipc/chromium/src',
         '/mozglue/linker',
         '/toolkit/crashreporter/google-breakpad/src',
@@ -98,7 +102,7 @@ if CONFIG['MOZ_ENABLE_PROFILER_SPS']:
     if CONFIG['ENABLE_TESTS']:
         DIRS += ['tests/gtest']
 
-    if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk' and CONFIG['ANDROID_VERSION'] <= '17':
+    if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk' and (CONFIG['ANDROID_VERSION'] <= '17' or CONFIG['ANDROID_VERSION'] >= '21'):
         DEFINES['ELFSIZE'] = 32
 
     FINAL_LIBRARY = 'xul'

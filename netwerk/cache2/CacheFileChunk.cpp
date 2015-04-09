@@ -25,6 +25,7 @@ public:
     MOZ_COUNT_CTOR(NotifyUpdateListenerEvent);
   }
 
+protected:
   ~NotifyUpdateListenerEvent()
   {
     LOG(("NotifyUpdateListenerEvent::~NotifyUpdateListenerEvent() [this=%p]",
@@ -32,6 +33,7 @@ public:
     MOZ_COUNT_DTOR(NotifyUpdateListenerEvent);
   }
 
+public:
   NS_IMETHOD Run()
   {
     LOG(("NotifyUpdateListenerEvent::Run() [this=%p]", this));
@@ -183,7 +185,7 @@ CacheFileChunk::Read(CacheFileHandle *aHandle, uint32_t aLen,
   mState = READING;
 
   if (CanAllocate(aLen)) {
-    mRWBuf = static_cast<char *>(moz_malloc(aLen));
+    mRWBuf = static_cast<char *>(malloc(aLen));
     if (mRWBuf) {
       mRWBufSize = aLen;
       ChunkAllocationChanged();
@@ -199,7 +201,7 @@ CacheFileChunk::Read(CacheFileHandle *aHandle, uint32_t aLen,
   DoMemoryReport(MemorySize());
 
   rv = CacheFileIOManager::Read(aHandle, mIndex * kChunkSize, mRWBuf, aLen,
-                                true, this);
+                                this);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     rv = mIndex ? NS_ERROR_FILE_CORRUPTED : NS_ERROR_FILE_NOT_FOUND;
     SetError(rv);
@@ -236,7 +238,7 @@ CacheFileChunk::Write(CacheFileHandle *aHandle,
   mBufSize = 0;
 
   rv = CacheFileIOManager::Write(aHandle, mIndex * kChunkSize, mRWBuf,
-                                 mDataSize, false, this);
+                                 mDataSize, false, false, this);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     SetError(rv);
   } else {
@@ -265,7 +267,14 @@ CacheFileChunk::WaitForUpdate(CacheFileChunkListener *aCallback)
 #endif
 
   ChunkListenerItem *item = new ChunkListenerItem();
-  item->mTarget = NS_GetCurrentThread();
+  item->mTarget = CacheFileIOManager::IOTarget();
+  if (!item->mTarget) {
+    LOG(("CacheFileChunk::WaitForUpdate() - Cannot get Cache I/O thread! Using "
+         "main thread for callback."));
+    item->mTarget = do_GetMainThread();
+  }
+  item->mCallback = aCallback;
+  MOZ_ASSERT(item->mTarget);
   item->mCallback = aCallback;
 
   mUpdateListeners.AppendElement(item);
@@ -532,7 +541,7 @@ CacheFileChunk::OnDataRead(CacheFileHandle *aHandle, char *aBuf,
               invalidOffset = mValidityMap[i].Offset() + mValidityMap[i].Len();
             }
             if (invalidOffset < mRWBufSize) {
-              invalidLength = invalidOffset - mRWBufSize;
+              invalidLength = mRWBufSize - invalidOffset;
               memcpy(mBuf + invalidOffset, mRWBuf + invalidOffset,
                      invalidLength);
             }
@@ -689,7 +698,7 @@ CacheFileChunk::EnsureBufSize(uint32_t aBufSize)
     return mStatus;
   }
 
-  char *newBuf = static_cast<char *>(moz_realloc(mBuf, aBufSize));
+  char *newBuf = static_cast<char *>(realloc(mBuf, aBufSize));
   if (!newBuf) {
     SetError(NS_ERROR_OUT_OF_MEMORY);
     return mStatus;

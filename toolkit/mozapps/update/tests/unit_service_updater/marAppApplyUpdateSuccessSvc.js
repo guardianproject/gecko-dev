@@ -20,7 +20,7 @@ function run_test() {
   setupTestCommon();
   gTestFiles = gTestFilesCompleteSuccess;
   gTestDirs = gTestDirsCompleteSuccess;
-  setupUpdaterTest(FILE_COMPLETE_MAR, false, false);
+  setupUpdaterTest(FILE_COMPLETE_MAR);
 
   createUpdaterINI();
 
@@ -56,7 +56,7 @@ function setupAppFilesFinished() {
  * support launching post update process.
  */
 function checkUpdateFinished() {
-  if (IS_MACOSX || IS_WIN) {
+  if (IS_WIN || IS_MACOSX) {
     gCheckFunc = finishCheckUpdateFinished;
     checkPostUpdateAppLog();
   } else {
@@ -116,20 +116,16 @@ function finishCheckUpdateFinished() {
   }
 
   if (IS_MACOSX) {
-    logTestInfo("testing last modified time on the apply to directory has " +
-                "changed after a successful update (bug 600098)");
+    debugDump("testing last modified time on the apply to directory has " +
+              "changed after a successful update (bug 600098)");
     let now = Date.now();
     let applyToDir = getApplyDirFile();
     let timeDiff = Math.abs(applyToDir.lastModifiedTime - now);
     do_check_true(timeDiff < MAC_MAX_TIME_DIFFERENCE);
   }
 
-  checkFilesAfterUpdateSuccess();
-  // Sorting on Linux is different so skip this check for now.
-  if (!IS_UNIX) {
-    checkUpdateLogContents(LOG_COMPLETE_SUCCESS);
-  }
-
+  checkFilesAfterUpdateSuccess(getApplyDirFile, false, false);
+  checkUpdateLogContents(LOG_COMPLETE_SUCCESS);
   checkCallbackAppLog();
 
   standardInit();
@@ -137,24 +133,24 @@ function finishCheckUpdateFinished() {
   let update = gUpdateManager.getUpdateAt(0);
   do_check_eq(update.state, STATE_SUCCEEDED);
 
+  let updatesPatchDir = getUpdatesPatchDir();
+  debugDump("testing " + updatesPatchDir.path + " should exist");
+  do_check_true(updatesPatchDir.exists());
+
   log = getUpdatesPatchDir();
   log.append(FILE_UPDATE_LOG);
-  logTestInfo("testing " + log.path + " shouldn't exist");
+  debugDump("testing " + log.path + " shouldn't exist");
   do_check_false(log.exists());
 
   log = getUpdatesDir();
   log.append(FILE_LAST_LOG);
-  logTestInfo("testing " + log.path + " should exist");
+  debugDump("testing " + log.path + " should exist");
   do_check_true(log.exists());
 
   log = getUpdatesDir();
   log.append(FILE_BACKUP_LOG);
-  logTestInfo("testing " + log.path + " shouldn't exist");
+  debugDump("testing " + log.path + " shouldn't exist");
   do_check_false(log.exists());
-
-  let updatesPatchDir = getUpdatesPatchDir();
-  logTestInfo("testing " + updatesPatchDir.path + " should exist");
-  do_check_true(updatesPatchDir.exists());
 
   waitForFilesInUse();
 }

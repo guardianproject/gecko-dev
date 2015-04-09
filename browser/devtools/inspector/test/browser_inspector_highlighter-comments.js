@@ -5,44 +5,51 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
+///////////////////
+//
+// Whitelisting this test.
+// As part of bug 1077403, the leaking uncaught rejection should be fixed.
+//
+thisTestLeaksUncaughtRejectionsAndShouldBeFixed("false");
+
 // Test that hovering over the markup-view's containers doesn't always show the
 // highlighter, depending on the type of node hovered over.
 
 const TEST_PAGE = TEST_URL_ROOT +
   "doc_inspector_highlighter-comments.html";
 
-let test = asyncTest(function* () {
-  let { inspector } = yield openInspectorForURL(TEST_PAGE);
+add_task(function* () {
+  let {toolbox, inspector} = yield openInspectorForURL(TEST_PAGE);
   let markupView = inspector.markup;
   yield selectNode("p", inspector);
 
   info("Hovering over #id1 and waiting for highlighter to appear.");
   yield hoverElement("#id1");
-  assertHighlighterShownOn("#id1");
+  yield assertHighlighterShownOn("#id1");
 
   info("Hovering over comment node and ensuring highlighter doesn't appear.");
   yield hoverComment();
-  assertHighlighterHidden();
+  yield assertHighlighterHidden();
 
   info("Hovering over #id1 again and waiting for highlighter to appear.");
   yield hoverElement("#id1");
-  assertHighlighterShownOn("#id1");
+  yield assertHighlighterShownOn("#id1");
 
   info("Hovering over #id2 and waiting for highlighter to appear.");
   yield hoverElement("#id2");
-  assertHighlighterShownOn("#id2");
+  yield assertHighlighterShownOn("#id2");
 
   info("Hovering over <script> and ensuring highlighter doesn't appear.");
   yield hoverElement("script");
-  assertHighlighterHidden();
+  yield assertHighlighterHidden();
 
   info("Hovering over #id3 and waiting for highlighter to appear.");
   yield hoverElement("#id3");
-  assertHighlighterShownOn("#id3");
+  yield assertHighlighterShownOn("#id3");
 
   info("Hovering over hidden #id4 and ensuring highlighter doesn't appear.");
   yield hoverElement("#id4");
-  assertHighlighterHidden();
+  yield assertHighlighterHidden();
 
   function hoverContainer(container) {
     let promise = inspector.toolbox.once("node-highlight");
@@ -52,9 +59,9 @@ let test = asyncTest(function* () {
     return promise;
   }
 
-  function hoverElement(selector) {
+  function* hoverElement(selector) {
     info("Hovering node " + selector + " in the markup view");
-    let container = getContainerForRawNode(markupView, getNode(selector));
+    let container = yield getContainerForSelector(selector, inspector);
     return hoverContainer(container);
   }
 
@@ -67,13 +74,14 @@ let test = asyncTest(function* () {
     }
   }
 
-  function assertHighlighterShownOn(selector) {
+  function* assertHighlighterShownOn(selector) {
     let node = getNode(selector);
-    let highlightNode = getHighlitNode();
+    let highlightNode = yield getHighlitNode(toolbox);
     is(node, highlightNode, "Highlighter is shown on the right node: " + selector);
   }
 
-  function assertHighlighterHidden() {
-    ok(!isHighlighting(), "Highlighter is hidden");
+  function* assertHighlighterHidden() {
+    let isVisible = yield isHighlighting(toolbox);
+    ok(!isVisible, "Highlighter is hidden");
   }
 });

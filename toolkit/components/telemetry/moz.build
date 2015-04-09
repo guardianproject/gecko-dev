@@ -4,6 +4,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+HAS_MISC_RULE = True
+
 XPCSHELL_TESTS_MANIFESTS += ['tests/unit/xpcshell.ini']
 
 XPIDL_SOURCES += [
@@ -36,7 +38,9 @@ EXTRA_JS_MODULES += [
 ]
 
 EXTRA_PP_JS_MODULES += [
+    'TelemetryEnvironment.jsm',
     'TelemetryPing.jsm',
+    'TelemetrySession.jsm',
 ]
 
 FAIL_ON_WARNINGS = True
@@ -59,3 +63,4 @@ LOCAL_INCLUDES += [
     '/xpcom/threads',
 ]
 
+SPHINX_TREES['telemetry'] = 'docs'

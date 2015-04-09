@@ -14,14 +14,15 @@
 #include "mozilla/ipc/Transport.h"
 #include "mozilla/ipc/FileDescriptor.h"
 
-using namespace base;
 using namespace std;
+
+using base::ProcessHandle;
 
 namespace mozilla {
 namespace ipc {
 
 bool
-CreateTransport(ProcessHandle /*unused*/, ProcessHandle /*unused*/,
+CreateTransport(base::ProcessId /*unused*/,
                 TransportDescriptor* aOne, TransportDescriptor* aTwo)
 {
   // Gecko doesn't care about this random ID, and the argument to this

@@ -9,10 +9,10 @@
 #ifndef mozilla_RefPtr_h
 #define mozilla_RefPtr_h
 
+#include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
-#include "mozilla/NullPtr.h"
 #include "mozilla/RefCountType.h"
 #include "mozilla/TypeTraits.h"
 #if defined(MOZILLA_INTERNAL_API)
@@ -20,6 +20,7 @@
 #endif
 
 #if defined(MOZILLA_INTERNAL_API) && \
+    !defined(MOZILLA_XPCOMRT_API) && \
     (defined(DEBUG) || defined(FORCE_BUILD_REFCNT_LOGGING))
 #define MOZ_REFCOUNTED_LEAK_CHECKING
 #endif
@@ -161,11 +162,13 @@ private:
 };
 
 #ifdef MOZ_REFCOUNTED_LEAK_CHECKING
-#define MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(T) \
-  virtual const char* typeName() const { return #T; } \
-  virtual size_t typeSize() const { return sizeof(*this); }
+// Passing override for the optional argument marks the typeName and
+// typeSize functions defined by this macro as overrides.
+#define MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(T, ...) \
+  virtual const char* typeName() const __VA_ARGS__ { return #T; } \
+  virtual size_t typeSize() const __VA_ARGS__ { return sizeof(*this); }
 #else
-#define MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(T)
+#define MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(T, ...)
 #endif
 
 // Note that this macro is expanded unconditionally because it declares only
@@ -233,7 +236,8 @@ class RefPtr
 public:
   RefPtr() : mPtr(0) {}
   RefPtr(const RefPtr& aOther) : mPtr(ref(aOther.mPtr)) {}
-  MOZ_IMPLICIT RefPtr(const TemporaryRef<T>& aOther) : mPtr(aOther.drop()) {}
+  MOZ_IMPLICIT RefPtr(const TemporaryRef<T>& aOther) : mPtr(aOther.take()) {}
+  MOZ_IMPLICIT RefPtr(already_AddRefed<T>& aOther) : mPtr(aOther.take()) {}
   MOZ_IMPLICIT RefPtr(T* aVal) : mPtr(ref(aVal)) {}
 
   template<typename U>
@@ -248,7 +252,12 @@ public:
   }
   RefPtr& operator=(const TemporaryRef<T>& aOther)
   {
-    assign(aOther.drop());
+    assign(aOther.take());
+    return *this;
+  }
+  RefPtr& operator=(already_AddRefed<T>& aOther)
+  {
+    assign(aOther.take());
     return *this;
   }
   RefPtr& operator=(T* aVal)
@@ -273,7 +282,7 @@ public:
 
   T* get() const { return mPtr; }
   operator T*() const { return mPtr; }
-  T* operator->() const { return mPtr; }
+  T* operator->() const MOZ_NO_ADDREF_RELEASE_ON_RETURN { return mPtr; }
   T& operator*() const { return *mPtr; }
   template<typename U>
   operator TemporaryRef<U>() { return TemporaryRef<U>(mPtr); }
@@ -285,7 +294,7 @@ private:
     mPtr = aVal;
   }
 
-  T* mPtr;
+  T* MOZ_OWNING_REF mPtr;
 
   static MOZ_ALWAYS_INLINE T* ref(T* aVal)
   {
@@ -319,14 +328,14 @@ class TemporaryRef
 
 public:
   MOZ_IMPLICIT TemporaryRef(T* aVal) : mPtr(RefPtr<T>::ref(aVal)) {}
-  TemporaryRef(const TemporaryRef& aOther) : mPtr(aOther.drop()) {}
+  TemporaryRef(const TemporaryRef& aOther) : mPtr(aOther.take()) {}
 
   template<typename U>
-  TemporaryRef(const TemporaryRef<U>& aOther) : mPtr(aOther.drop()) {}
+  TemporaryRef(const TemporaryRef<U>& aOther) : mPtr(aOther.take()) {}
 
   ~TemporaryRef() { RefPtr<T>::unref(mPtr); }
 
-  T* drop() const
+  MOZ_WARN_UNUSED_RESULT T* take() const
   {
     T* tmp = mPtr;
     mPtr = nullptr;
@@ -336,10 +345,10 @@ public:
 private:
   TemporaryRef(T* aVal, const DontRef&) : mPtr(aVal) {}
 
-  mutable T* mPtr;
+  mutable T* MOZ_OWNING_REF mPtr;
 
-  TemporaryRef() MOZ_DELETE;
-  void operator=(const TemporaryRef&) MOZ_DELETE;
+  TemporaryRef() = delete;
+  void operator=(const TemporaryRef&) = delete;
 };
 
 /**
@@ -376,8 +385,8 @@ private:
   RefPtr<T>& mRefPtr;
   T* mTmp;
 
-  OutParamRef() MOZ_DELETE;
-  OutParamRef& operator=(const OutParamRef&) MOZ_DELETE;
+  OutParamRef() = delete;
+  OutParamRef& operator=(const OutParamRef&) = delete;
 };
 
 /**
@@ -391,162 +400,5 @@ byRef(RefPtr<T>& aPtr)
 }
 
 } // namespace mozilla
-
-#if 0
-
-// Command line that builds these tests
-//
-//   cp RefPtr.h test.cc && g++ -g -Wall -pedantic -DDEBUG -o test test.cc && ./test
-
-using namespace mozilla;
-
-struct Foo : public RefCounted<Foo>
-{
-  MOZ_DECLARE_REFCOUNTED_TYPENAME(Foo)
-  Foo() : mDead(false) {}
-  ~Foo()
-  {
-    MOZ_ASSERT(!mDead);
-    mDead = true;
-    sNumDestroyed++;
-  }
-
-  bool mDead;
-  static int sNumDestroyed;
-};
-int Foo::sNumDestroyed;
-
-struct Bar : public Foo {};
-
-TemporaryRef<Foo>
-NewFoo()
-{
-  return RefPtr<Foo>(new Foo());
-}
-
-TemporaryRef<Foo>
-NewBar()
-{
-  return new Bar();
-}
-
-void
-GetNewFoo(Foo** f)
-{
-  *f = new Bar();
-  // Kids, don't try this at home
-  (*f)->AddRef();
-}
-
-void
-GetPassedFoo(Foo** f)
-{
-  // Kids, don't try this at home
-  (*f)->AddRef();
-}
-
-void
-GetNewFoo(RefPtr<Foo>* f)
-{
-  *f = new Bar();
-}
-
-void
-GetPassedFoo(RefPtr<Foo>* f)
-{}
-
-TemporaryRef<Foo>
-GetNullFoo()
-{
-  return 0;
-}
-
-int
-main(int argc, char** argv)
-{
-  // This should blow up
-//    Foo* f = new Foo(); delete f;
-
-  MOZ_ASSERT(0 == Foo::sNumDestroyed);
-  {
-    RefPtr<Foo> f = new Foo();
-    MOZ_ASSERT(f->refCount() == 1);
-  }
-  MOZ_ASSERT(1 == Foo::sNumDestroyed);
-
-  {
-    RefPtr<Foo> f1 = NewFoo();
-    RefPtr<Foo> f2(NewFoo());
-    MOZ_ASSERT(1 == Foo::sNumDestroyed);
-  }
-  MOZ_ASSERT(3 == Foo::sNumDestroyed);
-
-  {
-    RefPtr<Foo> b = NewBar();
-    MOZ_ASSERT(3 == Foo::sNumDestroyed);
-  }
-  MOZ_ASSERT(4 == Foo::sNumDestroyed);
-
-  {
-    RefPtr<Foo> f1;
-    {
-      f1 = new Foo();
-      RefPtr<Foo> f2(f1);
-      RefPtr<Foo> f3 = f2;
-      MOZ_ASSERT(4 == Foo::sNumDestroyed);
-    }
-    MOZ_ASSERT(4 == Foo::sNumDestroyed);
-  }
-  MOZ_ASSERT(5 == Foo::sNumDestroyed);
-
-  {
-    RefPtr<Foo> f = new Foo();
-    f.forget();
-    MOZ_ASSERT(6 == Foo::sNumDestroyed);
-  }
-
-  {
-    RefPtr<Foo> f = new Foo();
-    GetNewFoo(byRef(f));
-    MOZ_ASSERT(7 == Foo::sNumDestroyed);
-  }
-  MOZ_ASSERT(8 == Foo::sNumDestroyed);
-
-  {
-    RefPtr<Foo> f = new Foo();
-    GetPassedFoo(byRef(f));
-    MOZ_ASSERT(8 == Foo::sNumDestroyed);
-  }
-  MOZ_ASSERT(9 == Foo::sNumDestroyed);
-
-  {
-    RefPtr<Foo> f = new Foo();
-    GetNewFoo(&f);
-    MOZ_ASSERT(10 == Foo::sNumDestroyed);
-  }
-  MOZ_ASSERT(11 == Foo::sNumDestroyed);
-
-  {
-    RefPtr<Foo> f = new Foo();
-    GetPassedFoo(&f);
-    MOZ_ASSERT(11 == Foo::sNumDestroyed);
-  }
-  MOZ_ASSERT(12 == Foo::sNumDestroyed);
-
-  {
-    RefPtr<Foo> f1 = new Bar();
-  }
-  MOZ_ASSERT(13 == Foo::sNumDestroyed);
-
-  {
-    RefPtr<Foo> f = GetNullFoo();
-    MOZ_ASSERT(13 == Foo::sNumDestroyed);
-  }
-  MOZ_ASSERT(13 == Foo::sNumDestroyed);
-
-  return 0;
-}
-
-#endif
 
 #endif /* mozilla_RefPtr_h */

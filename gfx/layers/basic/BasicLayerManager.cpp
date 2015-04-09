@@ -34,6 +34,7 @@
 #include "mozilla/gfx/BasePoint.h"      // for BasePoint
 #include "mozilla/gfx/BaseRect.h"       // for BaseRect
 #include "mozilla/gfx/Matrix.h"         // for Matrix
+#include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/gfx/Rect.h"           // for IntRect, Rect
 #include "mozilla/layers/LayersTypes.h"  // for BufferMode::BUFFER_NONE, etc
 #include "mozilla/mozalloc.h"           // for operator new
@@ -45,9 +46,13 @@
 #include "nsRect.h"                     // for nsIntRect
 #include "nsRegion.h"                   // for nsIntRegion, etc
 #include "nsTArray.h"                   // for nsAutoTArray
+#ifdef MOZ_ENABLE_SKIA
+#include "skia/SkCanvas.h"              // for SkCanvas
+#include "skia/SkBitmapDevice.h"        // for SkBitmapDevice
+#else
 #define PIXMAN_DONT_DEFINE_STDINT
 #include "pixman.h"                     // for pixman_f_transform, etc
-
+#endif
 class nsIWidget;
 
 namespace mozilla {
@@ -69,7 +74,7 @@ ClipToContain(gfxContext* aContext, const nsIntRect& aRect)
   deviceRect.RoundOut();
 
   gfxMatrix currentMatrix = aContext->CurrentMatrix();
-  aContext->IdentityMatrix();
+  aContext->SetMatrix(gfxMatrix());
   aContext->NewPath();
   aContext->Rectangle(deviceRect);
   aContext->Clip();
@@ -111,14 +116,6 @@ BasicLayerManager::PushGroupForLayer(gfxContext* aContext, Layer* aLayer,
 }
 
 static nsIntRect
-ToOutsideIntRect(const gfxRect &aRect)
-{
-  gfxRect r = aRect;
-  r.RoundOut();
-  return nsIntRect(r.X(), r.Y(), r.Width(), r.Height());
-}
-
-static nsIntRect
 ToInsideIntRect(const gfxRect& aRect)
 {
   gfxRect r = aRect;
@@ -134,7 +131,7 @@ ToInsideIntRect(const gfxRect& aRect)
 class PaintLayerContext {
 public:
   PaintLayerContext(gfxContext* aTarget, Layer* aLayer,
-                    LayerManager::DrawThebesLayerCallback aCallback,
+                    LayerManager::DrawPaintedLayerCallback aCallback,
                     void* aCallbackData)
    : mTarget(aTarget)
    , mTargetMatrixSR(aTarget)
@@ -158,7 +155,7 @@ public:
   bool Setup2DTransform()
   {
     // Will return an identity matrix for 3d transforms.
-    return mLayer->GetEffectiveTransform().CanDraw2D(&mTransform);
+    return mLayer->GetEffectiveTransformForBuffer().CanDraw2D(&mTransform);
   }
 
   // Applies the effective transform if it's 2D. If it's a 3D transform then
@@ -204,7 +201,7 @@ public:
   gfxContext* mTarget;
   gfxContextMatrixAutoSaveRestore mTargetMatrixSR;
   Layer* mLayer;
-  LayerManager::DrawThebesLayerCallback mCallback;
+  LayerManager::DrawPaintedLayerCallback mCallback;
   void* mCallbackData;
   Matrix mTransform;
   bool mPushedOpaqueRect;
@@ -453,7 +450,7 @@ ApplyDoubleBuffering(Layer* aLayer, const nsIntRect& aVisibleRect)
 }
 
 void
-BasicLayerManager::EndTransaction(DrawThebesLayerCallback aCallback,
+BasicLayerManager::EndTransaction(DrawPaintedLayerCallback aCallback,
                                   void* aCallbackData,
                                   EndTransactionFlags aFlags)
 {
@@ -472,7 +469,7 @@ BasicLayerManager::AbortTransaction()
 }
 
 bool
-BasicLayerManager::EndTransactionInternal(DrawThebesLayerCallback aCallback,
+BasicLayerManager::EndTransactionInternal(DrawPaintedLayerCallback aCallback,
                                           void* aCallbackData,
                                           EndTransactionFlags aFlags)
 {
@@ -492,21 +489,25 @@ BasicLayerManager::EndTransactionInternal(DrawThebesLayerCallback aCallback,
   mTransactionIncomplete = false;
 
   if (mRoot) {
+    if (aFlags & END_NO_COMPOSITE) {
+      // Apply pending tree updates before recomputing effective
+      // properties.
+      mRoot->ApplyPendingUpdatesToSubtree();
+    }
+
     // Need to do this before we call ApplyDoubleBuffering,
     // which depends on correct effective transforms
-    mSnapEffectiveTransforms =
-      mTarget ? !(mTarget->GetFlags() & gfxContext::FLAG_DISABLE_SNAPPING) : true;
+    if (mTarget) {
+      mSnapEffectiveTransforms =
+        !mTarget->GetDrawTarget()->GetUserData(&sDisablePixelSnapping);
+    } else {
+      mSnapEffectiveTransforms = true;
+    }
     mRoot->ComputeEffectiveTransforms(mTarget ? Matrix4x4::From2D(ToMatrix(mTarget->CurrentMatrix())) : Matrix4x4());
 
     ToData(mRoot)->Validate(aCallback, aCallbackData, nullptr);
     if (mRoot->GetMaskLayer()) {
       ToData(mRoot->GetMaskLayer())->Validate(aCallback, aCallbackData, nullptr);
-    }
-
-    if (aFlags & END_NO_COMPOSITE) {
-      // Apply pending tree updates before recomputing effective
-      // properties.
-      mRoot->ApplyPendingUpdatesToSubtree();
     }
   }
 
@@ -531,13 +532,10 @@ BasicLayerManager::EndTransactionInternal(DrawThebesLayerCallback aCallback,
 
     PaintLayer(mTarget, mRoot, aCallback, aCallbackData);
     if (!mRegionToClear.IsEmpty()) {
-      AutoSetOperator op(mTarget, gfxContext::OPERATOR_CLEAR);
       nsIntRegionRectIterator iter(mRegionToClear);
       const nsIntRect *r;
       while ((r = iter.Next())) {
-        mTarget->NewPath();
-        mTarget->Rectangle(gfxRect(r->x, r->y, r->width, r->height));
-        mTarget->Fill();
+        mTarget->GetDrawTarget()->ClearRect(Rect(r->x, r->y, r->width, r->height));
       }
     }
     if (mWidget) {
@@ -550,6 +548,11 @@ BasicLayerManager::EndTransactionInternal(DrawThebesLayerCallback aCallback,
       // Clear out target if we have a complete transaction.
       mTarget = nullptr;
     }
+  }
+
+  if (mRoot) {
+    mAnimationReadyTime = TimeStamp::Now();
+    mRoot->StartPendingAnimations(mAnimationReadyTime);
   }
 
 #ifdef MOZ_LAYERS_HAVE_LOG
@@ -608,6 +611,65 @@ BasicLayerManager::SetRoot(Layer* aLayer)
   mRoot = aLayer;
 }
 
+#ifdef MOZ_ENABLE_SKIA
+static SkMatrix
+BasicLayerManager_Matrix3DToSkia(const gfx3DMatrix& aMatrix)
+{
+  SkMatrix transform;
+  transform.setAll(aMatrix._11,
+                   aMatrix._21,
+                   aMatrix._41,
+                   aMatrix._12,
+                   aMatrix._22,
+                   aMatrix._42,
+                   aMatrix._14,
+                   aMatrix._24,
+                   aMatrix._44);
+
+  return transform;
+}
+
+static void
+Transform(const gfxImageSurface* aDest,
+          RefPtr<DataSourceSurface> aSrc,
+          const gfx3DMatrix& aTransform,
+          gfxPoint aDestOffset)
+{
+  if (aTransform.IsSingular()) {
+    return;
+  }
+
+  IntSize destSize = aDest->GetSize();
+  SkImageInfo destInfo = SkImageInfo::Make(destSize.width,
+                                           destSize.height,
+                                           kBGRA_8888_SkColorType,
+                                           kPremul_SkAlphaType);
+  SkBitmap destBitmap;
+  destBitmap.setInfo(destInfo, aDest->Stride());
+  destBitmap.setPixels((uint32_t*)aDest->Data());
+  SkCanvas destCanvas(destBitmap);
+
+  IntSize srcSize = aSrc->GetSize();
+  SkImageInfo srcInfo = SkImageInfo::Make(srcSize.width,
+                                          srcSize.height,
+                                          kBGRA_8888_SkColorType,
+                                          kPremul_SkAlphaType);
+  SkBitmap src;
+  src.setInfo(srcInfo, aSrc->Stride());
+  src.setPixels((uint32_t*)aSrc->GetData());
+
+  gfx3DMatrix transform = aTransform;
+  transform.TranslatePost(Point3D(-aDestOffset.x, -aDestOffset.y, 0));
+  destCanvas.setMatrix(BasicLayerManager_Matrix3DToSkia(transform));
+
+  SkPaint paint;
+  paint.setXfermodeMode(SkXfermode::kSrc_Mode);
+  paint.setAntiAlias(true);
+  paint.setFilterLevel(SkPaint::kLow_FilterLevel);
+  SkRect destRect = SkRect::MakeXYWH(0, 0, srcSize.width, srcSize.height);
+  destCanvas.drawBitmapRectToRect(src, nullptr, destRect, &paint);
+}
+#else
 static pixman_transform
 BasicLayerManager_Matrix3DToPixman(const gfx3DMatrix& aMatrix)
 {
@@ -630,12 +692,12 @@ BasicLayerManager_Matrix3DToPixman(const gfx3DMatrix& aMatrix)
 }
 
 static void
-PixmanTransform(const gfxImageSurface* aDest,
-                RefPtr<DataSourceSurface> aSrc,
-                const gfx3DMatrix& aTransform,
-                gfxPoint aDestOffset)
+Transform(const gfxImageSurface* aDest,
+          RefPtr<DataSourceSurface> aSrc,
+          const gfx3DMatrix& aTransform,
+          gfxPoint aDestOffset)
 {
-  IntSize destSize = ToIntSize(aDest->GetSize());
+  IntSize destSize = aDest->GetSize();
   pixman_image_t* dest = pixman_image_create_bits(aDest->Format() == gfxImageFormat::ARGB32 ? PIXMAN_a8r8g8b8 : PIXMAN_x8r8g8b8,
                                                   destSize.width,
                                                   destSize.height,
@@ -656,6 +718,8 @@ PixmanTransform(const gfxImageSurface* aDest,
 
   // If the transform is singular then nothing would be drawn anyway, return here
   if (!pixman_transform_invert(&pixTransformInverted, &pixTransform)) {
+    pixman_image_unref(dest);
+    pixman_image_unref(src);
     return;
   }
   pixman_image_set_transform(src, &pixTransformInverted);
@@ -676,6 +740,7 @@ PixmanTransform(const gfxImageSurface* aDest,
   pixman_image_unref(dest);
   pixman_image_unref(src);
 }
+#endif
 
 /**
  * Transform a surface using a gfx3DMatrix and blit to the destination if
@@ -717,7 +782,7 @@ Transform3D(RefPtr<SourceSurface> aSource,
   gfx3DMatrix translation = gfx3DMatrix::Translation(aBounds.x, aBounds.y, 0);
 
   // Transform the content and offset it such that the content begins at the origin.
-  PixmanTransform(destImage, aSource->GetDataSurface(), translation * aTransform, offset);
+  Transform(destImage, aSource->GetDataSurface(), translation * aTransform, offset);
 
   // If we haven't actually drawn to aDest then return our temporary image so
   // that the caller can do this.
@@ -733,7 +798,7 @@ BasicLayerManager::PaintSelfOrChildren(PaintLayerContext& aPaintContext,
   /* Only paint ourself, or our children - This optimization relies on this! */
   Layer* child = aPaintContext.mLayer->GetFirstChild();
   if (!child) {
-    if (aPaintContext.mLayer->AsThebesLayer()) {
+    if (aPaintContext.mLayer->AsPaintedLayer()) {
       data->PaintThebes(aGroupTarget, aPaintContext.mLayer->GetMaskLayer(),
           aPaintContext.mCallback, aPaintContext.mCallbackData);
     } else {
@@ -784,7 +849,7 @@ BasicLayerManager::FlushGroup(PaintLayerContext& aPaintContext, bool aNeedsClipT
 void
 BasicLayerManager::PaintLayer(gfxContext* aTarget,
                               Layer* aLayer,
-                              DrawThebesLayerCallback aCallback,
+                              DrawPaintedLayerCallback aCallback,
                               void* aCallbackData)
 {
   PROFILER_LABEL("BasicLayerManager", "PaintLayer",
@@ -801,18 +866,16 @@ BasicLayerManager::PaintLayer(gfxContext* aTarget,
   RenderTraceScope trace("BasicLayerManager::PaintLayer", "707070");
 
   const nsIntRect* clipRect = aLayer->GetEffectiveClipRect();
-  // aLayer might not be a container layer, but if so we take care not to use
-  // the container variable
-  BasicContainerLayer* container = static_cast<BasicContainerLayer*>(aLayer);
-  bool needsGroup = aLayer->GetFirstChild() &&
-                    container->UseIntermediateSurface();
+  BasicContainerLayer* container =
+    static_cast<BasicContainerLayer*>(aLayer->AsContainerLayer());
+  bool needsGroup = container && container->UseIntermediateSurface();
   BasicImplData* data = ToData(aLayer);
   bool needsClipToVisibleRegion =
-    data->GetClipToVisibleRegion() && !aLayer->AsThebesLayer();
-  NS_ASSERTION(needsGroup || !aLayer->GetFirstChild() ||
+    data->GetClipToVisibleRegion() && !aLayer->AsPaintedLayer();
+  NS_ASSERTION(needsGroup || !container ||
                container->GetOperator() == CompositionOp::OP_OVER,
                "non-OVER operator should have forced UseIntermediateSurface");
-  NS_ASSERTION(!aLayer->GetFirstChild() || !aLayer->GetMaskLayer() ||
+  NS_ASSERTION(!container || !aLayer->GetMaskLayer() ||
                container->UseIntermediateSurface(),
                "ContainerLayer with mask layer should force UseIntermediateSurface");
 
@@ -820,7 +883,7 @@ BasicLayerManager::PaintLayer(gfxContext* aTarget,
   gfxMatrix transform;
   // Will return an identity matrix for 3d transforms, and is handled separately below.
   bool is2D = paintLayerContext.Setup2DTransform();
-  NS_ABORT_IF_FALSE(is2D || needsGroup || !aLayer->GetFirstChild(), "Must PushGroup for 3d transforms!");
+  MOZ_ASSERT(is2D || needsGroup || !container, "Must PushGroup for 3d transforms!");
 
   bool needsSaveRestore =
     needsGroup || clipRect || needsClipToVisibleRegion || !is2D;
@@ -880,8 +943,8 @@ BasicLayerManager::PaintLayer(gfxContext* aTarget,
 
     // Temporary fast fix for bug 725886
     // Revert these changes when 725886 is ready
-    NS_ABORT_IF_FALSE(untransformedDT,
-                      "We should always allocate an untransformed surface with 3d transforms!");
+    MOZ_ASSERT(untransformedDT,
+               "We should always allocate an untransformed surface with 3d transforms!");
     gfxRect destRect;
 #ifdef DEBUG
     if (aLayer->GetDebugColorIndex() != 0) {
@@ -896,7 +959,7 @@ BasicLayerManager::PaintLayer(gfxContext* aTarget,
     }
 #endif
     gfx3DMatrix effectiveTransform;
-    gfx::To3DMatrix(aLayer->GetEffectiveTransform(), effectiveTransform);
+    effectiveTransform = gfx::To3DMatrix(aLayer->GetEffectiveTransform());
     nsRefPtr<gfxASurface> result =
       Transform3D(untransformedDT->Snapshot(), aTarget, bounds,
                   effectiveTransform, destRect);

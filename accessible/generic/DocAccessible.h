@@ -6,7 +6,6 @@
 #ifndef mozilla_a11y_DocAccessible_h__
 #define mozilla_a11y_DocAccessible_h__
 
-#include "nsIAccessibleDocument.h"
 #include "nsIAccessiblePivot.h"
 
 #include "AccEvent.h"
@@ -26,19 +25,19 @@ class nsAccessiblePivot;
 
 class nsIScrollableView;
 
-const uint32_t kDefaultCacheSize = 256;
+const uint32_t kDefaultCacheLength = 128;
 
 namespace mozilla {
 namespace a11y {
 
 class DocManager;
 class NotificationController;
+class DocAccessibleChild;
 class RelatedAccIterator;
 template<class Class, class Arg>
 class TNotification;
 
 class DocAccessible : public HyperTextAccessibleWrap,
-                      public nsIAccessibleDocument,
                       public nsIDocumentObserver,
                       public nsIObserver,
                       public nsIScrollPositionListener,
@@ -48,10 +47,7 @@ class DocAccessible : public HyperTextAccessibleWrap,
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(DocAccessible, Accessible)
 
-  NS_DECL_NSIACCESSIBLEDOCUMENT
-
   NS_DECL_NSIOBSERVER
-
   NS_DECL_NSIACCESSIBLEPIVOTOBSERVER
 
 public:
@@ -59,43 +55,67 @@ public:
   DocAccessible(nsIDocument* aDocument, nsIContent* aRootContent,
                 nsIPresShell* aPresShell);
 
-  // nsIAccessible
-  NS_IMETHOD TakeFocus(void);
-
   // nsIScrollPositionListener
-  virtual void ScrollPositionWillChange(nscoord aX, nscoord aY) {}
-  virtual void ScrollPositionDidChange(nscoord aX, nscoord aY);
+  virtual void ScrollPositionWillChange(nscoord aX, nscoord aY) override {}
+  virtual void ScrollPositionDidChange(nscoord aX, nscoord aY) override;
 
   // nsIDocumentObserver
   NS_DECL_NSIDOCUMENTOBSERVER
 
   // Accessible
   virtual void Init();
-  virtual void Shutdown();
-  virtual nsIFrame* GetFrame() const;
-  virtual nsINode* GetNode() const { return mDocumentNode; }
+  virtual void Shutdown() override;
+  virtual nsIFrame* GetFrame() const override;
+  virtual nsINode* GetNode() const override { return mDocumentNode; }
   nsIDocument* DocumentNode() const { return mDocumentNode; }
 
-  virtual mozilla::a11y::ENameValueFlag Name(nsString& aName);
-  virtual void Description(nsString& aDescription);
-  virtual Accessible* FocusedChild();
-  virtual mozilla::a11y::role NativeRole();
-  virtual uint64_t NativeState();
-  virtual uint64_t NativeInteractiveState() const;
-  virtual bool NativelyUnavailable() const;
-  virtual void ApplyARIAState(uint64_t* aState) const;
-  virtual already_AddRefed<nsIPersistentProperties> Attributes();
+  virtual mozilla::a11y::ENameValueFlag Name(nsString& aName) override;
+  virtual void Description(nsString& aDescription) override;
+  virtual Accessible* FocusedChild() override;
+  virtual mozilla::a11y::role NativeRole() override;
+  virtual uint64_t NativeState() override;
+  virtual uint64_t NativeInteractiveState() const override;
+  virtual bool NativelyUnavailable() const override;
+  virtual void ApplyARIAState(uint64_t* aState) const override;
+  virtual already_AddRefed<nsIPersistentProperties> Attributes() override;
+
+  virtual void TakeFocus() override;
 
 #ifdef A11Y_LOG
-  virtual nsresult HandleAccEvent(AccEvent* aEvent);
+  virtual nsresult HandleAccEvent(AccEvent* aEvent) override;
 #endif
 
-  virtual void GetBoundsRect(nsRect& aRect, nsIFrame** aRelativeFrame);
+  virtual nsRect RelativeBounds(nsIFrame** aRelativeFrame) const override;
 
   // HyperTextAccessible
-  virtual already_AddRefed<nsIEditor> GetEditor() const;
+  virtual already_AddRefed<nsIEditor> GetEditor() const override;
 
   // DocAccessible
+
+  /**
+   * Return document URL.
+   */
+  void URL(nsAString& aURL) const;
+
+  /**
+   * Return DOM document title.
+   */
+  void Title(nsString& aTitle) const { mDocumentNode->GetTitle(aTitle); }
+
+  /**
+   * Return DOM document mime type.
+   */
+  void MimeType(nsAString& aType) const { mDocumentNode->GetContentType(aType); }
+
+  /**
+   * Return DOM document type.
+   */
+  void DocType(nsAString& aType) const;
+
+  /**
+   * Return virtual cursor associated with the document.
+   */
+  nsIAccessiblePivot* VirtualCursor();
 
   /**
    * Return presentation shell for this document accessible.
@@ -106,7 +126,7 @@ public:
    * Return the presentation shell's context.
    */
   nsPresContext* PresContext() const { return mPresShell->GetPresContext(); }
-    
+
   /**
    * Return true if associated DOM document was loaded and isn't unloading.
    */
@@ -297,7 +317,16 @@ public:
   /**
    * Notify the document accessible that content was removed.
    */
-  void ContentRemoved(nsIContent* aContainerNode, nsIContent* aChildNode);
+  void ContentRemoved(Accessible* aContainer, nsIContent* aChildNode)
+  {
+    // Update the whole tree of this document accessible when the container is
+    // null (document element is removed).
+    UpdateTreeOnRemoval((aContainer ? aContainer : this), aChildNode);
+  }
+  void ContentRemoved(nsIContent* aContainerNode, nsIContent* aChildNode)
+  {
+    ContentRemoved(GetAccessibleOrContainer(aContainerNode), aChildNode);
+  }
 
   /**
    * Updates accessible tree when rendered text is changed.
@@ -315,7 +344,7 @@ protected:
   void LastRelease();
 
   // Accessible
-  virtual void CacheChildren();
+  virtual void CacheChildren() override;
 
   // DocAccessible
   virtual nsresult AddEventListeners();
@@ -436,13 +465,17 @@ protected:
   void ProcessInvalidationList();
 
   /**
-   * Update the accessible tree for content insertion or removal.
+   * Update the tree on content insertion.
    */
-  void UpdateTree(Accessible* aContainer, nsIContent* aChildNode,
-                  bool aIsInsert);
+  void UpdateTreeOnInsertion(Accessible* aContainer);
 
   /**
-   * Helper for UpdateTree() method. Go down to DOM subtree and updates
+   * Update the accessible tree for content removal.
+   */
+  void UpdateTreeOnRemoval(Accessible* aContainer, nsIContent* aChildNode);
+
+  /**
+   * Helper for UpdateTreeOn methods. Go down to DOM subtree and updates
    * accessible tree. Return one of these flags.
    */
   enum EUpdateTreeFlags {
@@ -487,6 +520,20 @@ protected:
    * coalescence).
    */
   bool IsLoadEventTarget() const;
+
+  /**
+   * If this document is in a content process return the object responsible for
+   * communicating with the main process for it.
+   */
+  DocAccessibleChild* IPCDoc() const { return mIPCDoc; }
+
+  /*
+   * Set the object responsible for communicating with the main process on
+   * behalf of this document.
+   */
+  void SetIPCDoc(DocAccessibleChild* aIPCDoc) { mIPCDoc = aIPCDoc; }
+
+  friend class DocAccessibleChild;
 
   /**
    * Used to fire scrolling end event after page scroll.
@@ -611,6 +658,9 @@ protected:
 private:
 
   nsIPresShell* mPresShell;
+
+  // Exclusively owned by IPDL so don't manually delete it!
+  DocAccessibleChild* mIPCDoc;
 };
 
 inline DocAccessible*

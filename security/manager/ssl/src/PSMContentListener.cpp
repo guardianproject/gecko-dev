@@ -4,10 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifdef MOZ_LOGGING
-#define FORCE_PR_LOG 1
-#endif
-
 #include "PSMContentListener.h"
 
 #include "nsIStreamListener.h"
@@ -35,7 +31,7 @@ class PSMContentDownloader : public nsIStreamListener
 {
 public:
   PSMContentDownloader() {NS_ASSERTION(false, "don't use this constructor."); }
-  PSMContentDownloader(uint32_t type);
+  explicit PSMContentDownloader(uint32_t type);
   void setSilentDownload(bool flag);
 
   NS_DECL_ISUPPORTS
@@ -67,7 +63,7 @@ PSMContentDownloader::PSMContentDownloader(uint32_t type)
 PSMContentDownloader::~PSMContentDownloader()
 {
   if (mByteData)
-    nsMemory::Free(mByteData);
+    free(mByteData);
 }
 
 NS_IMPL_ISUPPORTS(PSMContentDownloader, nsIStreamListener, nsIRequestObserver)
@@ -94,7 +90,7 @@ PSMContentDownloader::OnStartRequest(nsIRequest* request, nsISupports* context)
   
   mBufferOffset = 0;
   mBufferSize = 0;
-  mByteData = (char*) nsMemory::Alloc(SafeCast<size_t>(contentLength));
+  mByteData = (char*)moz_xmalloc(AssertedCast<size_t>(contentLength));
   if (!mByteData)
     return NS_ERROR_OUT_OF_MEMORY;
   
@@ -118,7 +114,7 @@ PSMContentDownloader::OnDataAvailable(nsIRequest* request,
   if ((mBufferOffset + (int32_t)aLength) > mBufferSize) {
       size_t newSize = (mBufferOffset + aLength) *2; // grow some more than needed
       char *newBuffer;
-      newBuffer = (char*)nsMemory::Realloc(mByteData, newSize);
+      newBuffer = (char*)moz_xrealloc(mByteData, newSize);
       if (!newBuffer) {
         return NS_ERROR_OUT_OF_MEMORY;
       }
@@ -268,23 +264,19 @@ PSMContentListener::CanHandleContent(const char * aContentType,
 }
 
 NS_IMETHODIMP
-PSMContentListener::DoContent(const char * aContentType,
+PSMContentListener::DoContent(const nsACString & aContentType,
                                bool aIsContentPreferred,
                                nsIRequest * aRequest,
                                nsIStreamListener ** aContentHandler,
                                bool * aAbortProcess)
 {
-  PSMContentDownloader *downLoader;
   uint32_t type;
-  type = getPSMContentType(aContentType);
+  type = getPSMContentType(PromiseFlatCString(aContentType).get());
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("PSMContentListener::DoContent\n"));
   if (type != PSMContentDownloader::UNKNOWN_TYPE) {
-    downLoader = new PSMContentDownloader(type);
-    if (downLoader) {
-      downLoader->QueryInterface(NS_GET_IID(nsIStreamListener), 
-                                            (void **)aContentHandler);
-      return NS_OK;
-    }
+    nsRefPtr<PSMContentDownloader> downLoader = new PSMContentDownloader(type);
+    downLoader.forget(aContentHandler);
+    return NS_OK;
   }
   return NS_ERROR_FAILURE;
 }

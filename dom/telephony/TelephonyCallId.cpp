@@ -19,7 +19,6 @@ TelephonyCallId::TelephonyCallId(nsPIDOMWindow* aWindow,
 : mWindow(aWindow), mNumber(aNumber), mNumberPresentation(aNumberPresentation),
   mName(aName), mNamePresentation(aNamePresentation)
 {
-  SetIsDOMBinding();
 }
 
 TelephonyCallId::~TelephonyCallId()
@@ -27,9 +26,9 @@ TelephonyCallId::~TelephonyCallId()
 }
 
 JSObject*
-TelephonyCallId::WrapObject(JSContext* aCx)
+TelephonyCallId::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return TelephonyCallIdBinding::Wrap(aCx, this);
+  return TelephonyCallIdBinding::Wrap(aCx, this, aGivenProto);
 }
 
 CallIdPresentation

@@ -264,7 +264,10 @@ class TickSample {
         lr(NULL),
 #endif
         context(NULL),
-        isSamplingCurrentThread(false) {}
+        isSamplingCurrentThread(false),
+        threadProfile(nullptr),
+        rssMemory(0),
+        ussMemory(0) {}
 
   void PopulateContext(void* aContext);
 
@@ -306,6 +309,8 @@ class Sampler {
   virtual void RequestSave() = 0;
   // Process any outstanding request outside a signal handler.
   virtual void HandleSaveRequest() = 0;
+  // Delete markers which are no longer part of the profile due to buffer wraparound.
+  virtual void DeleteExpiredMarkers() = 0;
 
   // Start and stop sampler.
   void Start();
@@ -359,7 +364,10 @@ class Sampler {
   static mozilla::Mutex* sRegisteredThreadsMutex;
 
   static bool CanNotifyObservers() {
-#if defined(SPS_OS_android) && !defined(MOZ_WIDGET_GONK)
+#ifdef MOZ_WIDGET_GONK
+    // We use profile.sh on b2g to manually select threads and options per process.
+    return false;
+#elif defined(SPS_OS_android) && !defined(MOZ_WIDGET_GONK)
     // Android ANR reporter uses the profiler off the main thread
     return NS_IsMainThread();
 #else
@@ -389,6 +397,10 @@ class Sampler {
   bool signal_sender_launched_;
   pthread_t signal_sender_thread_;
 #endif
+#if defined(SPS_OS_darwin)
+  bool signal_handler_installed_;
+  struct sigaction old_sigprof_signal_handler_;
+#endif
 };
 
 class ThreadInfo {
@@ -402,12 +414,19 @@ class ThreadInfo {
 
   bool IsMainThread() const { return mIsMainThread; }
   PseudoStack* Stack() const { return mPseudoStack; }
-  
+
   void SetProfile(ThreadProfile* aProfile) { mProfile = aProfile; }
   ThreadProfile* Profile() const { return mProfile; }
 
   PlatformData* GetPlatformData() const { return mPlatformData; }
   void* StackTop() const { return mStackTop; }
+
+  virtual void SetPendingDelete();
+  bool IsPendingDelete() const { return mPendingDelete; }
+
+#ifdef MOZ_NUWA_PROCESS
+  void SetThreadId(int aThreadId) { mThreadId = aThreadId; }
+#endif
 
   /**
    * May be null for the main thread if the profiler was started during startup
@@ -422,6 +441,16 @@ class ThreadInfo {
   ThreadProfile* mProfile;
   void* const mStackTop;
   nsCOMPtr<nsIThread> mThread;
+  bool mPendingDelete;
+};
+
+// Just like ThreadInfo, but owns a reference to the PseudoStack.
+class StackOwningThreadInfo : public ThreadInfo {
+ public:
+  StackOwningThreadInfo(const char* aName, int aThreadId, bool aIsMainThread, PseudoStack* aPseudoStack, void* aStackTop);
+  virtual ~StackOwningThreadInfo();
+
+  virtual void SetPendingDelete();
 };
 
 #endif /* ndef TOOLS_PLATFORM_H_ */

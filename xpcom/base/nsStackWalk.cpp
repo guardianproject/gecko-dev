@@ -13,6 +13,10 @@
 
 #include "nsStackWalk.h"
 
+#if defined(_MSC_VER) && _MSC_VER < 1900
+#define snprintf _snprintf
+#endif
+
 using namespace mozilla;
 
 // The presence of this address is the stack must stop the stack walk. If
@@ -43,10 +47,6 @@ static CriticalAddress gCriticalAddress;
    ((defined(__GNUC__) && (defined(__i386) || defined(PPC))) || \
     defined(HAVE__UNWIND_BACKTRACE)))
 
-#define NSSTACKWALK_SUPPORTS_SOLARIS \
-  (defined(__sun) && \
-   (defined(__sparc) || defined(sparc) || defined(__i386) || defined(i386)))
-
 #if NSSTACKWALK_SUPPORTS_MACOSX
 #include <pthread.h>
 #include <CoreServices/CoreServices.h>
@@ -58,7 +58,7 @@ malloc_logger_t(uint32_t aType,
 extern malloc_logger_t* malloc_logger;
 
 static void
-stack_callback(void* aPc, void* aSp, void* aClosure)
+stack_callback(uint32_t aFrameNumber, void* aPc, void* aSp, void* aClosure)
 {
   const char* name = static_cast<char*>(aClosure);
   Dl_info info;
@@ -202,25 +202,13 @@ StackWalkInitCriticalAddress()
 #error Too old imagehlp.h
 #endif
 
-// Define these as static pointers so that we can load the DLL on the
-// fly (and not introduce a link-time dependency on it). Tip o' the
-// hat to Matt Pietrick for this idea. See:
-//
-//   http://msdn.microsoft.com/library/periodic/period97/F1/D3/S245C6.htm
-//
-extern "C" {
-
-extern HANDLE hStackWalkMutex;
-
-bool EnsureSymInitialized();
-
-bool EnsureWalkThreadReady();
-
 struct WalkStackData
 {
+  // Are we walking the stack of the calling thread? Note that we need to avoid
+  // calling fprintf and friends if this is false, in order to avoid deadlocks.
+  bool walkCallingThread;
   uint32_t skipFrames;
   HANDLE thread;
-  bool walkCallingThread;
   HANDLE process;
   HANDLE eventStart;
   HANDLE eventEnd;
@@ -234,18 +222,11 @@ struct WalkStackData
   void* platformData;
 };
 
-void PrintError(char* aPrefix, WalkStackData* aData);
-unsigned int WINAPI WalkStackThread(void* aData);
-void WalkStackMain64(struct WalkStackData* aData);
-
-
 DWORD gStackWalkThread;
 CRITICAL_SECTION gDbgHelpCS;
 
-}
-
 // Routine to print an error message to standard error.
-void
+static void
 PrintError(const char* aPrefix)
 {
   LPVOID lpMsgBuf;
@@ -255,7 +236,7 @@ PrintError(const char* aPrefix)
     nullptr,
     lastErr,
     MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), // Default language
-    (LPSTR) &lpMsgBuf,
+    (LPSTR)&lpMsgBuf,
     0,
     nullptr
   );
@@ -265,7 +246,9 @@ PrintError(const char* aPrefix)
   LocalFree(lpMsgBuf);
 }
 
-bool
+static unsigned int WINAPI WalkStackThread(void* aData);
+
+static bool
 EnsureWalkThreadReady()
 {
   static bool walkThreadReady = false;
@@ -286,9 +269,8 @@ EnsureWalkThreadReady()
     }
 
     unsigned int threadID;
-    stackWalkThread = (HANDLE)
-      _beginthreadex(nullptr, 0, WalkStackThread, (void*)readyEvent,
-                     0, &threadID);
+    stackWalkThread = (HANDLE)_beginthreadex(nullptr, 0, WalkStackThread,
+                                             (void*)readyEvent, 0, &threadID);
     if (!stackWalkThread) {
       PrintError("CreateThread");
       ::CloseHandle(readyEvent);
@@ -322,27 +304,15 @@ EnsureWalkThreadReady()
   return walkThreadReady = true;
 }
 
-void
+static void
 WalkStackMain64(struct WalkStackData* aData)
 {
-  // Get the context information for the thread. That way we will
-  // know where our sp, fp, pc, etc. are and can fill in the
-  // STACKFRAME64 with the initial values.
-  CONTEXT context;
-  HANDLE myProcess = aData->process;
-  HANDLE myThread = aData->thread;
-  DWORD64 addr;
-  DWORD64 spaddr;
-  STACKFRAME64 frame64;
-  // skip our own stack walking frames
-  int skip = (aData->walkCallingThread ? 3 : 0) + aData->skipFrames;
-  BOOL ok;
-
   // Get a context for the specified thread.
+  CONTEXT context;
   if (!aData->platformData) {
     memset(&context, 0, sizeof(CONTEXT));
     context.ContextFlags = CONTEXT_FULL;
-    if (!GetThreadContext(myThread, &context)) {
+    if (!GetThreadContext(aData->thread, &context)) {
       if (aData->walkCallingThread) {
         PrintError("GetThreadContext");
       }
@@ -352,45 +322,45 @@ WalkStackMain64(struct WalkStackData* aData)
     context = *static_cast<CONTEXT*>(aData->platformData);
   }
 
-  // Setup initial stack frame to walk from
+#if defined(_M_IX86) || defined(_M_IA64)
+  // Setup initial stack frame to walk from.
+  STACKFRAME64 frame64;
   memset(&frame64, 0, sizeof(frame64));
 #ifdef _M_IX86
   frame64.AddrPC.Offset    = context.Eip;
   frame64.AddrStack.Offset = context.Esp;
   frame64.AddrFrame.Offset = context.Ebp;
-#elif defined _M_AMD64
-  frame64.AddrPC.Offset    = context.Rip;
-  frame64.AddrStack.Offset = context.Rsp;
-  frame64.AddrFrame.Offset = context.Rbp;
 #elif defined _M_IA64
   frame64.AddrPC.Offset    = context.StIIP;
   frame64.AddrStack.Offset = context.SP;
   frame64.AddrFrame.Offset = context.RsBSP;
-#else
-#error "Should not have compiled this code"
 #endif
   frame64.AddrPC.Mode      = AddrModeFlat;
   frame64.AddrStack.Mode   = AddrModeFlat;
   frame64.AddrFrame.Mode   = AddrModeFlat;
   frame64.AddrReturn.Mode  = AddrModeFlat;
+#endif
 
-  // Now walk the stack
-  while (1) {
+  // Skip our own stack walking frames.
+  int skip = (aData->walkCallingThread ? 3 : 0) + aData->skipFrames;
 
-    // debug routines are not threadsafe, so grab the lock.
+  // Now walk the stack.
+  while (true) {
+    DWORD64 addr;
+    DWORD64 spaddr;
+
+#if defined(_M_IX86) || defined(_M_IA64)
+    // 32-bit frame unwinding.
+    // Debug routines are not threadsafe, so grab the lock.
     EnterCriticalSection(&gDbgHelpCS);
-    ok = StackWalk64(
-#ifdef _M_AMD64
-      IMAGE_FILE_MACHINE_AMD64,
-#elif defined _M_IA64
+    BOOL ok = StackWalk64(
+#if defined _M_IA64
       IMAGE_FILE_MACHINE_IA64,
 #elif defined _M_IX86
       IMAGE_FILE_MACHINE_I386,
-#else
-#error "Should not have compiled this code"
 #endif
-      myProcess,
-      myThread,
+      aData->process,
+      aData->thread,
       &frame64,
       &context,
       nullptr,
@@ -411,7 +381,42 @@ WalkStackMain64(struct WalkStackData* aData)
       }
     }
 
-    if (!ok || (addr == 0)) {
+    if (!ok) {
+      break;
+    }
+
+#elif defined(_M_AMD64)
+    // 64-bit frame unwinding.
+    // Try to look up unwind metadata for the current function.
+    ULONG64 imageBase;
+    PRUNTIME_FUNCTION runtimeFunction =
+      RtlLookupFunctionEntry(context.Rip, &imageBase, NULL);
+
+    if (!runtimeFunction) {
+      // Alas, this is probably a JIT frame, for which we don't generate unwind
+      // info and so we have to give up.
+      break;
+    }
+
+    PVOID dummyHandlerData;
+    ULONG64 dummyEstablisherFrame;
+    RtlVirtualUnwind(UNW_FLAG_NHANDLER,
+                     imageBase,
+                     context.Rip,
+                     runtimeFunction,
+                     &context,
+                     &dummyHandlerData,
+                     &dummyEstablisherFrame,
+                     nullptr);
+
+    addr = context.Rip;
+    spaddr = context.Rsp;
+
+#else
+#error "unknown platform"
+#endif
+
+    if (addr == 0) {
       break;
     }
 
@@ -433,15 +438,15 @@ WalkStackMain64(struct WalkStackData* aData)
       break;
     }
 
+#if defined(_M_IX86) || defined(_M_IA64)
     if (frame64.AddrReturn.Offset == 0) {
       break;
     }
+#endif
   }
-  return;
 }
 
-
-unsigned int WINAPI
+static unsigned int WINAPI
 WalkStackThread(void* aData)
 {
   BOOL msgRet;
@@ -455,7 +460,7 @@ WalkStackThread(void* aData)
   HANDLE readyEvent = (HANDLE)aData;
   ::SetEvent(readyEvent);
 
-  while ((msgRet = ::GetMessage(&msg, (HWND) - 1, 0, 0)) != 0) {
+  while ((msgRet = ::GetMessage(&msg, (HWND)-1, 0, 0)) != 0) {
     if (msgRet == -1) {
       PrintError("GetMessage");
     } else {
@@ -502,7 +507,7 @@ WalkStackThread(void* aData)
  * whose in memory address doesn't match its in-file address.
  */
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
              uint32_t aMaxFrames, void* aClosure, uintptr_t aThread,
              void* aPlatformData)
@@ -517,18 +522,10 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
     return NS_ERROR_FAILURE;
   }
 
-  HANDLE targetThread = ::GetCurrentThread();
-  data.walkCallingThread = true;
-  if (aThread) {
-    HANDLE threadToWalk = reinterpret_cast<HANDLE>(aThread);
-    // walkCallingThread indicates whether we are walking the caller's stack
-    data.walkCallingThread = (threadToWalk == targetThread);
-    targetThread = threadToWalk;
-  }
-
-  // We need to avoid calling fprintf and friends if we're walking the stack of
-  // another thread, in order to avoid deadlocks.
-  const bool shouldBeThreadSafe = !!aThread;
+  HANDLE currentThread = ::GetCurrentThread();
+  HANDLE targetThread =
+    aThread ? reinterpret_cast<HANDLE>(aThread) : currentThread;
+  data.walkCallingThread = (targetThread == currentThread);
 
   // Have to duplicate handle to get a real handle.
   if (!myProcess) {
@@ -537,7 +534,7 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
                            ::GetCurrentProcess(),
                            &myProcess,
                            PROCESS_ALL_ACCESS, FALSE, 0)) {
-      if (!shouldBeThreadSafe) {
+      if (data.walkCallingThread) {
         PrintError("DuplicateHandle (process)");
       }
       return NS_ERROR_FAILURE;
@@ -548,7 +545,7 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
                          ::GetCurrentProcess(),
                          &myThread,
                          THREAD_ALL_ACCESS, FALSE, 0)) {
-    if (!shouldBeThreadSafe) {
+    if (data.walkCallingThread) {
       PrintError("DuplicateHandle (thread)");
     }
     return NS_ERROR_FAILURE;
@@ -592,7 +589,7 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
 
     walkerReturn = ::SignalObjectAndWait(data.eventStart,
                                          data.eventEnd, INFINITE, FALSE);
-    if (walkerReturn != WAIT_OBJECT_0 && !shouldBeThreadSafe) {
+    if (walkerReturn != WAIT_OBJECT_0 && data.walkCallingThread) {
       PrintError("SignalObjectAndWait (1)");
     }
     if (data.pc_count > data.pc_size) {
@@ -605,7 +602,7 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
       ::PostThreadMessage(gStackWalkThread, WM_USER, 0, (LPARAM)&data);
       walkerReturn = ::SignalObjectAndWait(data.eventStart,
                                            data.eventEnd, INFINITE, FALSE);
-      if (walkerReturn != WAIT_OBJECT_0 && !shouldBeThreadSafe) {
+      if (walkerReturn != WAIT_OBJECT_0 && data.walkCallingThread) {
         PrintError("SignalObjectAndWait (2)");
       }
     }
@@ -617,7 +614,7 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
   ::CloseHandle(myThread);
 
   for (uint32_t i = 0; i < data.pc_count; ++i) {
-    (*aCallback)(data.pcs[i], data.sps[i], aClosure);
+    (*aCallback)(i + 1, data.pcs[i], data.sps[i], aClosure);
   }
 
   return data.pc_count == 0 ? NS_ERROR_FAILURE : NS_OK;
@@ -743,7 +740,7 @@ BOOL SymGetModuleInfoEspecial64(HANDLE aProcess, DWORD64 aAddr,
   return retval;
 }
 
-bool
+static bool
 EnsureSymInitialized()
 {
   static bool gInitialized = false;
@@ -770,7 +767,7 @@ EnsureSymInitialized()
 }
 
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
 {
   aDetails->library[0] = '\0';
@@ -832,41 +829,8 @@ NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
   return NS_OK;
 }
 
-EXPORT_XPCOM_API(nsresult)
-NS_FormatCodeAddressDetails(void* aPC, const nsCodeAddressDetails* aDetails,
-                            char* aBuffer, uint32_t aBufferSize)
-{
-  if (aDetails->function[0]) {
-    _snprintf(aBuffer, aBufferSize, "%s+0x%08lX [%s +0x%016lX]",
-              aDetails->function, aDetails->foffset,
-              aDetails->library, aDetails->loffset);
-  } else if (aDetails->library[0]) {
-    _snprintf(aBuffer, aBufferSize, "UNKNOWN [%s +0x%016lX]",
-              aDetails->library, aDetails->loffset);
-  } else {
-    _snprintf(aBuffer, aBufferSize, "UNKNOWN 0x%016lX", aPC);
-  }
-
-  aBuffer[aBufferSize - 1] = '\0';
-
-  uint32_t len = strlen(aBuffer);
-  if (aDetails->filename[0]) {
-    _snprintf(aBuffer + len, aBufferSize - len, " (%s, line %d)\n",
-              aDetails->filename, aDetails->lineno);
-  } else {
-    aBuffer[len] = '\n';
-    if (++len != aBufferSize) {
-      aBuffer[len] = '\0';
-    }
-  }
-  aBuffer[aBufferSize - 2] = '\n';
-  aBuffer[aBufferSize - 1] = '\0';
-  return NS_OK;
-}
-
-// WIN32 x86 stack walking code
-// i386 or PPC Linux stackwalking code or Solaris
-#elif HAVE_DLADDR && (HAVE__UNWIND_BACKTRACE || NSSTACKWALK_SUPPORTS_LINUX || NSSTACKWALK_SUPPORTS_SOLARIS || NSSTACKWALK_SUPPORTS_MACOSX)
+// i386 or PPC Linux stackwalking code
+#elif HAVE_DLADDR && (HAVE__UNWIND_BACKTRACE || NSSTACKWALK_SUPPORTS_LINUX || NSSTACKWALK_SUPPORTS_MACOSX)
 
 #include <stdlib.h>
 #include <string.h>
@@ -905,268 +869,14 @@ void DemangleSymbol(const char* aSymbol,
 #endif // MOZ_DEMANGLE_SYMBOLS
 }
 
-
-#if NSSTACKWALK_SUPPORTS_SOLARIS
-
-/*
- * Stack walking code for Solaris courtesy of Bart Smaalder's "memtrak".
- */
-
-#include <synch.h>
-#include <ucontext.h>
-#include <sys/frame.h>
-#include <sys/regset.h>
-#include <sys/stack.h>
-
-static int    load_address ( void * pc, void * arg );
-static struct bucket * newbucket ( void * pc );
-static struct frame * cs_getmyframeptr ( void );
-static void   cs_walk_stack ( void * (*read_func)(char * address),
-                              struct frame * fp,
-                              int (*operate_func)(void *, void *, void *),
-                              void * usrarg );
-static void   cs_operate ( void (*operate_func)(void *, void *, void *),
-                           void * usrarg );
-
-#ifndef STACK_BIAS
-#define STACK_BIAS 0
-#endif /*STACK_BIAS*/
-
-#define LOGSIZE 4096
-
-/* type of demangling function */
-typedef int demf_t(const char *, char *, size_t);
-
-static demf_t *demf;
-
-static int initialized = 0;
-
-#if defined(sparc) || defined(__sparc)
-#define FRAME_PTR_REGISTER REG_SP
-#endif
-
-#if defined(i386) || defined(__i386)
-#define FRAME_PTR_REGISTER EBP
-#endif
-
-struct bucket {
-  void * pc;
-  int index;
-  struct bucket * next;
-};
-
-struct my_user_args {
-  NS_WalkStackCallback callback;
-  uint32_t skipFrames;
-  uint32_t maxFrames;
-  uint32_t numFrames;
-  void *closure;
-};
-
-
-static void myinit();
-
-#pragma init (myinit)
-
-static void
-myinit()
-{
-
-  if (! initialized) {
-#ifndef __GNUC__
-    void *handle;
-    const char *libdem = "libdemangle.so.1";
-
-    /* load libdemangle if we can and need to (only try this once) */
-    if ((handle = dlopen(libdem, RTLD_LAZY)) != nullptr) {
-      demf = (demf_t *)dlsym(handle,
-                             "cplus_demangle"); /*lint !e611 */
-      /*
-       * lint override above is to prevent lint from
-       * complaining about "suspicious cast".
-       */
-    }
-#endif /*__GNUC__*/
-  }
-  initialized = 1;
-}
-
-
-static int
-load_address(void * pc, void * arg)
-{
-  static struct bucket table[2048];
-  static mutex_t lock;
-  struct bucket * ptr;
-  struct my_user_args * args = (struct my_user_args *) arg;
-
-  unsigned int val = NS_PTR_TO_INT32(pc);
-
-  ptr = table + ((val >> 2)&2047);
-
-  mutex_lock(&lock);
-  while (ptr->next) {
-    if (ptr->next->pc == pc)
-      break;
-    ptr = ptr->next;
-  }
-
-  int stop = 0;
-  if (ptr->next) {
-    mutex_unlock(&lock);
-  } else {
-    (args->callback)(pc, args->closure);
-    args->numFrames++;
-    if (args->maxFrames != 0 && args->numFrames == args->maxFrames)
-      stop = 1;   // causes us to stop getting frames
-
-    ptr->next = newbucket(pc);
-    mutex_unlock(&lock);
-  }
-  return stop;
-}
-
-
-static struct bucket *
-newbucket(void * pc)
-{
-  struct bucket * ptr = (struct bucket *)malloc(sizeof(*ptr));
-  static int index; /* protected by lock in caller */
-
-  ptr->index = index++;
-  ptr->next = nullptr;
-  ptr->pc = pc;
-  return (ptr);
-}
-
-
-static struct frame *
-csgetframeptr()
-{
-  ucontext_t u;
-  struct frame *fp;
-
-  (void) getcontext(&u);
-
-  fp = (struct frame *)
-    ((char *)u.uc_mcontext.gregs[FRAME_PTR_REGISTER] +
-     STACK_BIAS);
-
-  /* make sure to return parents frame pointer.... */
-
-  return ((struct frame *)((ulong_t)fp->fr_savfp + STACK_BIAS));
-}
-
-
-static void
-cswalkstack(struct frame *fp, int (*operate_func)(void *, void *, void *),
-            void *usrarg)
-{
-
-  while (fp != 0 && fp->fr_savpc != 0) {
-
-    if (operate_func((void *)fp->fr_savpc, nullptr, usrarg) != 0)
-      break;
-    /*
-     * watch out - libthread stacks look funny at the top
-     * so they may not have their STACK_BIAS set
-     */
-
-    fp = (struct frame *)((ulong_t)fp->fr_savfp +
-                          (fp->fr_savfp?(ulong_t)STACK_BIAS:0));
-  }
-}
-
-
-static void
-cs_operate(int (*operate_func)(void *, void *, void *), void * usrarg)
-{
-  cswalkstack(csgetframeptr(), operate_func, usrarg);
-}
-
-EXPORT_XPCOM_API(nsresult)
-NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
-             uint32_t aMaxFrames, void* aClosure, uintptr_t aThread,
-             void* aPlatformData)
-{
-  MOZ_ASSERT(!aThread);
-  MOZ_ASSERT(!aPlatformData);
-  struct my_user_args args;
-
-  StackWalkInitCriticalAddress();
-
-  if (!initialized) {
-    myinit();
-  }
-
-  args.callback = aCallback;
-  args.skipFrames = aSkipFrames; /* XXX Not handled! */
-  args.maxFrames = aMaxFrames;
-  args.numFrames = 0;
-  args.closure = aClosure;
-  cs_operate(load_address, &args);
-  return args.numFrames == 0 ? NS_ERROR_FAILURE : NS_OK;
-}
-
-EXPORT_XPCOM_API(nsresult)
-NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
-{
-  aDetails->library[0] = '\0';
-  aDetails->loffset = 0;
-  aDetails->filename[0] = '\0';
-  aDetails->lineno = 0;
-  aDetails->function[0] = '\0';
-  aDetails->foffset = 0;
-
-  char dembuff[4096];
-  Dl_info info;
-
-  if (dladdr(aPC, & info)) {
-    if (info.dli_fname) {
-      PL_strncpyz(aDetails->library, info.dli_fname,
-                  sizeof(aDetails->library));
-      aDetails->loffset = (char*)aPC - (char*)info.dli_fbase;
-    }
-    if (info.dli_sname) {
-      aDetails->foffset = (char*)aPC - (char*)info.dli_saddr;
-#ifdef __GNUC__
-      DemangleSymbol(info.dli_sname, dembuff, sizeof(dembuff));
-#else
-      if (!demf || demf(info.dli_sname, dembuff, sizeof(dembuff))) {
-        dembuff[0] = 0;
-      }
-#endif /*__GNUC__*/
-      PL_strncpyz(aDetails->function,
-                  (dembuff[0] != '\0') ? dembuff : info.dli_sname,
-                  sizeof(aDetails->function));
-    }
-  }
-
-  return NS_OK;
-}
-
-EXPORT_XPCOM_API(nsresult)
-NS_FormatCodeAddressDetails(void* aPC, const nsCodeAddressDetails* aDetails,
-                            char* aBuffer, uint32_t aBufferSize)
-{
-  snprintf(aBuffer, aBufferSize, "%p %s:%s+0x%lx\n",
-           aPC,
-           aDetails->library[0] ? aDetails->library : "??",
-           aDetails->function[0] ? aDetails->function : "??",
-           aDetails->foffset);
-  return NS_OK;
-}
-
-#else // not __sun-specific
-
-#if __GLIBC__ > 2 || __GLIBC_MINOR > 1
+#if __GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 1)
 #define HAVE___LIBC_STACK_END 1
 #else
 #define HAVE___LIBC_STACK_END 0
 #endif
 
 #if HAVE___LIBC_STACK_END
-extern void* __libc_stack_end; // from ld-linux.so
+extern MOZ_EXPORT void* __libc_stack_end; // from ld-linux.so
 #endif
 namespace mozilla {
 nsresult
@@ -1207,8 +917,8 @@ FramePointerStackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
       // it called. We can't know the exact location of the SP
       // but this should be sufficient for our use the SP
       // to order elements on the stack.
-      (*aCallback)(pc, bp, aClosure);
       numFrames++;
+      (*aCallback)(numFrames, pc, bp, aClosure);
       if (aMaxFrames != 0 && numFrames == aMaxFrames) {
         break;
       }
@@ -1223,7 +933,7 @@ FramePointerStackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
 #define X86_OR_PPC (defined(__i386) || defined(PPC) || defined(__ppc__))
 #if X86_OR_PPC && (NSSTACKWALK_SUPPORTS_MACOSX || NSSTACKWALK_SUPPORTS_LINUX) // i386 or PPC Linux or Mac stackwalking code
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
              uint32_t aMaxFrames, void* aClosure, uintptr_t aThread,
              void* aPlatformData)
@@ -1251,7 +961,6 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
 #endif
   return FramePointerStackWalk(aCallback, aSkipFrames, aMaxFrames,
                                aClosure, bp, stackEnd);
-
 }
 
 #elif defined(HAVE__UNWIND_BACKTRACE)
@@ -1283,8 +992,8 @@ unwind_callback(struct _Unwind_Context* context, void* closure)
     return _URC_FOREIGN_EXCEPTION_CAUGHT;
   }
   if (--info->skip < 0) {
-    (*info->callback)(pc, nullptr, info->closure);
     info->numFrames++;
+    (*info->callback)(info->numFrames, pc, nullptr, info->closure);
     if (info->maxFrames != 0 && info->numFrames == info->maxFrames) {
       // Again, any error code that stops the walk will do.
       return _URC_FOREIGN_EXCEPTION_CAUGHT;
@@ -1293,7 +1002,7 @@ unwind_callback(struct _Unwind_Context* context, void* closure)
   return _URC_NO_REASON;
 }
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
              uint32_t aMaxFrames, void* aClosure, uintptr_t aThread,
              void* aPlatformData)
@@ -1327,7 +1036,7 @@ NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
 
 #endif
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
 {
   aDetails->library[0] = '\0';
@@ -1362,29 +1071,9 @@ NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
   return NS_OK;
 }
 
-EXPORT_XPCOM_API(nsresult)
-NS_FormatCodeAddressDetails(void* aPC, const nsCodeAddressDetails* aDetails,
-                            char* aBuffer, uint32_t aBufferSize)
-{
-  if (!aDetails->library[0]) {
-    snprintf(aBuffer, aBufferSize, "UNKNOWN %p\n", aPC);
-  } else if (!aDetails->function[0]) {
-    snprintf(aBuffer, aBufferSize, "UNKNOWN [%s +0x%08" PRIXPTR "]\n",
-             aDetails->library, aDetails->loffset);
-  } else {
-    snprintf(aBuffer, aBufferSize, "%s+0x%08" PRIXPTR
-             " [%s +0x%08" PRIXPTR "]\n",
-             aDetails->function, aDetails->foffset,
-             aDetails->library, aDetails->loffset);
-  }
-  return NS_OK;
-}
-
-#endif
-
 #else // unsupported platform.
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_StackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
              uint32_t aMaxFrames, void* aClosure, uintptr_t aThread,
              void* aPlatformData)
@@ -1403,7 +1092,7 @@ FramePointerStackWalk(NS_WalkStackCallback aCallback, uint32_t aSkipFrames,
 }
 }
 
-EXPORT_XPCOM_API(nsresult)
+XPCOM_API(nsresult)
 NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
 {
   aDetails->library[0] = '\0';
@@ -1415,12 +1104,43 @@ NS_DescribeCodeAddress(void* aPC, nsCodeAddressDetails* aDetails)
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
-EXPORT_XPCOM_API(nsresult)
-NS_FormatCodeAddressDetails(void* aPC, const nsCodeAddressDetails* aDetails,
-                            char* aBuffer, uint32_t aBufferSize)
+#endif
+
+XPCOM_API(void)
+NS_FormatCodeAddressDetails(char* aBuffer, uint32_t aBufferSize,
+                            uint32_t aFrameNumber, void* aPC,
+                            const nsCodeAddressDetails* aDetails)
 {
-  aBuffer[0] = '\0';
-  return NS_ERROR_NOT_IMPLEMENTED;
+  NS_FormatCodeAddress(aBuffer, aBufferSize,
+                       aFrameNumber, aPC, aDetails->function,
+                       aDetails->library, aDetails->loffset,
+                       aDetails->filename, aDetails->lineno);
 }
 
-#endif
+XPCOM_API(void)
+NS_FormatCodeAddress(char* aBuffer, uint32_t aBufferSize, uint32_t aFrameNumber,
+                     const void* aPC, const char* aFunction,
+                     const char* aLibrary, ptrdiff_t aLOffset,
+                     const char* aFileName, uint32_t aLineNo)
+{
+  const char* function = aFunction && aFunction[0] ? aFunction : "???";
+  if (aFileName && aFileName[0]) {
+    // We have a filename and (presumably) a line number. Use them.
+    snprintf(aBuffer, aBufferSize,
+             "#%02u: %s (%s:%u)",
+             aFrameNumber, function, aFileName, aLineNo);
+  } else if (aLibrary && aLibrary[0]) {
+    // We have no filename, but we do have a library name. Use it and the
+    // library offset, and print them in a way that scripts like
+    // fix_{linux,macosx}_stacks.py can easily post-process.
+    snprintf(aBuffer, aBufferSize,
+             "#%02u: %s[%s +0x%" PRIxPTR "]",
+             aFrameNumber, function, aLibrary, static_cast<uintptr_t>(aLOffset));
+  } else {
+    // We have nothing useful to go on. (The format string is split because
+    // '??)' is a trigraph and causes a warning, sigh.)
+    snprintf(aBuffer, aBufferSize,
+             "#%02u: ??? (???:???" ")",
+             aFrameNumber);
+  }
+}

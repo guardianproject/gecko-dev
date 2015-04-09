@@ -8,11 +8,14 @@
 #define mozilla_dom_bluetooth_bluetootha2dpmanager_h__
 
 #include "BluetoothCommon.h"
+#include "BluetoothInterface.h"
 #include "BluetoothProfileController.h"
 #include "BluetoothProfileManagerBase.h"
 
 BEGIN_BLUETOOTH_NAMESPACE
 class BluetoothA2dpManager : public BluetoothProfileManagerBase
+                           , public BluetoothA2dpNotificationHandler
+                           , public BluetoothAvrcpNotificationHandler
 {
 public:
   BT_DECL_PROFILE_MGR_BASE
@@ -32,7 +35,9 @@ public:
   static BluetoothA2dpManager* Get();
   static void InitA2dpInterface(BluetoothProfileResultHandler* aRes);
   static void DeinitA2dpInterface(BluetoothProfileResultHandler* aRes);
-  virtual ~BluetoothA2dpManager();
+
+  void OnConnectError();
+  void OnDisconnectError();
 
   // A2DP-specific functions
   void HandleSinkPropertyChanged(const BluetoothSignal& aSignal);
@@ -49,7 +54,7 @@ public:
   void UpdatePlayStatus(uint32_t aDuration,
                         uint32_t aPosition,
                         ControlPlayStatus aPlayStatus);
-  void UpdateRegisterNotification(int aEventId, int aParam);
+  void UpdateRegisterNotification(BluetoothAvrcpEvent aEvent, uint32_t aParam);
   void GetAlbum(nsAString& aAlbum);
   uint32_t GetDuration();
   ControlPlayStatus GetPlayStatus();
@@ -59,14 +64,65 @@ public:
   void GetTitle(nsAString& aTitle);
   void GetArtist(nsAString& aArtist);
 
+protected:
+  virtual ~BluetoothA2dpManager();
+
 private:
-  class SinkPropertyChangedHandler;
+  class CleanupA2dpResultHandler;
+  class CleanupA2dpResultHandlerRunnable;
+  class CleanupAvrcpResultHandler;
+  class ConnectResultHandler;
+  class DisconnectResultHandler;
+  class InitA2dpResultHandler;
+  class InitAvrcpResultHandler;
+  class OnErrorProfileResultHandlerRunnable;
+
   BluetoothA2dpManager();
   void ResetA2dp();
   void ResetAvrcp();
 
   void HandleShutdown();
   void NotifyConnectionStatusChanged();
+
+  void ConnectionStateNotification(BluetoothA2dpConnectionState aState,
+                                   const nsAString& aBdAddr) override;
+  void AudioStateNotification(BluetoothA2dpAudioState aState,
+                              const nsAString& aBdAddr) override;
+
+  void GetPlayStatusNotification() override;
+
+  void ListPlayerAppAttrNotification() override;
+
+  void ListPlayerAppValuesNotification(
+    BluetoothAvrcpPlayerAttribute aAttrId) override;
+
+  void GetPlayerAppValueNotification(
+    uint8_t aNumAttrs,
+    const BluetoothAvrcpPlayerAttribute* aAttrs) override;
+
+  void GetPlayerAppAttrsTextNotification(
+    uint8_t aNumAttrs,
+    const BluetoothAvrcpPlayerAttribute* aAttrs) override;
+
+  void GetPlayerAppValuesTextNotification(
+    uint8_t aAttrId, uint8_t aNumVals, const uint8_t* aValues) override;
+
+  void SetPlayerAppValueNotification(
+    const BluetoothAvrcpPlayerSettings& aSettings) override;
+
+  void GetElementAttrNotification(
+    uint8_t aNumAttrs,
+    const BluetoothAvrcpMediaAttribute* aAttrs) override;
+
+  void RegisterNotificationNotification(
+    BluetoothAvrcpEvent aEvent, uint32_t aParam) override;
+
+  void RemoteFeatureNotification(
+    const nsAString& aBdAddr, unsigned long aFeatures) override;
+
+  void VolumeChangeNotification(uint8_t aVolume, uint8_t aCType) override;
+
+  void PassthroughCmdNotification(int aId, int aKeyState) override;
 
   nsString mDeviceAddress;
   nsRefPtr<BluetoothProfileController> mController;
@@ -102,9 +158,10 @@ private:
    * mPlayPosChangedNotifType represents current RegisterNotification
    * notification type.
    */
-  int mPlayStatusChangedNotifyType;
-  int mTrackChangedNotifyType;
-  int mPlayPosChangedNotifyType;
+  BluetoothAvrcpNotification mPlayStatusChangedNotifyType;
+  BluetoothAvrcpNotification mTrackChangedNotifyType;
+  BluetoothAvrcpNotification mPlayPosChangedNotifyType;
+  BluetoothAvrcpNotification mAppSettingsChangedNotifyType;
 };
 
 END_BLUETOOTH_NAMESPACE

@@ -10,7 +10,7 @@
 #include "gfxPlatformFontList.h"
 
 using namespace mozilla;
-using mozilla::services::GetObserverService;
+using services::GetObserverService;
 
 void
 FontInfoData::Load()
@@ -31,11 +31,11 @@ class FontInfoLoadCompleteEvent : public nsRunnable {
 
     NS_DECL_ISUPPORTS_INHERITED
 
-    FontInfoLoadCompleteEvent(FontInfoData *aFontInfo) :
+    explicit FontInfoLoadCompleteEvent(FontInfoData *aFontInfo) :
         mFontInfo(aFontInfo)
     {}
 
-    NS_IMETHOD Run();
+    NS_IMETHOD Run() override;
 
     nsRefPtr<FontInfoData> mFontInfo;
 };
@@ -45,13 +45,13 @@ class AsyncFontInfoLoader : public nsRunnable {
 
     NS_DECL_ISUPPORTS_INHERITED
 
-    AsyncFontInfoLoader(FontInfoData *aFontInfo) :
+    explicit AsyncFontInfoLoader(FontInfoData *aFontInfo) :
         mFontInfo(aFontInfo)
     {
         mCompleteEvent = new FontInfoLoadCompleteEvent(aFontInfo);
     }
 
-    NS_IMETHOD Run();
+    NS_IMETHOD Run() override;
 
     nsRefPtr<FontInfoData> mFontInfo;
     nsRefPtr<FontInfoLoadCompleteEvent> mCompleteEvent;
@@ -211,6 +211,7 @@ gfxFontInfoLoader::LoadFontInfoTimerFire()
 gfxFontInfoLoader::~gfxFontInfoLoader()
 {
     RemoveShutdownObserver();
+    MOZ_COUNT_DTOR(gfxFontInfoLoader);
 }
 
 void

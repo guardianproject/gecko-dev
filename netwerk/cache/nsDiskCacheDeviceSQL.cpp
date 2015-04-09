@@ -91,10 +91,10 @@ DecomposeCacheEntryKey(const nsCString *fullKey,
 class AutoResetStatement
 {
   public:
-    AutoResetStatement(mozIStorageStatement *s)
+    explicit AutoResetStatement(mozIStorageStatement *s)
       : mStatement(s) {}
     ~AutoResetStatement() { mStatement->Reset(); }
-    mozIStorageStatement *operator->() { return mStatement; }
+    mozIStorageStatement *operator->() MOZ_NO_ADDREF_RELEASE_ON_RETURN { return mStatement; }
   private:
     mozIStorageStatement *mStatement;
 };
@@ -269,13 +269,13 @@ private:
  * nsOfflineCacheDeviceInfo
  */
 
-class nsOfflineCacheDeviceInfo MOZ_FINAL : public nsICacheDeviceInfo
+class nsOfflineCacheDeviceInfo final : public nsICacheDeviceInfo
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSICACHEDEVICEINFO
 
-  nsOfflineCacheDeviceInfo(nsOfflineCacheDevice* device)
+  explicit nsOfflineCacheDeviceInfo(nsOfflineCacheDevice* device)
     : mDevice(device)
   {}
 
@@ -347,7 +347,7 @@ nsOfflineCacheDeviceInfo::GetMaximumSize(uint32_t *aMaximumSize)
  * nsOfflineCacheBinding
  */
 
-class nsOfflineCacheBinding MOZ_FINAL : public nsISupports
+class nsOfflineCacheBinding final : public nsISupports
 {
   ~nsOfflineCacheBinding() {}
 
@@ -516,7 +516,7 @@ CreateCacheEntry(nsOfflineCacheDevice *device,
  * nsOfflineCacheEntryInfo
  */
 
-class nsOfflineCacheEntryInfo MOZ_FINAL : public nsICacheEntryInfo
+class nsOfflineCacheEntryInfo final : public nsICacheEntryInfo
 {
   ~nsOfflineCacheEntryInfo() {}
 
@@ -757,7 +757,7 @@ nsApplicationCache::Discard()
 
   mValid = false;
 
-  nsRefPtr<nsIRunnable> ev =
+  nsCOMPtr<nsIRunnable> ev =
     new nsOfflineCacheDiscardCache(mDevice, mGroup, mClientID);
   nsresult rv = nsCacheService::DispatchToCacheIOThread(ev);
   return rv;
@@ -861,7 +861,7 @@ nsApplicationCache::GetUsage(uint32_t *usage)
 
 class nsCloseDBEvent : public nsRunnable {
 public:
-  nsCloseDBEvent(mozIStorageConnection *aDB)
+  explicit nsCloseDBEvent(mozIStorageConnection *aDB)
   {
     mDB = aDB;
   }
@@ -893,8 +893,8 @@ nsOfflineCacheDevice::nsOfflineCacheDevice()
   , mDeltaCounter(0)
   , mAutoShutdown(false)
   , mLock("nsOfflineCacheDevice.lock")
-  , mActiveCaches(5)
-  , mLockedEntries(64)
+  , mActiveCaches(4)
+  , mLockedEntries(32)
 {
 }
 
@@ -966,7 +966,7 @@ nsOfflineCacheDevice::UpdateEntry(nsCacheEntry *entry)
 
   nsCString metaDataBuf;
   uint32_t mdSize = entry->MetaDataSize();
-  if (!metaDataBuf.SetLength(mdSize, fallible_t()))
+  if (!metaDataBuf.SetLength(mdSize, fallible))
     return NS_ERROR_OUT_OF_MEMORY;
   char *md = metaDataBuf.BeginWriting();
   entry->FlattenMetaData(md, mdSize);

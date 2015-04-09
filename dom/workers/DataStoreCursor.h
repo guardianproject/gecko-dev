@@ -22,20 +22,20 @@ namespace workers {
 
 class WorkerDataStore;
 
-class WorkerDataStoreCursor MOZ_FINAL
+class WorkerDataStoreCursor final
 {
 public:
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(WorkerDataStoreCursor)
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(WorkerDataStoreCursor)
 
-  WorkerDataStoreCursor(WorkerDataStore* aWorkerStore);
+  explicit WorkerDataStoreCursor(WorkerDataStore* aWorkerStore);
 
   // WebIDL (internal functions)
 
   static already_AddRefed<WorkerDataStoreCursor> Constructor(GlobalObject& aGlobal,
                                                              ErrorResult& aRv);
 
-  JSObject* WrapObject(JSContext *aCx);
+  bool WrapObject(JSContext *aCx, JS::Handle<JSObject*> aGivenProto, JS::MutableHandle<JSObject*> aReflector);
 
   // WebIDL (public APIs)
 
@@ -44,9 +44,6 @@ public:
   already_AddRefed<Promise> Next(JSContext *aCx, ErrorResult& aRv);
 
   void Close(JSContext *aCx, ErrorResult& aRv);
-
-  // We don't use this for the WorkerDataStore.
-  void SetDataStoreCursorImpl(DataStoreCursorImpl& aCursor);
 
   void SetBackingDataStoreCursor(
     const nsMainThreadPtrHandle<DataStoreCursor>& aBackingCursor);

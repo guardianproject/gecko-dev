@@ -677,9 +677,10 @@ nsCSSSelector::AppendToStringWithoutCombinatorsOrNegations
         // XXXldb Why?
         aString.Append(char16_t('*'));
       }
-      if (!nsCSSPseudoElements::IsCSS2PseudoElement(mLowercaseTag)) {
-        aString.Append(char16_t(':'));
-      }
+      // While our atoms use one colon, most pseudo-elements require two
+      // colons (those not in CSS level 2) and all pseudo-elements allow
+      // two colons. So serialize to the non-deprecated two colon syntax.
+      aString.Append(char16_t(':'));
       // This should not be escaped since (a) the pseudo-element string
       // has a ":" that can't be escaped and (b) all pseudo-elements at
       // this point are known, and therefore we know they don't need
@@ -705,8 +706,8 @@ nsCSSSelector::AppendToStringWithoutCombinatorsOrNegations
   if (mClassList) {
     if (isPseudoElement) {
 #ifdef MOZ_XUL
-      NS_ABORT_IF_FALSE(nsCSSAnonBoxes::IsTreePseudoElement(mLowercaseTag),
-                        "must be tree pseudo-element");
+      MOZ_ASSERT(nsCSSAnonBoxes::IsTreePseudoElement(mLowercaseTag),
+                 "must be tree pseudo-element");
 
       aString.Append(char16_t('('));
       for (nsAtomList* list = mClassList; list; list = list->mNext) {
@@ -895,6 +896,21 @@ nsCSSSelectorList::AddSelector(char16_t aOperator)
 }
 
 void
+nsCSSSelectorList::RemoveRightmostSelector()
+{
+  nsCSSSelector* current = mSelectors;
+  mSelectors = mSelectors->mNext;
+  MOZ_ASSERT(mSelectors,
+             "Rightmost selector has been removed, but now "
+             "mSelectors is null");
+  mSelectors->SetOperator(char16_t(0));
+
+  // Make sure that deleting current won't delete the whole list.
+  current->mNext = nullptr;
+  delete current;
+}
+
+void
 nsCSSSelectorList::ToString(nsAString& aResult, CSSStyleSheet* aSheet)
 {
   aResult.Truncate();
@@ -962,10 +978,13 @@ ImportantRule::MapRuleInfoInto(nsRuleData* aRuleData)
 ImportantRule::List(FILE* out, int32_t aIndent) const
 {
   // Indent
-  for (int32_t index = aIndent; --index >= 0; ) fputs("  ", out);
+  nsAutoCString str;
+  for (int32_t index = aIndent; --index >= 0; ) {
+    str.AppendLiteral("  ");
+  }
 
-  fprintf(out, "! Important declaration=%p\n",
-          static_cast<void*>(mDeclaration));
+  str.AppendLiteral("! important rule\n");
+  fprintf_stderr(out, "%s", str.get());
 }
 #endif
 
@@ -986,21 +1005,21 @@ protected:
   virtual ~DOMCSSDeclarationImpl(void);
 
 public:
-  DOMCSSDeclarationImpl(css::StyleRule *aRule);
+  explicit DOMCSSDeclarationImpl(css::StyleRule *aRule);
 
-  NS_IMETHOD GetParentRule(nsIDOMCSSRule **aParent) MOZ_OVERRIDE;
+  NS_IMETHOD GetParentRule(nsIDOMCSSRule **aParent) override;
   void DropReference(void);
-  virtual css::Declaration* GetCSSDeclaration(bool aAllocate) MOZ_OVERRIDE;
-  virtual nsresult SetCSSDeclaration(css::Declaration* aDecl) MOZ_OVERRIDE;
-  virtual void GetCSSParsingEnvironment(CSSParsingEnvironment& aCSSParseEnv) MOZ_OVERRIDE;
-  virtual nsIDocument* DocToUpdate() MOZ_OVERRIDE;
+  virtual css::Declaration* GetCSSDeclaration(bool aAllocate) override;
+  virtual nsresult SetCSSDeclaration(css::Declaration* aDecl) override;
+  virtual void GetCSSParsingEnvironment(CSSParsingEnvironment& aCSSParseEnv) override;
+  virtual nsIDocument* DocToUpdate() override;
 
   // Override |AddRef| and |Release| for being a member of
   // |DOMCSSStyleRule|.  Also, we need to forward QI for cycle
   // collection things to DOMCSSStyleRule.
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual nsINode *GetParentObject() MOZ_OVERRIDE
+  virtual nsINode *GetParentObject() override
   {
     return mRule ? mRule->GetDocument() : nullptr;
   }
@@ -1027,7 +1046,7 @@ namespace css {
 class DOMCSSStyleRule : public nsICSSStyleRuleDOMWrapper
 {
 public:
-  DOMCSSStyleRule(StyleRule *aRule);
+  explicit DOMCSSStyleRule(StyleRule *aRule);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(DOMCSSStyleRule)
@@ -1035,7 +1054,7 @@ public:
   NS_DECL_NSIDOMCSSSTYLERULE
 
   // nsICSSStyleRuleDOMWrapper
-  NS_IMETHOD GetCSSStyleRule(StyleRule **aResult);
+  NS_IMETHOD GetCSSStyleRule(StyleRule **aResult) override;
 
   DOMCSSDeclarationImpl* DOMDeclaration() { return &mDOMDeclaration; }
 
@@ -1160,9 +1179,6 @@ DOMCSSDeclarationImpl::DocToUpdate()
 {
   return nullptr;
 }
-
-// needs to be outside the namespace
-DOMCI_DATA(CSSStyleRule, css::DOMCSSStyleRule)
 
 namespace mozilla {
 namespace css {
@@ -1380,7 +1396,7 @@ void
 StyleRule::RuleMatched()
 {
   if (!mWasMatched) {
-    NS_ABORT_IF_FALSE(!mImportantRule, "should not have important rule yet");
+    MOZ_ASSERT(!mImportantRule, "should not have important rule yet");
 
     mWasMatched = true;
     mDeclaration->SetImmutable();
@@ -1449,8 +1465,8 @@ StyleRule::DeclarationChanged(Declaration* aDecl,
 /* virtual */ void
 StyleRule::MapRuleInfoInto(nsRuleData* aRuleData)
 {
-  NS_ABORT_IF_FALSE(mWasMatched,
-                    "somebody forgot to call css::StyleRule::RuleMatched");
+  MOZ_ASSERT(mWasMatched,
+             "somebody forgot to call css::StyleRule::RuleMatched");
   mDeclaration->MapNormalRuleInfoInto(aRuleData);
 }
 
@@ -1458,22 +1474,44 @@ StyleRule::MapRuleInfoInto(nsRuleData* aRuleData)
 /* virtual */ void
 StyleRule::List(FILE* out, int32_t aIndent) const
 {
+  nsAutoCString str;
   // Indent
-  for (int32_t index = aIndent; --index >= 0; ) fputs("  ", out);
+  for (int32_t index = aIndent; --index >= 0; ) {
+    str.AppendLiteral("  ");
+  }
 
-  nsAutoString buffer;
-  if (mSelector)
+  if (mSelector) {
+    nsAutoString buffer;
     mSelector->ToString(buffer, GetStyleSheet());
+    AppendUTF16toUTF8(buffer, str);
+    str.Append(' ');
+  }
 
-  buffer.Append(' ');
-  fputs(NS_LossyConvertUTF16toASCII(buffer).get(), out);
   if (nullptr != mDeclaration) {
-    mDeclaration->List(out);
+    nsAutoString buffer;
+    str.AppendLiteral("{ ");
+    mDeclaration->ToString(buffer);
+    AppendUTF16toUTF8(buffer, str);
+    str.Append('}');
+    CSSStyleSheet* sheet = GetStyleSheet();
+    if (sheet) {
+      nsIURI* uri = sheet->GetSheetURI();
+      if (uri) {
+        nsAutoCString uristr;
+        str.Append(" /* ");
+        uri->GetSpec(uristr);
+        str.Append(uristr);
+        str.Append(':');
+        str.AppendInt(mLineNumber);
+        str.Append(" */");
+      }
+    }
   }
   else {
-    fputs("{ null declaration }", out);
+    str.AppendLiteral("{ null declaration }");
   }
-  fputs("\n", out);
+  str.Append('\n');
+  fprintf_stderr(out, "%s", str.get());
 }
 #endif
 

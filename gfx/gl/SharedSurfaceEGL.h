@@ -22,11 +22,11 @@ class SharedSurface_EGLImage
     : public SharedSurface
 {
 public:
-    static SharedSurface_EGLImage* Create(GLContext* prodGL,
-                                          const GLFormats& formats,
-                                          const gfx::IntSize& size,
-                                          bool hasAlpha,
-                                          EGLContext context);
+    static UniquePtr<SharedSurface_EGLImage> Create(GLContext* prodGL,
+                                                    const GLFormats& formats,
+                                                    const gfx::IntSize& size,
+                                                    bool hasAlpha,
+                                                    EGLContext context);
 
     static SharedSurface_EGLImage* Cast(SharedSurface* surf) {
         MOZ_ASSERT(surf->mType == SharedSurfaceType::EGLImageShare);
@@ -41,7 +41,9 @@ protected:
     GLLibraryEGL* const mEGL;
     const GLFormats mFormats;
     GLuint mProdTex;
-    EGLImage mImage;
+public:
+    const EGLImage mImage;
+protected:
     GLContext* mCurConsGL;
     GLuint mConsTex;
     nsRefPtr<TextureGarbageBin> mGarbageBin;
@@ -61,14 +63,14 @@ protected:
 public:
     virtual ~SharedSurface_EGLImage();
 
-    virtual void LockProdImpl() MOZ_OVERRIDE {}
-    virtual void UnlockProdImpl() MOZ_OVERRIDE {}
+    virtual void LockProdImpl() override {}
+    virtual void UnlockProdImpl() override {}
 
+    virtual void Fence() override;
+    virtual bool WaitSync() override;
+    virtual bool PollSync() override;
 
-    virtual void Fence() MOZ_OVERRIDE;
-    virtual bool WaitSync() MOZ_OVERRIDE;
-
-    virtual GLuint ProdTexture() MOZ_OVERRIDE {
+    virtual GLuint ProdTexture() override {
       return mProdTex;
     }
 
@@ -84,8 +86,8 @@ class SurfaceFactory_EGLImage
 {
 public:
     // Fallible:
-    static SurfaceFactory_EGLImage* Create(GLContext* prodGL,
-                                           const SurfaceCaps& caps);
+    static UniquePtr<SurfaceFactory_EGLImage> Create(GLContext* prodGL,
+                                                     const SurfaceCaps& caps);
 
 protected:
     const EGLContext mContext;
@@ -98,7 +100,7 @@ protected:
     {}
 
 public:
-    virtual SharedSurface* CreateShared(const gfx::IntSize& size) MOZ_OVERRIDE {
+    virtual UniquePtr<SharedSurface> CreateShared(const gfx::IntSize& size) override {
         bool hasAlpha = mReadCaps.alpha;
         return SharedSurface_EGLImage::Create(mGL, mFormats, size, hasAlpha, mContext);
     }

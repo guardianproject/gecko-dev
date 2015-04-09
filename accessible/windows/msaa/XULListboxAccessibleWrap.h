@@ -21,6 +21,8 @@ namespace a11y {
 class XULListboxAccessibleWrap : public XULListboxAccessible,
                                  public ia2AccessibleTable
 {
+  ~XULListboxAccessibleWrap() {}
+
 public:
   XULListboxAccessibleWrap(nsIContent* aContent, DocAccessible* aDoc) :
     XULListboxAccessible(aContent, aDoc), ia2AccessibleTable(this) {}
@@ -31,7 +33,7 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual void Shutdown() MOZ_OVERRIDE;
+  virtual void Shutdown() override;
 };
 
 /**
@@ -41,6 +43,8 @@ public:
 class XULListCellAccessibleWrap : public XULListCellAccessible,
                                   public ia2AccessibleTableCell
 {
+  ~XULListCellAccessibleWrap() {}
+
 public:
   XULListCellAccessibleWrap(nsIContent* aContent, DocAccessible* aDoc) :
     XULListCellAccessible(aContent, aDoc), ia2AccessibleTableCell(this) {}
@@ -51,7 +55,7 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual void Shutdown() MOZ_OVERRIDE;
+  virtual void Shutdown() override;
 };
 
 } // namespace a11y

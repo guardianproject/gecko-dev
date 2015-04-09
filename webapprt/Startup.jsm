@@ -147,6 +147,7 @@ this.startup = function(window) {
     Cu.import("resource://gre/modules/Payment.jsm");
     Cu.import("resource://gre/modules/AlarmService.jsm");
     Cu.import("resource://webapprt/modules/WebRTCHandler.jsm");
+    Cu.import("resource://webapprt/modules/DownloadView.jsm");
 
     // Get the <browser> element in the webapp.xul window.
     let appBrowser = window.document.getElementById("content");

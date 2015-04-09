@@ -67,7 +67,6 @@ MessageChannel::MessageChannel(nsPIDOMWindow* aWindow)
   : mWindow(aWindow)
 {
   MOZ_COUNT_CTOR(MessageChannel);
-  SetIsDOMBinding();
 
   mPort1 = new MessagePort(mWindow);
   mPort2 = new MessagePort(mWindow);
@@ -82,9 +81,9 @@ MessageChannel::~MessageChannel()
 }
 
 JSObject*
-MessageChannel::WrapObject(JSContext* aCx)
+MessageChannel::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MessageChannelBinding::Wrap(aCx, this);
+  return MessageChannelBinding::Wrap(aCx, this, aGivenProto);
 }
 
 /* static */ already_AddRefed<MessageChannel>

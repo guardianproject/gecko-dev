@@ -56,13 +56,14 @@ let runTest = Task.async(function*() {
     yield setMacRootInstallDir(OS.Path.join(OS.Constants.Path.homeDir, "Applications"));
   }
 
-  confirmNextInstall();
+  confirmNextPopup();
 
   yield setState("Version", 1);
 
   let request = navigator.mozApps.install(app.manifestURL);
 
-  let (deferred = Promise.defer()) {
+  {
+    let deferred = Promise.defer();
     request.onerror = function() {
       deferred.reject(this.error.name);
     };

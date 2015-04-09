@@ -16,7 +16,7 @@ dnl = Defaults
 dnl ========================================================
 MOD_MAJOR_VERSION=4
 MOD_MINOR_VERSION=10
-MOD_PATCH_VERSION=7
+MOD_PATCH_VERSION=8
 NSPR_MODNAME=nspr20
 _HAVE_PTHREADS=
 USE_PTHREADS=
@@ -388,6 +388,12 @@ AC_ARG_ENABLE(debug-rtl,
 	    USE_DEBUG_RTL=1
       else
 	    USE_DEBUG_RTL=0
+      fi ])
+
+AC_ARG_ENABLE(static-rtl,
+    [  --enable-static-rtl     Use the MSVC static runtime library],
+    [ if test "$enableval" = "yes"; then
+	    USE_STATIC_RTL=1
       fi ])
 
 AC_ARG_ENABLE(n32,
@@ -2004,9 +2010,17 @@ tools are selected during the Xcode/Developer Tools installation.])
         fi
 
         if test "$USE_DEBUG_RTL" = 1; then
-            CFLAGS="$CFLAGS -MDd"
+            if test -n "$USE_STATIC_RTL"; then
+                CFLAGS="$CFLAGS -MTd"
+            else
+                CFLAGS="$CFLAGS -MDd"
+            fi
         else
-            CFLAGS="$CFLAGS -MD"
+            if test -n "$USE_STATIC_RTL"; then
+                CFLAGS="$CFLAGS -MT"
+            else
+                CFLAGS="$CFLAGS -MD"
+            fi
         fi
 
         if test -n "$MOZ_DEBUG"; then
@@ -2081,6 +2095,11 @@ tools are selected during the Xcode/Developer Tools installation.])
 	    AC_DEFINE(_AMD64_)
 	else		
 	    AC_DEFINE(_X86_)
+            if test -z "$GNU_CC" -a "$MSC_VER" -ge "1700"; then
+                dnl Visual C++ 2012 defaults to -arch:SSE2. Use -arch:IA32
+                dnl to avoid requiring SSE2.
+                CFLAGS="$CFLAGS -arch:IA32"
+            fi
 	fi
         ;;
     x86_64)
@@ -2159,7 +2178,7 @@ tools are selected during the Xcode/Developer Tools installation.])
     if test -z "$USE_NSPR_THREADS"; then
         USE_PTHREADS=1
     fi
-    DSO_LDOPTS='-shared -fPIC'
+    DSO_LDOPTS='-shared -fPIC -Wl,-soname,$(notdir $@)'
     MKSHLIB='$(CC) $(DSO_LDOPTS) -o $@'
     ;;
 

@@ -21,26 +21,24 @@ class XULSliderAccessible : public AccessibleWrap
 public:
   XULSliderAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  // nsIAccessible
-  NS_IMETHOD GetActionName(uint8_t aIndex, nsAString& aName);
-  NS_IMETHOD DoAction(uint8_t aIndex);
-
   // Accessible
-  virtual void Value(nsString& aValue);
-  virtual a11y::role NativeRole();
-  virtual uint64_t NativeInteractiveState() const;
-  virtual bool NativelyUnavailable() const;
-  virtual bool CanHaveAnonChildren();
+  virtual void Value(nsString& aValue) override;
+  virtual a11y::role NativeRole() override;
+  virtual uint64_t NativeInteractiveState() const override;
+  virtual bool NativelyUnavailable() const override;
+  virtual bool CanHaveAnonChildren() override;
 
   // Value
-  virtual double MaxValue() const MOZ_OVERRIDE;
-  virtual double MinValue() const MOZ_OVERRIDE;
-  virtual double CurValue() const MOZ_OVERRIDE;
-  virtual double Step() const MOZ_OVERRIDE;
-  virtual bool SetCurValue(double aValue) MOZ_OVERRIDE;
+  virtual double MaxValue() const override;
+  virtual double MinValue() const override;
+  virtual double CurValue() const override;
+  virtual double Step() const override;
+  virtual bool SetCurValue(double aValue) override;
 
   // ActionAccessible
-  virtual uint8_t ActionCount();
+  virtual uint8_t ActionCount() override;
+  virtual void ActionNameAt(uint8_t aIndex, nsAString& aName) override;
+  virtual bool DoAction(uint8_t aIndex) override;
 
 protected:
   /**
@@ -68,7 +66,7 @@ public:
   XULThumbAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
   // Accessible
-  virtual a11y::role NativeRole();
+  virtual a11y::role NativeRole() override;
 };
 
 } // namespace a11y

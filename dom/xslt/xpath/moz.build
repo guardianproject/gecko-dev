@@ -11,7 +11,6 @@ EXPORTS.mozilla.dom += [
 ]
 
 UNIFIED_SOURCES += [
-    'nsXPathNSResolver.cpp',
     'txBooleanExpr.cpp',
     'txBooleanResult.cpp',
     'txCoreFunctionCall.cpp',
@@ -59,4 +58,4 @@ LOCAL_INCLUDES += [
     '../xslt',
 ]
 
-FINAL_LIBRARY = 'gklayout'
+FINAL_LIBRARY = 'xul'

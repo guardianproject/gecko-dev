@@ -104,6 +104,13 @@ let CommandUtils = {
         if (command == null) {
           throw new Error("No command '" + typed + "'");
         }
+
+        // Do not build a button for a non-remote safe command in a non-local target.
+        if (!target.isLocalTab && !command.isRemoteSafe) {
+          requisition.clear();
+          return;
+        }
+
         if (command.buttonId != null) {
           button.id = command.buttonId;
           if (command.buttonClass != null) {
@@ -166,7 +173,9 @@ let CommandUtils = {
           command.state.onChange(target, onChange);
           onChange("", { target: target });
           document.defaultView.addEventListener("unload", () => {
-            command.state.offChange(target, onChange);
+            if (command.state.offChange) {
+              command.state.offChange(target, onChange);
+            }
           }, false);
         }
 
@@ -184,13 +193,15 @@ let CommandUtils = {
    * reflects the current debug target
    */
   createEnvironment: function(container, targetProperty='target') {
-    if (container[targetProperty].supports == null) {
+    if (!container[targetProperty].toString ||
+        !/TabTarget/.test(container[targetProperty].toString())) {
       throw new Error('Missing target');
     }
 
     return {
       get target() {
-        if (container[targetProperty].supports == null) {
+        if (!container[targetProperty].toString ||
+            !/TabTarget/.test(container[targetProperty].toString())) {
           throw new Error('Removed target');
         }
 
@@ -206,7 +217,7 @@ let CommandUtils = {
       },
 
       get window() {
-        return this.chromeWindow.getBrowser().selectedTab.linkedBrowser.contentWindow;
+        return this.chromeWindow.gBrowser.selectedBrowser.contentWindow;
       },
 
       get document() {
@@ -285,7 +296,7 @@ DeveloperToolbar.prototype.NOTIFICATIONS = NOTIFICATIONS;
  */
 Object.defineProperty(DeveloperToolbar.prototype, "target", {
   get: function() {
-    return TargetFactory.forTab(this._chromeWindow.getBrowser().selectedTab);
+    return TargetFactory.forTab(this._chromeWindow.gBrowser.selectedTab);
   },
   enumerable: true
 });
@@ -399,7 +410,7 @@ DeveloperToolbar.prototype.show = function(focus) {
 
       return gcli.load().then(() => {
         this.display = gcli.createDisplay({
-          contentDocument: this._chromeWindow.getBrowser().contentDocument,
+          contentDocument: this._chromeWindow.gBrowser.contentDocumentAsCPOW,
           chromeDocument: this._doc,
           chromeWindow: this._chromeWindow,
           hintElement: this.tooltipPanel.hintElement,
@@ -422,7 +433,7 @@ DeveloperToolbar.prototype.show = function(focus) {
                                             this.tooltipPanel);
         this.display.onOutput.add(this.outputPanel._outputChanged, this.outputPanel);
 
-        let tabbrowser = this._chromeWindow.getBrowser();
+        let tabbrowser = this._chromeWindow.gBrowser;
         tabbrowser.tabContainer.addEventListener("TabSelect", this, false);
         tabbrowser.tabContainer.addEventListener("TabClose", this, false);
         tabbrowser.addEventListener("load", this, true);
@@ -489,7 +500,7 @@ DeveloperToolbar.prototype.hide = function() {
  * @private
  */
 DeveloperToolbar.prototype._devtoolsUnloaded = function() {
-  let tabbrowser = this._chromeWindow.getBrowser();
+  let tabbrowser = this._chromeWindow.gBrowser;
   Array.prototype.forEach.call(tabbrowser.tabs, this._stopErrorsCount, this);
 };
 
@@ -498,7 +509,7 @@ DeveloperToolbar.prototype._devtoolsUnloaded = function() {
  * @private
  */
 DeveloperToolbar.prototype._devtoolsLoaded = function() {
-  let tabbrowser = this._chromeWindow.getBrowser();
+  let tabbrowser = this._chromeWindow.gBrowser;
   this._initErrorsCount(tabbrowser.selectedTab);
 };
 
@@ -564,7 +575,7 @@ DeveloperToolbar.prototype.destroy = function() {
     return; // Already destroyed
   }
 
-  let tabbrowser = this._chromeWindow.getBrowser();
+  let tabbrowser = this._chromeWindow.gBrowser;
   tabbrowser.tabContainer.removeEventListener("TabSelect", this, false);
   tabbrowser.tabContainer.removeEventListener("TabClose", this, false);
   tabbrowser.removeEventListener("load", this, true);
@@ -613,7 +624,7 @@ DeveloperToolbar.prototype.handleEvent = function(ev) {
   if (ev.type == "TabSelect" || ev.type == "load") {
     if (this.visible) {
       this.display.reattach({
-        contentDocument: this._chromeWindow.getBrowser().contentDocument
+        contentDocument: this._chromeWindow.gBrowser.contentDocumentAsCPOW
       });
 
       if (ev.type == "TabSelect") {
@@ -665,7 +676,7 @@ DeveloperToolbar.prototype._onPageBeforeUnload = function(ev) {
     return;
   }
 
-  let tabs = this._chromeWindow.getBrowser().tabs;
+  let tabs = this._chromeWindow.gBrowser.tabs;
   Array.prototype.some.call(tabs, function(tab) {
     if (tab.linkedBrowser.contentWindow === window) {
       let tabId = tab.linkedPanel;
@@ -690,7 +701,7 @@ DeveloperToolbar.prototype._onPageBeforeUnload = function(ev) {
  * selected tab, then the button is not updated.
  */
 DeveloperToolbar.prototype._updateErrorsCount = function(changedTabId) {
-  let tabId = this._chromeWindow.getBrowser().selectedTab.linkedPanel;
+  let tabId = this._chromeWindow.gBrowser.selectedTab.linkedPanel;
   if (changedTabId && tabId != changedTabId) {
     return;
   }

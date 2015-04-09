@@ -35,13 +35,13 @@ public:
 protected:
   nsArrayBase() {}
   nsArrayBase(const nsArrayBase& aOther);
-  nsArrayBase(const nsCOMArray_base& aBaseArray) : mArray(aBaseArray) {}
+  explicit nsArrayBase(const nsCOMArray_base& aBaseArray) : mArray(aBaseArray) {}
   virtual ~nsArrayBase();
 
   nsCOMArray_base mArray;
 };
 
-class nsArray MOZ_FINAL : public nsArrayBase
+class nsArray final : public nsArrayBase
 {
   friend class nsArrayBase;
 
@@ -51,11 +51,11 @@ public:
 private:
   nsArray() : nsArrayBase() {}
   nsArray(const nsArray& aOther);
-  nsArray(const nsCOMArray_base& aBaseArray) : nsArrayBase(aBaseArray) {}
+  explicit nsArray(const nsCOMArray_base& aBaseArray) : nsArrayBase(aBaseArray) {}
   ~nsArray() {}
 };
 
-class nsArrayCC MOZ_FINAL : public nsArrayBase
+class nsArrayCC final : public nsArrayBase
 {
   friend class nsArrayBase;
 
@@ -66,7 +66,7 @@ public:
 private:
   nsArrayCC() : nsArrayBase() {}
   nsArrayCC(const nsArrayCC& aOther);
-  nsArrayCC(const nsCOMArray_base& aBaseArray) : nsArrayBase(aBaseArray) {}
+  explicit nsArrayCC(const nsCOMArray_base& aBaseArray) : nsArrayBase(aBaseArray) {}
   ~nsArrayCC() {}
 };
 

@@ -22,12 +22,12 @@
 
 #include "nsXPCOM.h"
 
-class NS_COM_GLUE nsCategoryObserver MOZ_FINAL : public nsIObserver
+class nsCategoryObserver final : public nsIObserver
 {
   ~nsCategoryObserver();
 
 public:
-  nsCategoryObserver(const char* aCategory);
+  explicit nsCategoryObserver(const char* aCategory);
 
   void ListenerDied();
   nsInterfaceHashtable<nsCStringHashKey, nsISupports>& GetHash()
@@ -53,7 +53,7 @@ private:
  * then get the name of the category.
  */
 template<class T>
-class nsCategoryCache MOZ_FINAL
+class nsCategoryCache final
 {
 public:
   explicit nsCategoryCache(const char* aCategory)

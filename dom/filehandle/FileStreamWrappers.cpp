@@ -8,7 +8,9 @@
 
 #include "FileHelper.h"
 #include "MainThreadUtils.h"
+#include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/ipc/InputStreamParams.h"
 #include "MutableFile.h"
 #include "nsDebug.h"
 #include "nsError.h"
@@ -16,12 +18,16 @@
 #include "nsISeekableStream.h"
 #include "nsThreadUtils.h"
 
+#ifdef DEBUG
+#include "nsXULAppAPI.h"
+#endif
+
 namespace mozilla {
 namespace dom {
 
 namespace {
 
-class ProgressRunnable MOZ_FINAL : public nsIRunnable
+class ProgressRunnable final : public nsIRunnable
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -44,13 +50,13 @@ private:
   uint64_t mProgressMax;
 };
 
-class CloseRunnable MOZ_FINAL : public nsIRunnable
+class CloseRunnable final : public nsIRunnable
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIRUNNABLE
 
-  CloseRunnable(FileHelper* aFileHelper)
+  explicit CloseRunnable(FileHelper* aFileHelper)
   : mFileHelper(aFileHelper)
   { }
 
@@ -60,13 +66,13 @@ private:
   nsRefPtr<FileHelper> mFileHelper;
 };
 
-class DestroyRunnable MOZ_FINAL : public nsIRunnable
+class DestroyRunnable final : public nsIRunnable
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIRUNNABLE
 
-  DestroyRunnable(FileHelper* aFileHelper)
+  explicit DestroyRunnable(FileHelper* aFileHelper)
   : mFileHelper(aFileHelper)
   { }
 
@@ -127,7 +133,8 @@ FileInputStreamWrapper::FileInputStreamWrapper(nsISupports* aFileStream,
 
 NS_IMPL_ISUPPORTS_INHERITED(FileInputStreamWrapper,
                             FileStreamWrapper,
-                            nsIInputStream)
+                            nsIInputStream,
+                            nsIIPCSerializableInputStream)
 
 NS_IMETHODIMP
 FileInputStreamWrapper::Close()
@@ -230,15 +237,32 @@ FileInputStreamWrapper::IsNonBlocking(bool* _retval)
   return NS_OK;
 }
 
+void
+FileInputStreamWrapper::Serialize(InputStreamParams& aParams,
+                                  FileDescriptorArray& /* aFDs */)
+{
+  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsCOMPtr<nsIInputStream> thisStream = do_QueryObject(this);
+
+  aParams = mozilla::ipc::SameProcessInputStreamParams(
+    reinterpret_cast<intptr_t>(thisStream.forget().take()));
+}
+
+bool
+FileInputStreamWrapper::Deserialize(const InputStreamParams& /* aParams */,
+                                    const FileDescriptorArray& /* aFDs */)
+{
+  MOZ_CRASH("Should never get here!");
+}
+
 FileOutputStreamWrapper::FileOutputStreamWrapper(nsISupports* aFileStream,
                                                  FileHelper* aFileHelper,
                                                  uint64_t aOffset,
                                                  uint64_t aLimit,
                                                  uint32_t aFlags)
 : FileStreamWrapper(aFileStream, aFileHelper, aOffset, aLimit, aFlags)
-#ifdef DEBUG
-, mWriteThread(nullptr)
-#endif
 {
   mOutputStream = do_QueryInterface(mFileStream);
   NS_ASSERTION(mOutputStream, "This should always succeed!");
@@ -254,12 +278,6 @@ FileOutputStreamWrapper::Close()
   NS_ASSERTION(!NS_IsMainThread(), "Wrong thread!");
 
   nsresult rv = NS_OK;
-
-  if (!mFirstTime) {
-    NS_ASSERTION(PR_GetCurrentThread() == mWriteThread,
-                 "Unsetting thread locals on wrong thread!");
-    mFileHelper->mMutableFile->UnsetThreadLocals();
-  }
 
   if (mFlags & NOTIFY_CLOSE) {
     nsCOMPtr<nsIRunnable> runnable = new CloseRunnable(mFileHelper);
@@ -285,11 +303,6 @@ FileOutputStreamWrapper::Write(const char* aBuf, uint32_t aCount,
 
   if (mFirstTime) {
     mFirstTime = false;
-
-#ifdef DEBUG
-    mWriteThread = PR_GetCurrentThread();
-#endif
-    mFileHelper->mMutableFile->SetThreadLocals();
 
     nsCOMPtr<nsISeekableStream> seekable = do_QueryInterface(mOutputStream);
     if (seekable) {

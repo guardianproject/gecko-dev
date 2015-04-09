@@ -11,8 +11,9 @@
 
 #include "nsAutoPtr.h"
 
-#include "nsIIccProvider.h"
-#include "nsIMobileConnectionProvider.h"
+#include "nsIIccService.h"
+#include "nsIMobileConnectionService.h"
+#include "nsITelephonyCallInfo.h"
 #include "nsITelephonyService.h"
 
 BEGIN_BLUETOOTH_NAMESPACE
@@ -61,6 +62,9 @@ public:
   virtual ~TelephonyListener() { }
 
   bool Listen(bool aStart);
+
+private:
+  nsresult HandleCallInfo(nsITelephonyCallInfo* aInfo, bool aSend);
 };
 
 class BluetoothRilListener

@@ -17,10 +17,9 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/WindowsVersion.h"
+#include "nsIContentPolicy.h"
+#include "nsContentUtils.h"
 
-#ifdef MOZ_LOGGING
-#define FORCE_PR_LOG /* Allow logging in the release build */
-#endif // MOZ_LOGGING
 #include "prlog.h"
 
 #include "nsString.h"
@@ -60,8 +59,347 @@ using namespace mozilla::gfx;
 namespace mozilla {
 namespace widget {
 
-NS_IMPL_ISUPPORTS(myDownloadObserver, nsIDownloadObserver)
+#define ENTRY(_msg) { #_msg, _msg }
+EventMsgInfo gAllEvents[] = {
+  ENTRY(WM_NULL),
+  ENTRY(WM_CREATE),
+  ENTRY(WM_DESTROY),
+  ENTRY(WM_MOVE),
+  ENTRY(WM_SIZE),
+  ENTRY(WM_ACTIVATE),
+  ENTRY(WM_SETFOCUS),
+  ENTRY(WM_KILLFOCUS),
+  ENTRY(WM_ENABLE),
+  ENTRY(WM_SETREDRAW),
+  ENTRY(WM_SETTEXT),
+  ENTRY(WM_GETTEXT),
+  ENTRY(WM_GETTEXTLENGTH),
+  ENTRY(WM_PAINT),
+  ENTRY(WM_CLOSE),
+  ENTRY(WM_QUERYENDSESSION),
+  ENTRY(WM_QUIT),
+  ENTRY(WM_QUERYOPEN),
+  ENTRY(WM_ERASEBKGND),
+  ENTRY(WM_SYSCOLORCHANGE),
+  ENTRY(WM_ENDSESSION),
+  ENTRY(WM_SHOWWINDOW),
+  ENTRY(WM_SETTINGCHANGE),
+  ENTRY(WM_DEVMODECHANGE),
+  ENTRY(WM_ACTIVATEAPP),
+  ENTRY(WM_FONTCHANGE),
+  ENTRY(WM_TIMECHANGE),
+  ENTRY(WM_CANCELMODE),
+  ENTRY(WM_SETCURSOR),
+  ENTRY(WM_MOUSEACTIVATE),
+  ENTRY(WM_CHILDACTIVATE),
+  ENTRY(WM_QUEUESYNC),
+  ENTRY(WM_GETMINMAXINFO),
+  ENTRY(WM_PAINTICON),
+  ENTRY(WM_ICONERASEBKGND),
+  ENTRY(WM_NEXTDLGCTL),
+  ENTRY(WM_SPOOLERSTATUS),
+  ENTRY(WM_DRAWITEM),
+  ENTRY(WM_MEASUREITEM),
+  ENTRY(WM_DELETEITEM),
+  ENTRY(WM_VKEYTOITEM),
+  ENTRY(WM_CHARTOITEM),
+  ENTRY(WM_SETFONT),
+  ENTRY(WM_GETFONT),
+  ENTRY(WM_SETHOTKEY),
+  ENTRY(WM_GETHOTKEY),
+  ENTRY(WM_QUERYDRAGICON),
+  ENTRY(WM_COMPAREITEM),
+  ENTRY(WM_GETOBJECT),
+  ENTRY(WM_COMPACTING),
+  ENTRY(WM_COMMNOTIFY),
+  ENTRY(WM_WINDOWPOSCHANGING),
+  ENTRY(WM_WINDOWPOSCHANGED),
+  ENTRY(WM_POWER),
+  ENTRY(WM_COPYDATA),
+  ENTRY(WM_CANCELJOURNAL),
+  ENTRY(WM_NOTIFY),
+  ENTRY(WM_INPUTLANGCHANGEREQUEST),
+  ENTRY(WM_INPUTLANGCHANGE),
+  ENTRY(WM_TCARD),
+  ENTRY(WM_HELP),
+  ENTRY(WM_USERCHANGED),
+  ENTRY(WM_NOTIFYFORMAT),
+  ENTRY(WM_CONTEXTMENU),
+  ENTRY(WM_STYLECHANGING),
+  ENTRY(WM_STYLECHANGED),
+  ENTRY(WM_DISPLAYCHANGE),
+  ENTRY(WM_GETICON),
+  ENTRY(WM_SETICON),
+  ENTRY(WM_NCCREATE),
+  ENTRY(WM_NCDESTROY),
+  ENTRY(WM_NCCALCSIZE),
+  ENTRY(WM_NCHITTEST),
+  ENTRY(WM_NCPAINT),
+  ENTRY(WM_NCACTIVATE),
+  ENTRY(WM_GETDLGCODE),
+  ENTRY(WM_SYNCPAINT),
+  ENTRY(WM_NCMOUSEMOVE),
+  ENTRY(WM_NCLBUTTONDOWN),
+  ENTRY(WM_NCLBUTTONUP),
+  ENTRY(WM_NCLBUTTONDBLCLK),
+  ENTRY(WM_NCRBUTTONDOWN),
+  ENTRY(WM_NCRBUTTONUP),
+  ENTRY(WM_NCRBUTTONDBLCLK),
+  ENTRY(WM_NCMBUTTONDOWN),
+  ENTRY(WM_NCMBUTTONUP),
+  ENTRY(WM_NCMBUTTONDBLCLK),
+  ENTRY(EM_GETSEL),
+  ENTRY(EM_SETSEL),
+  ENTRY(EM_GETRECT),
+  ENTRY(EM_SETRECT),
+  ENTRY(EM_SETRECTNP),
+  ENTRY(EM_SCROLL),
+  ENTRY(EM_LINESCROLL),
+  ENTRY(EM_SCROLLCARET),
+  ENTRY(EM_GETMODIFY),
+  ENTRY(EM_SETMODIFY),
+  ENTRY(EM_GETLINECOUNT),
+  ENTRY(EM_LINEINDEX),
+  ENTRY(EM_SETHANDLE),
+  ENTRY(EM_GETHANDLE),
+  ENTRY(EM_GETTHUMB),
+  ENTRY(EM_LINELENGTH),
+  ENTRY(EM_REPLACESEL),
+  ENTRY(EM_GETLINE),
+  ENTRY(EM_LIMITTEXT),
+  ENTRY(EM_CANUNDO),
+  ENTRY(EM_UNDO),
+  ENTRY(EM_FMTLINES),
+  ENTRY(EM_LINEFROMCHAR),
+  ENTRY(EM_SETTABSTOPS),
+  ENTRY(EM_SETPASSWORDCHAR),
+  ENTRY(EM_EMPTYUNDOBUFFER),
+  ENTRY(EM_GETFIRSTVISIBLELINE),
+  ENTRY(EM_SETREADONLY),
+  ENTRY(EM_SETWORDBREAKPROC),
+  ENTRY(EM_GETWORDBREAKPROC),
+  ENTRY(EM_GETPASSWORDCHAR),
+  ENTRY(EM_SETMARGINS),
+  ENTRY(EM_GETMARGINS),
+  ENTRY(EM_GETLIMITTEXT),
+  ENTRY(EM_POSFROMCHAR),
+  ENTRY(EM_CHARFROMPOS),
+  ENTRY(EM_SETIMESTATUS),
+  ENTRY(EM_GETIMESTATUS),
+  ENTRY(SBM_SETPOS),
+  ENTRY(SBM_GETPOS),
+  ENTRY(SBM_SETRANGE),
+  ENTRY(SBM_SETRANGEREDRAW),
+  ENTRY(SBM_GETRANGE),
+  ENTRY(SBM_ENABLE_ARROWS),
+  ENTRY(SBM_SETSCROLLINFO),
+  ENTRY(SBM_GETSCROLLINFO),
+  ENTRY(WM_KEYDOWN),
+  ENTRY(WM_KEYUP),
+  ENTRY(WM_CHAR),
+  ENTRY(WM_DEADCHAR),
+  ENTRY(WM_SYSKEYDOWN),
+  ENTRY(WM_SYSKEYUP),
+  ENTRY(WM_SYSCHAR),
+  ENTRY(WM_SYSDEADCHAR),
+  ENTRY(WM_KEYLAST),
+  ENTRY(WM_IME_STARTCOMPOSITION),
+  ENTRY(WM_IME_ENDCOMPOSITION),
+  ENTRY(WM_IME_COMPOSITION),
+  ENTRY(WM_INITDIALOG),
+  ENTRY(WM_COMMAND),
+  ENTRY(WM_SYSCOMMAND),
+  ENTRY(WM_TIMER),
+  ENTRY(WM_HSCROLL),
+  ENTRY(WM_VSCROLL),
+  ENTRY(WM_INITMENU),
+  ENTRY(WM_INITMENUPOPUP),
+  ENTRY(WM_MENUSELECT),
+  ENTRY(WM_MENUCHAR),
+  ENTRY(WM_ENTERIDLE),
+  ENTRY(WM_MENURBUTTONUP),
+  ENTRY(WM_MENUDRAG),
+  ENTRY(WM_MENUGETOBJECT),
+  ENTRY(WM_UNINITMENUPOPUP),
+  ENTRY(WM_MENUCOMMAND),
+  ENTRY(WM_CHANGEUISTATE),
+  ENTRY(WM_UPDATEUISTATE),
+  ENTRY(WM_CTLCOLORMSGBOX),
+  ENTRY(WM_CTLCOLOREDIT),
+  ENTRY(WM_CTLCOLORLISTBOX),
+  ENTRY(WM_CTLCOLORBTN),
+  ENTRY(WM_CTLCOLORDLG),
+  ENTRY(WM_CTLCOLORSCROLLBAR),
+  ENTRY(WM_CTLCOLORSTATIC),
+  ENTRY(CB_GETEDITSEL),
+  ENTRY(CB_LIMITTEXT),
+  ENTRY(CB_SETEDITSEL),
+  ENTRY(CB_ADDSTRING),
+  ENTRY(CB_DELETESTRING),
+  ENTRY(CB_DIR),
+  ENTRY(CB_GETCOUNT),
+  ENTRY(CB_GETCURSEL),
+  ENTRY(CB_GETLBTEXT),
+  ENTRY(CB_GETLBTEXTLEN),
+  ENTRY(CB_INSERTSTRING),
+  ENTRY(CB_RESETCONTENT),
+  ENTRY(CB_FINDSTRING),
+  ENTRY(CB_SELECTSTRING),
+  ENTRY(CB_SETCURSEL),
+  ENTRY(CB_SHOWDROPDOWN),
+  ENTRY(CB_GETITEMDATA),
+  ENTRY(CB_SETITEMDATA),
+  ENTRY(CB_GETDROPPEDCONTROLRECT),
+  ENTRY(CB_SETITEMHEIGHT),
+  ENTRY(CB_GETITEMHEIGHT),
+  ENTRY(CB_SETEXTENDEDUI),
+  ENTRY(CB_GETEXTENDEDUI),
+  ENTRY(CB_GETDROPPEDSTATE),
+  ENTRY(CB_FINDSTRINGEXACT),
+  ENTRY(CB_SETLOCALE),
+  ENTRY(CB_GETLOCALE),
+  ENTRY(CB_GETTOPINDEX),
+  ENTRY(CB_SETTOPINDEX),
+  ENTRY(CB_GETHORIZONTALEXTENT),
+  ENTRY(CB_SETHORIZONTALEXTENT),
+  ENTRY(CB_GETDROPPEDWIDTH),
+  ENTRY(CB_SETDROPPEDWIDTH),
+  ENTRY(CB_INITSTORAGE),
+  ENTRY(CB_MSGMAX),
+  ENTRY(LB_ADDSTRING),
+  ENTRY(LB_INSERTSTRING),
+  ENTRY(LB_DELETESTRING),
+  ENTRY(LB_SELITEMRANGEEX),
+  ENTRY(LB_RESETCONTENT),
+  ENTRY(LB_SETSEL),
+  ENTRY(LB_SETCURSEL),
+  ENTRY(LB_GETSEL),
+  ENTRY(LB_GETCURSEL),
+  ENTRY(LB_GETTEXT),
+  ENTRY(LB_GETTEXTLEN),
+  ENTRY(LB_GETCOUNT),
+  ENTRY(LB_SELECTSTRING),
+  ENTRY(LB_DIR),
+  ENTRY(LB_GETTOPINDEX),
+  ENTRY(LB_FINDSTRING),
+  ENTRY(LB_GETSELCOUNT),
+  ENTRY(LB_GETSELITEMS),
+  ENTRY(LB_SETTABSTOPS),
+  ENTRY(LB_GETHORIZONTALEXTENT),
+  ENTRY(LB_SETHORIZONTALEXTENT),
+  ENTRY(LB_SETCOLUMNWIDTH),
+  ENTRY(LB_ADDFILE),
+  ENTRY(LB_SETTOPINDEX),
+  ENTRY(LB_GETITEMRECT),
+  ENTRY(LB_GETITEMDATA),
+  ENTRY(LB_SETITEMDATA),
+  ENTRY(LB_SELITEMRANGE),
+  ENTRY(LB_SETANCHORINDEX),
+  ENTRY(LB_GETANCHORINDEX),
+  ENTRY(LB_SETCARETINDEX),
+  ENTRY(LB_GETCARETINDEX),
+  ENTRY(LB_SETITEMHEIGHT),
+  ENTRY(LB_GETITEMHEIGHT),
+  ENTRY(LB_FINDSTRINGEXACT),
+  ENTRY(LB_SETLOCALE),
+  ENTRY(LB_GETLOCALE),
+  ENTRY(LB_SETCOUNT),
+  ENTRY(LB_INITSTORAGE),
+  ENTRY(LB_ITEMFROMPOINT),
+  ENTRY(LB_MSGMAX),
+  ENTRY(WM_MOUSEMOVE),
+  ENTRY(WM_LBUTTONDOWN),
+  ENTRY(WM_LBUTTONUP),
+  ENTRY(WM_LBUTTONDBLCLK),
+  ENTRY(WM_RBUTTONDOWN),
+  ENTRY(WM_RBUTTONUP),
+  ENTRY(WM_RBUTTONDBLCLK),
+  ENTRY(WM_MBUTTONDOWN),
+  ENTRY(WM_MBUTTONUP),
+  ENTRY(WM_MBUTTONDBLCLK),
+  ENTRY(WM_MOUSEWHEEL),
+  ENTRY(WM_MOUSEHWHEEL),
+  ENTRY(WM_PARENTNOTIFY),
+  ENTRY(WM_ENTERMENULOOP),
+  ENTRY(WM_EXITMENULOOP),
+  ENTRY(WM_NEXTMENU),
+  ENTRY(WM_SIZING),
+  ENTRY(WM_CAPTURECHANGED),
+  ENTRY(WM_MOVING),
+  ENTRY(WM_POWERBROADCAST),
+  ENTRY(WM_DEVICECHANGE),
+  ENTRY(WM_MDICREATE),
+  ENTRY(WM_MDIDESTROY),
+  ENTRY(WM_MDIACTIVATE),
+  ENTRY(WM_MDIRESTORE),
+  ENTRY(WM_MDINEXT),
+  ENTRY(WM_MDIMAXIMIZE),
+  ENTRY(WM_MDITILE),
+  ENTRY(WM_MDICASCADE),
+  ENTRY(WM_MDIICONARRANGE),
+  ENTRY(WM_MDIGETACTIVE),
+  ENTRY(WM_MDISETMENU),
+  ENTRY(WM_ENTERSIZEMOVE),
+  ENTRY(WM_EXITSIZEMOVE),
+  ENTRY(WM_DROPFILES),
+  ENTRY(WM_MDIREFRESHMENU),
+  ENTRY(WM_IME_SETCONTEXT),
+  ENTRY(WM_IME_NOTIFY),
+  ENTRY(WM_IME_CONTROL),
+  ENTRY(WM_IME_COMPOSITIONFULL),
+  ENTRY(WM_IME_SELECT),
+  ENTRY(WM_IME_CHAR),
+  ENTRY(WM_IME_REQUEST),
+  ENTRY(WM_IME_KEYDOWN),
+  ENTRY(WM_IME_KEYUP),
+  ENTRY(WM_NCMOUSEHOVER),
+  ENTRY(WM_MOUSEHOVER),
+  ENTRY(WM_MOUSELEAVE),
+  ENTRY(WM_CUT),
+  ENTRY(WM_COPY),
+  ENTRY(WM_PASTE),
+  ENTRY(WM_CLEAR),
+  ENTRY(WM_UNDO),
+  ENTRY(WM_RENDERFORMAT),
+  ENTRY(WM_RENDERALLFORMATS),
+  ENTRY(WM_DESTROYCLIPBOARD),
+  ENTRY(WM_DRAWCLIPBOARD),
+  ENTRY(WM_PAINTCLIPBOARD),
+  ENTRY(WM_VSCROLLCLIPBOARD),
+  ENTRY(WM_SIZECLIPBOARD),
+  ENTRY(WM_ASKCBFORMATNAME),
+  ENTRY(WM_CHANGECBCHAIN),
+  ENTRY(WM_HSCROLLCLIPBOARD),
+  ENTRY(WM_QUERYNEWPALETTE),
+  ENTRY(WM_PALETTEISCHANGING),
+  ENTRY(WM_PALETTECHANGED),
+  ENTRY(WM_HOTKEY),
+  ENTRY(WM_PRINT),
+  ENTRY(WM_PRINTCLIENT),
+  ENTRY(WM_THEMECHANGED),
+  ENTRY(WM_HANDHELDFIRST),
+  ENTRY(WM_HANDHELDLAST),
+  ENTRY(WM_AFXFIRST),
+  ENTRY(WM_AFXLAST),
+  ENTRY(WM_PENWINFIRST),
+  ENTRY(WM_PENWINLAST),
+  ENTRY(WM_APP),
+  ENTRY(WM_DWMCOMPOSITIONCHANGED),
+  ENTRY(WM_DWMNCRENDERINGCHANGED),
+  ENTRY(WM_DWMCOLORIZATIONCOLORCHANGED),
+  ENTRY(WM_DWMWINDOWMAXIMIZEDCHANGE),
+  ENTRY(WM_DWMSENDICONICTHUMBNAIL),
+  ENTRY(WM_DWMSENDICONICLIVEPREVIEWBITMAP),
+  ENTRY(WM_TABLET_QUERYSYSTEMGESTURESTATUS),
+  ENTRY(WM_GESTURE),
+  ENTRY(WM_GESTURENOTIFY),
+  ENTRY(WM_GETTITLEBARINFOEX),
+  {nullptr, 0x0}
+};
+#undef ENTRY
+
 #ifdef MOZ_PLACES
+NS_IMPL_ISUPPORTS(myDownloadObserver, nsIDownloadObserver)
 NS_IMPL_ISUPPORTS(AsyncFaviconDataReady, nsIFaviconDataCallback)
 #endif
 NS_IMPL_ISUPPORTS(AsyncEncodeAndWriteIcon, nsIRunnable)
@@ -92,6 +430,7 @@ WinUtils::DwmSetWindowAttributeProc WinUtils::dwmSetWindowAttributePtr = nullptr
 WinUtils::DwmInvalidateIconicBitmapsProc WinUtils::dwmInvalidateIconicBitmapsPtr = nullptr;
 WinUtils::DwmDefWindowProcProc WinUtils::dwmDwmDefWindowProcPtr = nullptr;
 WinUtils::DwmGetCompositionTimingInfoProc WinUtils::dwmGetCompositionTimingInfoPtr = nullptr;
+WinUtils::DwmFlushProc WinUtils::dwmFlushProcPtr = nullptr;
 
 /* static */
 void
@@ -115,6 +454,7 @@ WinUtils::Initialize()
       dwmInvalidateIconicBitmapsPtr = (DwmInvalidateIconicBitmapsProc)::GetProcAddress(sDwmDll, "DwmInvalidateIconicBitmaps");
       dwmDwmDefWindowProcPtr = (DwmDefWindowProcProc)::GetProcAddress(sDwmDll, "DwmDefWindowProc");
       dwmGetCompositionTimingInfoPtr = (DwmGetCompositionTimingInfoProc)::GetProcAddress(sDwmDll, "DwmGetCompositionTimingInfo");
+      dwmFlushProcPtr = (DwmFlushProc)::GetProcAddress(sDwmDll, "DwmFlush");
     }
   }
 }
@@ -141,12 +481,11 @@ WinUtils::LogW(const wchar_t *fmt, ...)
   OutputDebugStringW(buffer);
   OutputDebugStringW(L"\n");
 
-  int len = wcslen(buffer);
+  int len = WideCharToMultiByte(CP_ACP, 0, buffer, -1, nullptr, 0, nullptr, nullptr);
   if (len) {
-    char* utf8 = new char[len+1];
-    memset(utf8, 0, sizeof(utf8));
+    char* utf8 = new char[len];
     if (WideCharToMultiByte(CP_ACP, 0, buffer,
-                            -1, utf8, len+1, nullptr,
+                            -1, utf8, len, nullptr,
                             nullptr) > 0) {
       // desktop console
       printf("%s\n", utf8);
@@ -281,23 +620,43 @@ WinUtils::GetMessage(LPMSG aMsg, HWND aWnd, UINT aFirstMessage,
 
 /* static */
 void
-WinUtils::WaitForMessage()
+WinUtils::WaitForMessage(DWORD aTimeoutMs)
 {
-  DWORD result = ::MsgWaitForMultipleObjectsEx(0, NULL, INFINITE, QS_ALLINPUT,
-                                               MWMO_INPUTAVAILABLE);
-  NS_WARN_IF_FALSE(result != WAIT_FAILED, "Wait failed");
-
-  // This idiom is taken from the Chromium ipc code, see
-  // ipc/chromium/src/base/message+puimp_win.cpp:270.
-  // The intent is to avoid a busy wait when MsgWaitForMultipleObjectsEx
-  // returns quickly but PeekMessage would not return a message.
-  if (result == WAIT_OBJECT_0) {
-    MSG msg = {0};
-    DWORD queue_status = ::GetQueueStatus(QS_MOUSE);
-    if (HIWORD(queue_status) & QS_MOUSE &&
-        !PeekMessage(&msg, NULL, WM_MOUSEFIRST, WM_MOUSELAST, PM_NOREMOVE)) {
-      ::WaitMessage();
+  const DWORD waitStart = ::GetTickCount();
+  DWORD elapsed = 0;
+  while (true) {
+    if (aTimeoutMs != INFINITE) {
+      elapsed = ::GetTickCount() - waitStart;
     }
+    if (elapsed >= aTimeoutMs) {
+      break;
+    }
+    DWORD result = ::MsgWaitForMultipleObjectsEx(0, NULL, aTimeoutMs - elapsed,
+                                                 MOZ_QS_ALLEVENT,
+                                                 MWMO_INPUTAVAILABLE);
+    NS_WARN_IF_FALSE(result != WAIT_FAILED, "Wait failed");
+    if (result == WAIT_TIMEOUT) {
+      break;
+    }
+
+    // Sent messages (via SendMessage and friends) are processed differently
+    // than queued messages (via PostMessage); the destination window procedure
+    // of the sent message is called during (Get|Peek)Message. Since PeekMessage
+    // does not tell us whether it processed any sent messages, we need to query
+    // this ahead of time.
+    bool haveSentMessagesPending =
+      (HIWORD(::GetQueueStatus(QS_SENDMESSAGE)) & QS_SENDMESSAGE) != 0;
+
+    MSG msg = {0};
+    if (haveSentMessagesPending ||
+        ::PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE)) {
+      break;
+    }
+    // The message is intended for another thread that has been synchronized
+    // with our input queue; yield to give other threads an opportunity to
+    // process the message. This should prevent busy waiting if resumed due
+    // to another thread's message.
+    ::SwitchToThread();
   }
 }
 
@@ -395,7 +754,7 @@ GetNSWindowPropName()
 {
   static wchar_t sPropName[40] = L"";
   if (!*sPropName) {
-    _snwprintf(sPropName, 39, L"MozillansIWidgetPtr%p",
+    _snwprintf(sPropName, 39, L"MozillansIWidgetPtr%u",
                ::GetCurrentProcessId());
     sPropName[39] = '\0';
   }
@@ -668,12 +1027,60 @@ WinUtils::SHGetKnownFolderPath(REFKNOWNFOLDERID rfid,
   return sGetKnownFolderPath(rfid, dwFlags, hToken, ppszPath);
 }
 
+static BOOL
+WINAPI EnumFirstChild(HWND hwnd, LPARAM lParam)
+{
+  *((HWND*)lParam) = hwnd;
+  return FALSE;
+}
+
+/* static */
+void
+WinUtils::InvalidatePluginAsWorkaround(nsIWidget *aWidget, const nsIntRect &aRect)
+{
+  aWidget->Invalidate(aRect);
+
+  // XXX - Even more evil workaround!! See bug 762948, flash's bottom
+  // level sandboxed window doesn't seem to get our invalidate. We send
+  // an invalidate to it manually. This is totally specialized for this
+  // bug, for other child window structures this will just be a more or
+  // less bogus invalidate but since that should not have any bad
+  // side-effects this will have to do for now.
+  HWND current = (HWND)aWidget->GetNativeData(NS_NATIVE_WINDOW);
+
+  RECT windowRect;
+  RECT parentRect;
+
+  ::GetWindowRect(current, &parentRect);
+
+  HWND next = current;
+  do {
+    current = next;
+    ::EnumChildWindows(current, &EnumFirstChild, (LPARAM)&next);
+    ::GetWindowRect(next, &windowRect);
+    // This is relative to the screen, adjust it to be relative to the
+    // window we're reconfiguring.
+    windowRect.left -= parentRect.left;
+    windowRect.top -= parentRect.top;
+  } while (next != current && windowRect.top == 0 && windowRect.left == 0);
+
+  if (windowRect.top == 0 && windowRect.left == 0) {
+    RECT rect;
+    rect.left   = aRect.x;
+    rect.top    = aRect.y;
+    rect.right  = aRect.XMost();
+    rect.bottom = aRect.YMost();
+
+    ::InvalidateRect(next, &rect, FALSE);
+  }
+}
+
 #ifdef MOZ_PLACES
-/************************************************************************/
-/* Constructs as AsyncFaviconDataReady Object
-/* @param aIOThread : the thread which performs the action
-/* @param aURLShortcut : Differentiates between (false)Jumplistcache and (true)Shortcutcache
-/************************************************************************/
+/************************************************************************
+ * Constructs as AsyncFaviconDataReady Object
+ * @param aIOThread : the thread which performs the action
+ * @param aURLShortcut : Differentiates between (false)Jumplistcache and (true)Shortcutcache
+ ************************************************************************/
 
 AsyncFaviconDataReady::AsyncFaviconDataReady(nsIURI *aNewURI, 
                                              nsCOMPtr<nsIThread> &aIOThread, 
@@ -711,7 +1118,12 @@ nsresult AsyncFaviconDataReady::OnFaviconDataNotAvailable(void)
   }
  
   nsCOMPtr<nsIChannel> channel;
-  rv = NS_NewChannel(getter_AddRefs(channel), mozIconURI);
+  rv = NS_NewChannel(getter_AddRefs(channel),
+                     mozIconURI,
+                     nsContentUtils::GetSystemPrincipal(),
+                     nsILoadInfo::SEC_NORMAL,
+                     nsIContentPolicy::TYPE_IMAGE);
+
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIDownloadObserver> downloadObserver = new myDownloadObserver;
@@ -786,6 +1198,10 @@ AsyncFaviconDataReady::OnComplete(nsIURI *aFaviconURI,
                                        dataSurface->GetSize(),
                                        map.mStride,
                                        dataSurface->GetFormat());
+    if (!dt) {
+      gfxWarning() << "AsyncFaviconDataReady::OnComplete failed in CreateDrawTargetForData";
+      return NS_ERROR_OUT_OF_MEMORY;
+    }
     dt->FillRect(Rect(0, 0, size.width, size.height),
                  ColorPattern(Color(1.0f, 1.0f, 1.0f, 1.0f)));
     dt->DrawSurface(surface,
@@ -852,11 +1268,12 @@ NS_IMETHODIMP AsyncEncodeAndWriteIcon::Run()
 {
   NS_PRECONDITION(!NS_IsMainThread(), "Should not be called on the main thread.");
 
-  RefPtr<DrawTarget> dt =
-    gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget();
-  RefPtr<SourceSurface> surface =
-    dt->CreateSourceSurfaceFromData(mBuffer, IntSize(mWidth, mHeight), mStride,
-                                    SurfaceFormat::B8G8R8A8);
+  // Note that since we're off the main thread we can't use
+  // gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget()
+  RefPtr<DataSourceSurface> surface =
+    Factory::CreateWrappingDataSourceSurface(mBuffer, mStride,
+                                             IntSize(mWidth, mHeight),
+                                             SurfaceFormat::B8G8R8A8);
 
   FILE* file = fopen(NS_ConvertUTF16toUTF8(mIconPath).get(), "wb");
   if (!file) {

@@ -335,6 +335,17 @@
     {0xab, 0x1d, 0x5e, 0x68, 0xa9, 0xf4, 0x5f, 0x08} \
 }
 
+// component implementing nsITLSServerSocket
+#define NS_TLSSERVERSOCKET_CONTRACTID \
+    "@mozilla.org/network/tls-server-socket;1"
+#define NS_TLSSERVERSOCKET_CID                       \
+{ /* 1813cbb4-c98e-4622-8c7d-839167f3f272 */         \
+    0x1813cbb4,                                      \
+    0xc98e,                                          \
+    0x4622,                                          \
+    {0x8c, 0x7d, 0x83, 0x91, 0x67, 0xf3, 0xf2, 0x72} \
+}
+
 // component implementing nsIUDPSocket
 #define NS_UDPSOCKET_CONTRACTID \
     "@mozilla.org/network/udp-socket;1"
@@ -567,6 +578,18 @@
     0x48b1,                                          \
     {0xb5, 0x27, 0x8a, 0x64, 0x30, 0x56, 0xab, 0xbd} \
 }
+
+// component implementing nsIHttpPushListener.
+#define NS_HTTPPUSHLISTENER_CONTRACTID \
+    "@mozilla.org/network/push-listener;1"
+#define NS_HTTPPUSHLISTENER_CID                      \
+{                                                    \
+    0x73cf4430,                                      \
+    0x5877,                                          \
+    0x4c6b,                                          \
+    {0xb8, 0x78, 0x3e, 0xde, 0x5b, 0xc8, 0xef, 0xf1} \
+}
+
 
 #define NS_HTTPACTIVITYDISTRIBUTOR_CONTRACTID \
     "@mozilla.org/network/http-activity-distributor;1"

@@ -17,6 +17,8 @@ EXPORTS.mozilla.ipc += [
     'BrowserProcessSubThread.h',
     'CrossProcessMutex.h',
     'FileDescriptor.h',
+    'FileDescriptorSetChild.h',
+    'FileDescriptorSetParent.h',
     'FileDescriptorUtils.h',
     'GeckoChildProcessHost.h',
     'InputStreamUtils.h',
@@ -57,7 +59,7 @@ if CONFIG['OS_ARCH'] == 'WINNT':
     SOURCES += [
         'CrossProcessMutex_windows.cpp',
     ]
-elif CONFIG['OS_ARCH'] == 'Linux':
+elif CONFIG['OS_ARCH'] in ('Linux', 'Darwin'):
     UNIFIED_SOURCES += [
         'CrossProcessMutex_posix.cpp',
     ]
@@ -84,6 +86,10 @@ if CONFIG['OS_ARCH'] == 'Linux':
 elif CONFIG['OS_ARCH'] in ('DragonFly', 'FreeBSD', 'NetBSD', 'OpenBSD'):
     UNIFIED_SOURCES += [
         'ProcessUtils_bsd.cpp'
+    ]
+elif CONFIG['OS_ARCH'] == 'Darwin':
+    UNIFIED_SOURCES += [
+        'ProcessUtils_mac.mm'
     ]
 else:
     UNIFIED_SOURCES += [
@@ -117,11 +123,16 @@ UNIFIED_SOURCES += [
 SOURCES += [
     'BackgroundChildImpl.cpp',
     'BackgroundParentImpl.cpp',
+    'FileDescriptorSetChild.cpp',
+    'FileDescriptorSetParent.cpp',
     'GeckoChildProcessHost.cpp',
     'URIUtils.cpp',
 ]
 
 LOCAL_INCLUDES += [
+    '/caps',
+    '/dom/broadcastchannel',
+    '/dom/indexedDB',
     '/xpcom/build',
 ]
 
@@ -130,12 +141,15 @@ IPDL_SOURCES = [
     'PBackground.ipdl',
     'PBackgroundSharedTypes.ipdlh',
     'PBackgroundTest.ipdl',
+    'PFileDescriptorSet.ipdl',
+    'PProcLoader.ipdl',
     'ProtocolTypes.ipdlh',
     'URIParams.ipdlh',
 ]
 
 
 LOCAL_INCLUDES += [
+    '/toolkit/xre',
     '/xpcom/threads',
 ]
 
@@ -151,8 +165,10 @@ LOCAL_INCLUDES += [
     '/toolkit/crashreporter',
 ]
 
-if CONFIG['MOZ_CONTENT_SANDBOX'] and CONFIG['OS_ARCH'] == 'WINNT':
+if CONFIG['MOZ_SANDBOX'] and CONFIG['OS_ARCH'] == 'WINNT':
     LOCAL_INCLUDES += [
+        '/security/sandbox/chromium',
+        '/security/sandbox/chromium-shim',
         '/security/sandbox/win/src/sandboxbroker',
     ]
 

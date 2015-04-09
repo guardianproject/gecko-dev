@@ -5,16 +5,18 @@
 const {Cu} = require("chrome");
 const {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm");
 const {AddonManager} = Cu.import("resource://gre/modules/AddonManager.jsm");
-const {EventEmitter} = Cu.import("resource://gre/modules/devtools/event-emitter.js");
-const {Simulator} = Cu.import("resource://gre/modules/devtools/Simulator.jsm");
-const {Devices} = Cu.import("resource://gre/modules/devtools/Devices.jsm");
 const {Services} = Cu.import("resource://gre/modules/Services.jsm");
-const {GetAddonsJSON} = require("devtools/webide/remote-resources");
+const {getJSON} = require("devtools/shared/getjson");
+const EventEmitter = require("devtools/toolkit/event-emitter");
+
+const ADDONS_URL = "devtools.webide.addonsURL";
 
 let SIMULATOR_LINK = Services.prefs.getCharPref("devtools.webide.simulatorAddonsURL");
 let ADB_LINK = Services.prefs.getCharPref("devtools.webide.adbAddonURL");
+let ADAPTERS_LINK = Services.prefs.getCharPref("devtools.webide.adaptersAddonURL");
 let SIMULATOR_ADDON_ID = Services.prefs.getCharPref("devtools.webide.simulatorAddonID");
 let ADB_ADDON_ID = Services.prefs.getCharPref("devtools.webide.adbAddonID");
+let ADAPTERS_ADDON_ID = Services.prefs.getCharPref("devtools.webide.adaptersAddonID");
 
 let platform = Services.appShell.hiddenDOMWindow.navigator.platform;
 let OS = "";
@@ -26,36 +28,24 @@ if (platform.indexOf("Win") != -1) {
   if (platform.indexOf("x86_64") != -1) {
     OS = "linux64";
   } else {
-    OS = "linux";
+    OS = "linux32";
   }
 }
 
-Simulator.on("unregister", updateSimulatorAddons);
-Simulator.on("register", updateSimulatorAddons);
-Devices.on("addon-status-updated", updateAdbAddon);
-
-function updateSimulatorAddons(event, version) {
+let addonsListener = {};
+addonsListener.onEnabled =
+addonsListener.onDisabled =
+addonsListener.onInstalled =
+addonsListener.onUninstalled = (updatedAddon) => {
   GetAvailableAddons().then(addons => {
-    let foundAddon = null;
-    for (let addon of addons.simulators) {
-      if (addon.version == version) {
-        foundAddon = addon;
-        break;
+    for (let a of [...addons.simulators, addons.adb, addons.adapters]) {
+      if (a.addonID == updatedAddon.id) {
+        a.updateInstallStatus();
       }
     }
-    if (!foundAddon) {
-      console.warn("An unknown simulator (un)registered", version);
-      return;
-    }
-    foundAddon.updateInstallStatus();
   });
 }
-
-function updateAdbAddon() {
-  GetAvailableAddons().then(addons => {
-    addons.adb.updateInstallStatus();
-  });
-}
+AddonManager.addAddonListener(addonsListener);
 
 let GetAvailableAddons_promise = null;
 let GetAvailableAddons = exports.GetAvailableAddons = function() {
@@ -66,13 +56,14 @@ let GetAvailableAddons = exports.GetAvailableAddons = function() {
       simulators: [],
       adb: null
     }
-    GetAddonsJSON(true).then(json => {
+    getJSON(ADDONS_URL, true).then(json => {
       for (let stability in json) {
         for (let version of json[stability]) {
           addons.simulators.push(new SimulatorAddon(stability, version));
         }
       }
       addons.adb = new ADBAddon();
+      addons.adapters = new AdaptersAddon();
       deferred.resolve(addons);
     }, e => {
       GetAvailableAddons_promise = null;
@@ -99,13 +90,23 @@ Addon.prototype = {
     return this._status;
   },
 
-  install: function() {
-    if (this.status != "uninstalled") {
-      throw new Error("Not uninstalled");
-    }
-    this.status = "preparing";
-
+  updateInstallStatus: function() {
     AddonManager.getAddonByID(this.addonID, (addon) => {
+      if (addon && !addon.userDisabled) {
+        this.status = "installed";
+      } else {
+        this.status = "uninstalled";
+      }
+    });
+  },
+
+  install: function() {
+    AddonManager.getAddonByID(this.addonID, (addon) => {
+      if (addon && !addon.userDisabled) {
+        this.status = "installed";
+        return;
+      }
+      this.status = "preparing";
       if (addon && addon.userDisabled) {
         addon.userDisabled = false;
       } else {
@@ -115,7 +116,6 @@ Addon.prototype = {
         }, "application/x-xpinstall");
       }
     });
-
   },
 
   uninstall: function() {
@@ -167,44 +167,30 @@ function SimulatorAddon(stability, version) {
   EventEmitter.decorate(this);
   this.stability = stability;
   this.version = version;
-  this.xpiLink = SIMULATOR_LINK.replace(/#OS#/g, OS)
+  // This addon uses the string "linux" for "linux32"
+  let fixedOS = OS == "linux32" ? "linux" : OS;
+  this.xpiLink = SIMULATOR_LINK.replace(/#OS#/g, fixedOS)
                                .replace(/#VERSION#/g, version)
                                .replace(/#SLASHED_VERSION#/g, version.replace(/\./g, "_"));
   this.addonID = SIMULATOR_ADDON_ID.replace(/#SLASHED_VERSION#/g, version.replace(/\./g, "_"));
   this.updateInstallStatus();
 }
-
-SimulatorAddon.prototype = Object.create(Addon.prototype, {
-  updateInstallStatus: {
-    enumerable: true,
-    value: function() {
-      let sim = Simulator.getByVersion(this.version);
-      if (sim) {
-        this.status = "installed";
-      } else {
-        this.status = "uninstalled";
-      }
-    }
-  },
-});
+SimulatorAddon.prototype = Object.create(Addon.prototype);
 
 function ADBAddon() {
   EventEmitter.decorate(this);
-  this.xpiLink = ADB_LINK.replace(/#OS#/g, OS);
+  // This addon uses the string "linux" for "linux32"
+  let fixedOS = OS == "linux32" ? "linux" : OS;
+  this.xpiLink = ADB_LINK.replace(/#OS#/g, fixedOS);
   this.addonID = ADB_ADDON_ID;
   this.updateInstallStatus();
 }
+ADBAddon.prototype = Object.create(Addon.prototype);
 
-ADBAddon.prototype = Object.create(Addon.prototype, {
-  updateInstallStatus: {
-    enumerable: true,
-    value: function() {
-      if (Devices.helperAddonInstalled) {
-        this.status = "installed";
-      } else {
-        this.status = "uninstalled";
-      }
-    }
-  },
-});
-
+function AdaptersAddon() {
+  EventEmitter.decorate(this);
+  this.xpiLink = ADAPTERS_LINK.replace(/#OS#/g, OS);
+  this.addonID = ADAPTERS_ADDON_ID;
+  this.updateInstallStatus();
+}
+AdaptersAddon.prototype = Object.create(Addon.prototype);

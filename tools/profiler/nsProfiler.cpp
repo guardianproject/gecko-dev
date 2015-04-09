@@ -194,6 +194,13 @@ nsProfiler::GetSharedLibraryInformation(nsAString& aOutString)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsProfiler::DumpProfileToFile(const char* aFilename)
+{
+  profiler_save_profile_to_file(aFilename);
+  return NS_OK;
+}
+
 NS_IMETHODIMP nsProfiler::GetProfileData(JSContext* aCx,
                                          JS::MutableHandle<JS::Value> aResult)
 {
@@ -229,7 +236,7 @@ nsProfiler::GetFeatures(uint32_t *aCount, char ***aFeatures)
   }
 
   char **featureList = static_cast<char **>
-                       (nsMemory::Alloc(len * sizeof(char*)));
+                       (moz_xmalloc(len * sizeof(char*)));
 
   for (size_t i = 0; i < len; i++) {
     size_t strLen = strlen(features[i]);

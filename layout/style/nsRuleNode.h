@@ -18,7 +18,7 @@ class nsStyleContext;
 struct nsRuleData;
 class nsIStyleRule;
 struct nsCSSValueList;
-
+class nsCSSPropertySet;
 class nsCSSValue;
 struct nsCSSRect;
 
@@ -32,14 +32,14 @@ private:
   void* mArray[Count];
 public:
   void*& operator[](nsStyleStructID aIndex) {
-    NS_ABORT_IF_FALSE(MinIndex <= aIndex && aIndex < (MinIndex + Count),
-                      "out of range");
+    MOZ_ASSERT(MinIndex <= aIndex && aIndex < (MinIndex + Count),
+               "out of range");
     return mArray[aIndex - MinIndex];
   }
 
   const void* operator[](nsStyleStructID aIndex) const {
-    NS_ABORT_IF_FALSE(MinIndex <= aIndex && aIndex < (MinIndex + Count),
-                      "out of range");
+    MOZ_ASSERT(MinIndex <= aIndex && aIndex < (MinIndex + Count),
+               "out of range");
     return mArray[aIndex - MinIndex];
   }
 };
@@ -50,7 +50,8 @@ struct nsInheritedStyleData
                         nsStyleStructID_Inherited_Count> mStyleStructs;
 
   void* operator new(size_t sz, nsPresContext* aContext) CPP_THROW_NEW {
-    return aContext->AllocateFromShell(sz);
+    return aContext->PresShell()->
+      AllocateByObjectID(nsPresArena::nsInheritedStyleData_id, sz);
   }
 
   void DestroyStructs(uint64_t aBits, nsPresContext* aContext) {
@@ -68,7 +69,8 @@ struct nsInheritedStyleData
 
   void Destroy(uint64_t aBits, nsPresContext* aContext) {
     DestroyStructs(aBits, aContext);
-    aContext->FreeToShell(sizeof(nsInheritedStyleData), this);
+    aContext->PresShell()->
+      FreeByObjectID(nsPresArena::nsInheritedStyleData_id, this);
   }
 
   nsInheritedStyleData() {
@@ -95,7 +97,8 @@ struct nsResetStyleData
   }
 
   void* operator new(size_t sz, nsPresContext* aContext) CPP_THROW_NEW {
-    return aContext->AllocateFromShell(sz);
+    return aContext->PresShell()->
+      AllocateByObjectID(nsPresArena::nsResetStyleData_id, sz);
   }
 
   void Destroy(uint64_t aBits, nsPresContext* aContext) {
@@ -110,7 +113,8 @@ struct nsResetStyleData
 #undef STYLE_STRUCT_RESET
 #undef STYLE_STRUCT_INHERITED
 
-    aContext->FreeToShell(sizeof(nsResetStyleData), this);
+    aContext->PresShell()->
+      FreeByObjectID(nsPresArena::nsResetStyleData_id, this);
   }
 };
 
@@ -120,8 +124,8 @@ struct nsCachedStyleData
   nsResetStyleData* mResetData;
 
   static bool IsReset(const nsStyleStructID aSID) {
-    NS_ABORT_IF_FALSE(0 <= aSID && aSID < nsStyleStructID_Length,
-                      "must be an inherited or reset SID");
+    MOZ_ASSERT(0 <= aSID && aSID < nsStyleStructID_Length,
+               "must be an inherited or reset SID");
     return nsStyleStructID_Reset_Start <= aSID;
   }
 
@@ -369,7 +373,7 @@ private:
                  "pointer not 2-byte aligned");
     mChildren.asHash = (PLDHashTable*)(intptr_t(aHashtable) | kHashType);
   }
-  void ConvertChildrenToHash();
+  void ConvertChildrenToHash(int32_t aNumKids);
 
   nsCachedStyleData mStyleData;   // Any data we cached on the rule node.
 
@@ -422,6 +426,8 @@ protected:
   void PropagateDependentBit(nsStyleStructID aSID, nsRuleNode* aHighestNode,
                              void* aStruct);
   void PropagateNoneBit(uint32_t aBit, nsRuleNode* aHighestNode);
+  static void PropagateGrandancestorBit(nsStyleContext* aContext,
+                                        nsStyleContext* aContextInheritedFrom);
 
   const void* SetDefaultOnRoot(const nsStyleStructID aSID,
                                nsStyleContext* aContext);
@@ -637,15 +643,6 @@ protected:
                              uint8_t aGenericFontID,
                              nsStyleFont* aFont);
 
-  void AdjustLogicalBoxProp(nsStyleContext* aContext,
-                            const nsCSSValue& aLTRSource,
-                            const nsCSSValue& aRTLSource,
-                            const nsCSSValue& aLTRLogicalValue,
-                            const nsCSSValue& aRTLLogicalValue,
-                            mozilla::css::Side aSide,
-                            nsCSSRect& aValueRect,
-                            bool& aCanStoreInRuleTree);
-
   inline RuleDetail CheckSpecifiedProperties(const nsStyleStructID aSID,
                                              const nsRuleData* aRuleData);
 
@@ -659,6 +656,11 @@ protected:
                                 nsStyleContext* aStyleContext,
                                 nsPresContext* aPresContext,
                                 bool& aCanStoreInRuleTree);
+  void SetStyleClipPathToCSSValue(nsStyleClipPath* aStyleClipPath,
+                                  const nsCSSValue* aValue,
+                                  nsStyleContext* aStyleContext,
+                                  nsPresContext* aPresContext,
+                                  bool& aCanStoreInRuleTree);
 
 private:
   nsRuleNode(nsPresContext* aPresContext, nsRuleNode* aParent,
@@ -670,12 +672,19 @@ public:
 
   static void EnsureBlockDisplay(uint8_t& display,
                                  bool aConvertListItem = false);
+  static void EnsureInlineDisplay(uint8_t& display);
 
   // Transition never returns null; on out of memory it'll just return |this|.
   nsRuleNode* Transition(nsIStyleRule* aRule, uint8_t aLevel,
                          bool aIsImportantRule);
   nsRuleNode* GetParent() const { return mParent; }
   bool IsRoot() const { return mParent == nullptr; }
+
+  // Return the root of the rule tree that this rule node is in.
+  nsRuleNode* RuleTree();
+  const nsRuleNode* RuleTree() const {
+    return const_cast<nsRuleNode*>(this)->RuleTree();
+  }
 
   // These uint8_ts are really nsStyleSet::sheetType values.
   uint8_t GetLevel() const {
@@ -728,6 +737,17 @@ public:
     HasAuthorSpecifiedRules(nsStyleContext* aStyleContext,
                             uint32_t ruleTypeMask,
                             bool aAuthorColorsAllowed);
+
+  /**
+   * Fill in to aPropertiesOverridden all of the properties in aProperties
+   * that, for this rule node, have a declaration that is higher than the
+   * animation level in the CSS Cascade.
+   */
+  static void
+  ComputePropertiesOverridingAnimation(
+                              const nsTArray<nsCSSProperty>& aProperties,
+                              nsStyleContext* aStyleContext,
+                              nsCSSPropertySet& aPropertiesOverridden);
 
   // Expose this so media queries can use it
   static nscoord CalcLengthWithInitialFont(nsPresContext* aPresContext,

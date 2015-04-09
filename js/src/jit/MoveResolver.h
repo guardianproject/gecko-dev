@@ -8,7 +8,7 @@
 #define jit_MoveResolver_h
 
 #include "jit/InlineList.h"
-#include "jit/IonAllocPolicy.h"
+#include "jit/JitAllocPolicy.h"
 #include "jit/Registers.h"
 
 namespace js {
@@ -47,13 +47,13 @@ class MoveOperand
         code_(reg.code()),
         disp_(disp)
     {
-        JS_ASSERT(isMemoryOrEffectiveAddress());
+        MOZ_ASSERT(isMemoryOrEffectiveAddress());
 
         // With a zero offset, this is a plain reg-to-reg move.
         if (disp == 0 && kind_ == EFFECTIVE_ADDRESS)
             kind_ = REG;
     }
-    MoveOperand(const MoveOperand &other)
+    MoveOperand(const MoveOperand& other)
       : kind_(other.kind_),
         code_(other.code_),
         disp_(other.disp_)
@@ -74,19 +74,19 @@ class MoveOperand
         return isMemory() || isEffectiveAddress();
     }
     Register reg() const {
-        JS_ASSERT(isGeneralReg());
+        MOZ_ASSERT(isGeneralReg());
         return Register::FromCode(code_);
     }
     FloatRegister floatReg() const {
-        JS_ASSERT(isFloatReg());
+        MOZ_ASSERT(isFloatReg());
         return FloatRegister::FromCode(code_);
     }
     Register base() const {
-        JS_ASSERT(isMemoryOrEffectiveAddress());
+        MOZ_ASSERT(isMemoryOrEffectiveAddress());
         return Register::FromCode(code_);
     }
     int32_t disp() const {
-        JS_ASSERT(isMemoryOrEffectiveAddress());
+        MOZ_ASSERT(isMemoryOrEffectiveAddress());
         return disp_;
     }
 
@@ -96,10 +96,10 @@ class MoveOperand
         // only appear in controlled circumstances in the trampoline code
         // which ensures these cases never come up.
 
-        JS_ASSERT_IF(isMemoryOrEffectiveAddress() && other.isGeneralReg(),
-                     base() != other.reg());
-        JS_ASSERT_IF(other.isMemoryOrEffectiveAddress() && isGeneralReg(),
-                     other.base() != reg());
+        MOZ_ASSERT_IF(isMemoryOrEffectiveAddress() && other.isGeneralReg(),
+                      base() != other.reg());
+        MOZ_ASSERT_IF(other.isMemoryOrEffectiveAddress() && isGeneralReg(),
+                      other.base() != reg());
 
         if (kind_ != other.kind_)
             return false;
@@ -112,7 +112,7 @@ class MoveOperand
         return true;
     }
 
-    bool operator ==(const MoveOperand &other) const {
+    bool operator ==(const MoveOperand& other) const {
         if (kind_ != other.kind_)
             return false;
         if (code_ != other.code_)
@@ -121,7 +121,7 @@ class MoveOperand
             return disp_ == other.disp_;
         return true;
     }
-    bool operator !=(const MoveOperand &other) const {
+    bool operator !=(const MoveOperand& other) const {
         return !operator==(other);
     }
 };
@@ -141,7 +141,9 @@ class MoveOp
         GENERAL,
         INT32,
         FLOAT32,
-        DOUBLE
+        DOUBLE,
+        INT32X4,
+        FLOAT32X4
     };
 
   protected:
@@ -158,7 +160,7 @@ class MoveOp
   public:
     MoveOp()
     { }
-    MoveOp(const MoveOperand &from, const MoveOperand &to, Type type)
+    MoveOp(const MoveOperand& from, const MoveOperand& to, Type type)
       : from_(from),
         to_(to),
         cycleBegin_(false),
@@ -182,17 +184,17 @@ class MoveOp
         MOZ_ASSERT(cycleEndSlot_ != -1);
         return cycleEndSlot_;
     }
-    const MoveOperand &from() const {
+    const MoveOperand& from() const {
         return from_;
     }
-    const MoveOperand &to() const {
+    const MoveOperand& to() const {
         return to_;
     }
     Type type() const {
         return type_;
     }
     Type endCycleType() const {
-        JS_ASSERT(isCycleBegin());
+        MOZ_ASSERT(isCycleBegin());
         return endCycleType_;
     }
 };
@@ -207,18 +209,18 @@ class MoveResolver
     {
         PendingMove()
         { }
-        PendingMove(const MoveOperand &from, const MoveOperand &to, Type type)
+        PendingMove(const MoveOperand& from, const MoveOperand& to, Type type)
           : MoveOp(from, to, type)
         { }
 
         void setCycleBegin(Type endCycleType, int cycleSlot) {
-            JS_ASSERT(!cycleBegin_);
+            MOZ_ASSERT(!cycleBegin_);
             cycleBegin_ = true;
             cycleBeginSlot_ = cycleSlot;
             endCycleType_ = endCycleType;
         }
         void setCycleEnd(int cycleSlot) {
-            JS_ASSERT(!cycleEnd_);
+            MOZ_ASSERT(!cycleEnd_);
             cycleEnd_ = true;
             cycleEndSlot_ = cycleSlot;
         }
@@ -236,8 +238,10 @@ class MoveResolver
 
     InlineList<PendingMove> pending_;
 
-    PendingMove *findBlockingMove(const PendingMove *last);
-    PendingMove *findCycledMove(PendingMoveIterator *stack, PendingMoveIterator end, const PendingMove *first);
+    PendingMove* findBlockingMove(const PendingMove* last);
+    PendingMove* findCycledMove(PendingMoveIterator* stack, PendingMoveIterator end, const PendingMove* first);
+    bool addOrderedMove(const MoveOp& move);
+
     // Internal reset function. Does not clear lists.
     void resetState();
 
@@ -251,13 +255,13 @@ class MoveResolver
     //
     // After calling addMove() for each parallel move, resolve() performs the
     // cycle resolution algorithm. Calling addMove() again resets the resolver.
-    bool addMove(const MoveOperand &from, const MoveOperand &to, MoveOp::Type type);
+    bool addMove(const MoveOperand& from, const MoveOperand& to, MoveOp::Type type);
     bool resolve();
 
     size_t numMoves() const {
         return orderedMoves_.length();
     }
-    const MoveOp &getMove(size_t i) const {
+    const MoveOp& getMove(size_t i) const {
         return orderedMoves_[i];
     }
     uint32_t numCycles() const {
@@ -266,7 +270,7 @@ class MoveResolver
     void clearTempObjectPool() {
         movePool_.clear();
     }
-    void setAllocator(TempAllocator &alloc) {
+    void setAllocator(TempAllocator& alloc) {
         movePool_.setAllocator(alloc);
     }
 };

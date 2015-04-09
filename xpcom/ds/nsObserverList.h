@@ -23,8 +23,8 @@ class ObserverServiceReporter;
 struct ObserverRef
 {
   ObserverRef(const ObserverRef& aO) : isWeakRef(aO.isWeakRef), ref(aO.ref) {}
-  ObserverRef(nsIObserver* aObserver) : isWeakRef(false), ref(aObserver) {}
-  ObserverRef(nsIWeakReference* aWeak) : isWeakRef(true), ref(aWeak) {}
+  explicit ObserverRef(nsIObserver* aObserver) : isWeakRef(false), ref(aObserver) {}
+  explicit ObserverRef(nsIWeakReference* aWeak) : isWeakRef(true), ref(aWeak) {}
 
   bool isWeakRef;
   nsCOMPtr<nsISupports> ref;
@@ -49,7 +49,7 @@ class nsObserverList : public nsCharPtrHashKey
   friend class nsObserverService;
 
 public:
-  nsObserverList(const char* aKey) : nsCharPtrHashKey(aKey)
+  explicit nsObserverList(const char* aKey) : nsCharPtrHashKey(aKey)
   {
     MOZ_COUNT_CTOR(nsObserverList);
   }
@@ -79,13 +79,13 @@ private:
   nsTArray<ObserverRef> mObservers;
 };
 
-class nsObserverEnumerator MOZ_FINAL : public nsISimpleEnumerator
+class nsObserverEnumerator final : public nsISimpleEnumerator
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSISIMPLEENUMERATOR
 
-  nsObserverEnumerator(nsObserverList* aObserverList);
+  explicit nsObserverEnumerator(nsObserverList* aObserverList);
 
 private:
   ~nsObserverEnumerator() {}

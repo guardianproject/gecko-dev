@@ -5,15 +5,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/HangMonitor.h"
+
+#include "mozilla/Atomics.h"
 #include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/Monitor.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/Telemetry.h"
 #include "mozilla/ProcessedStack.h"
-#include "mozilla/Atomics.h"
-#include "nsXULAppAPI.h"
-#include "nsThreadUtils.h"
+#include "mozilla/Telemetry.h"
+#include "mozilla/StaticPtr.h"
+#include "mozilla/UniquePtr.h"
+#include "nsReadableUtils.h"
 #include "nsStackWalk.h"
+#include "nsThreadUtils.h"
+#include "nsXULAppAPI.h"
 
 #ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
@@ -113,8 +117,9 @@ Crash()
 }
 
 #ifdef REPORT_CHROME_HANGS
+
 static void
-ChromeStackWalker(void* aPC, void* aSP, void* aClosure)
+ChromeStackWalker(uint32_t aFrameNumber, void* aPC, void* aSP, void* aClosure)
 {
   MOZ_ASSERT(aClosure);
   std::vector<uintptr_t>* stack =
@@ -163,6 +168,7 @@ GetChromeHangReport(Telemetry::ProcessedStack& aStack,
     aFirefoxUptime = -1;
   }
 }
+
 #endif
 
 void
@@ -182,6 +188,7 @@ ThreadMain(void*)
   Telemetry::ProcessedStack stack;
   int32_t systemUptime = -1;
   int32_t firefoxUptime = -1;
+  UniquePtr<HangAnnotations> annotations;
 #endif
 
   while (true) {
@@ -209,6 +216,7 @@ ThreadMain(void*)
       // the minimum hang duration has been reached (not when the hang ends)
       if (waitCount == 2) {
         GetChromeHangReport(stack, systemUptime, firefoxUptime);
+        annotations = ChromeHangAnnotatorCallout();
       }
 #else
       // This is the crash-on-hang feature.
@@ -226,8 +234,8 @@ ThreadMain(void*)
 #ifdef REPORT_CHROME_HANGS
       if (waitCount >= 2) {
         uint32_t hangDuration = PR_IntervalToSeconds(now - lastTimestamp);
-        Telemetry::RecordChromeHang(hangDuration, stack,
-                                    systemUptime, firefoxUptime);
+        Telemetry::RecordChromeHang(hangDuration, stack, systemUptime,
+                                    firefoxUptime, Move(annotations));
         stack.Clear();
       }
 #endif

@@ -16,6 +16,7 @@
 #include "nsIDOMEventListener.h"
 #include "nsTObserverArray.h"
 
+class nsIDocShell;
 class nsIDOMEvent;
 class nsIEventListenerInfo;
 class nsIScriptContext;
@@ -149,7 +150,7 @@ inline EventListenerFlags AllEventsAtSystemGroupCapture()
  * Event listener manager
  */
 
-class EventListenerManager MOZ_FINAL
+class EventListenerManager final
 {
   ~EventListenerManager();
 
@@ -161,7 +162,7 @@ public:
     nsString mTypeString; // for non-main-threads
     uint16_t mEventType;
 
-    enum ListenerType MOZ_ENUM_TYPE(uint8_t)
+    enum ListenerType : uint8_t
     {
       eNativeListener = 0,
       eJSEventListener,
@@ -211,7 +212,7 @@ public:
     }
   };
 
-  EventListenerManager(dom::EventTarget* aTarget);
+  explicit EventListenerManager(dom::EventTarget* aTarget);
 
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(EventListenerManager)
 
@@ -420,6 +421,8 @@ protected:
                               nsIDOMEvent* aDOMEvent,
                               dom::EventTarget* aCurrentTarget);
 
+  nsIDocShell* GetDocShellForTarget();
+
   /**
    * Compile the "inline" event listener for aListener.  The
    * body of the listener can be provided in aBody; if this is null we
@@ -548,7 +551,7 @@ protected:
   uint32_t mNoListenerForEvent : 23;
 
   nsAutoTObserverArray<Listener, 2> mListeners;
-  dom::EventTarget* mTarget;  // WEAK
+  dom::EventTarget* MOZ_NON_OWNING_REF mTarget;
   nsCOMPtr<nsIAtom> mNoListenerForEventAtom;
 
   friend class ELMCreationDetector;

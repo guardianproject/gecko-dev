@@ -98,7 +98,7 @@ struct NativeProperties
 {
   const Prefable<const JSFunctionSpec>* staticMethods;
   jsid* staticMethodIds;
-  const JSFunctionSpec* staticMethodsSpecs;
+  const JSFunctionSpec* staticMethodSpecs;
 
   const Prefable<const JSPropertySpec>* staticAttributes;
   jsid* staticAttributeIds;
@@ -106,7 +106,7 @@ struct NativeProperties
 
   const Prefable<const JSFunctionSpec>* methods;
   jsid* methodIds;
-  const JSFunctionSpec* methodsSpecs;
+  const JSFunctionSpec* methodSpecs;
 
   const Prefable<const JSPropertySpec>* attributes;
   jsid* attributeIds;
@@ -123,6 +123,9 @@ struct NativeProperties
   const Prefable<const ConstantSpec>* constants;
   jsid* constantIds;
   const ConstantSpec* constantSpecs;
+
+  // Index into methods for the entry that is [Alias="@@iterator"], -1 if none
+  int32_t iteratorAliasMethodIndex;
 };
 
 struct NativePropertiesHolder
@@ -156,25 +159,46 @@ struct NativePropertyHooks
   // constructors::id::_ID_Count.
   constructors::ID mConstructorID;
 
-  // The NativePropertyHooks instance for the parent interface.
+  // The NativePropertyHooks instance for the parent interface (for
+  // ShimInterfaceInfo).
   const NativePropertyHooks* mProtoHooks;
 };
 
 enum DOMObjectType {
   eInstance,
+  eGlobalInstance,
   eInterface,
-  eInterfacePrototype
+  eInterfacePrototype,
+  eGlobalInterfacePrototype,
+  eNamedPropertiesObject
 };
 
+inline
+bool
+IsInstance(DOMObjectType type)
+{
+  return type == eInstance || type == eGlobalInstance;
+}
+
+inline
+bool
+IsInterfacePrototype(DOMObjectType type)
+{
+  return type == eInterfacePrototype || type == eGlobalInterfacePrototype;
+}
+
 typedef JSObject* (*ParentGetter)(JSContext* aCx, JS::Handle<JSObject*> aObj);
+
+typedef JSObject* (*ProtoGetter)(JSContext* aCx,
+                                 JS::Handle<JSObject*> aGlobal);
 /**
  * Returns a handle to the relevent WebIDL prototype object for the given global
  * (which may be a handle to null on out of memory).  Once allocated, the
  * prototype object is guaranteed to exist as long as the global does, since the
  * global traces its array of WebIDL prototypes and constructors.
  */
-typedef JS::Handle<JSObject*> (*ProtoGetter)(JSContext* aCx,
-                                             JS::Handle<JSObject*> aGlobal);
+typedef JS::Handle<JSObject*> (*ProtoHandleGetter)(JSContext* aCx,
+                                                   JS::Handle<JSObject*> aGlobal);
 
 // Special JSClass for reflected DOM objects.
 struct DOMJSClass
@@ -197,7 +221,7 @@ struct DOMJSClass
   const NativePropertyHooks* mNativeHooks;
 
   ParentGetter mGetParent;
-  ProtoGetter mGetProto;
+  ProtoHandleGetter mGetProto;
 
   // This stores the CC participant for the native, null if this class is for a
   // worker or for a native inheriting from nsISupports (we can get the CC
@@ -219,13 +243,14 @@ struct DOMJSClass
 // Special JSClass for DOM interface and interface prototype objects.
 struct DOMIfaceAndProtoJSClass
 {
-  // It would be nice to just inherit from JSClass, but that precludes pure
+  // It would be nice to just inherit from js::Class, but that precludes pure
   // compile-time initialization of the form
   // |DOMJSInterfaceAndPrototypeClass = {...};|, since C++ only allows brace
   // initialization for aggregate/POD types.
-  const JSClass mBase;
+  const js::Class mBase;
 
-  // Either eInterface or eInterfacePrototype
+  // Either eInterface, eInterfacePrototype, eGlobalInterfacePrototype or
+  // eNamedPropertiesObject.
   DOMObjectType mType;
 
   const NativePropertyHooks* mNativeHooks;
@@ -237,6 +262,8 @@ struct DOMIfaceAndProtoJSClass
   const prototypes::ID mPrototypeID;
   const uint32_t mDepth;
 
+  ProtoGetter mGetParentProto;
+
   static const DOMIfaceAndProtoJSClass* FromJSClass(const JSClass* base) {
     MOZ_ASSERT(base->flags & JSCLASS_IS_DOMIFACEANDPROTOJSCLASS);
     return reinterpret_cast<const DOMIfaceAndProtoJSClass*>(base);
@@ -245,7 +272,7 @@ struct DOMIfaceAndProtoJSClass
     return FromJSClass(Jsvalify(base));
   }
 
-  const JSClass* ToJSClass() const { return &mBase; }
+  const JSClass* ToJSClass() const { return Jsvalify(&mBase); }
 };
 
 class ProtoAndIfaceCache;

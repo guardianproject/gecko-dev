@@ -470,7 +470,7 @@ static uintptr_t g_stats_thrUnregd    = 0; // # failed due to unregistered thr
 //////////////////////////////////////////////////////////
 
 // This is the interface to LUL.
-typedef  struct { u_int64_t pc; u_int64_t sp; }  PCandSP;
+typedef  struct { uint64_t pc; uint64_t sp; }  PCandSP;
 
 // Forward declaration.  Implementation is below.
 static
@@ -1186,7 +1186,7 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
     for (k = 0; k < buff->entsUsed; k++) {
       ProfileEntry ent = utb_get_profent(buff, k);
       // action flush-hints
-      if (ent.is_ent_hint('F')) { buff->aProfile->flush(); continue; }
+      if (ent.is_ent_hint('F')) { continue; }
       // skip ones we can't copy
       if (ent.is_ent_hint() || ent.is_ent('S')) { continue; }
       // handle GetBacktrace()
@@ -1208,6 +1208,7 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
         PCandSP* pairs = nullptr;
         unsigned int nPairs = 0;
         do_lul_unwind_Buffer(&pairs, &nPairs, buff, oldest_ix);
+        buff->aProfile->addTag( ProfileEntry('T', buff->aProfile->ThreadId()) );
         buff->aProfile->addTag( ProfileEntry('s', "(root)") );
         for (unsigned int i = 0; i < nPairs; i++) {
           /* Skip any outermost frames that
@@ -1223,7 +1224,7 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
         continue;
       }
       // action flush-hints
-      if (ent.is_ent_hint('F')) { buff->aProfile->flush(); continue; }
+      if (ent.is_ent_hint('F')) { continue; }
       // skip ones we can't copy
       if (ent.is_ent_hint() || ent.is_ent('S')) { continue; }
       // handle GetBacktrace()
@@ -1246,10 +1247,11 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
       ProfileEntry ent = utb_get_profent(buff, k);
       // We need to insert a sample-start tag before the first frame
       if (k == ix_first_hP) {
+        buff->aProfile->addTag( ProfileEntry('T', buff->aProfile->ThreadId()) );
         buff->aProfile->addTag( ProfileEntry('s', "(root)") );
       }
       // action flush-hints
-      if (ent.is_ent_hint('F')) { buff->aProfile->flush(); continue; }
+      if (ent.is_ent_hint('F')) { continue; }
       // skip ones we can't copy
       if (ent.is_ent_hint() || ent.is_ent('S')) { continue; }
       // handle GetBacktrace()
@@ -1281,7 +1283,7 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
     for (k = 0; k < ix_first_hP; k++) {
       ProfileEntry ent = utb_get_profent(buff, k);
       // action flush-hints
-      if (ent.is_ent_hint('F')) { buff->aProfile->flush(); continue; }
+      if (ent.is_ent_hint('F')) { continue; }
       // skip ones we can't copy
       if (ent.is_ent_hint() || ent.is_ent('S')) { continue; }
       // handle GetBacktrace()
@@ -1294,6 +1296,7 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
     }
 
     // BEGIN merge
+    buff->aProfile->addTag( ProfileEntry('T', buff->aProfile->ThreadId()) );
     buff->aProfile->addTag( ProfileEntry('s', "(root)") );
     unsigned int next_N = 0; // index in pairs[]
     unsigned int next_P = ix_first_hP; // index in buff profent array
@@ -1338,7 +1341,7 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
       else {
         // We have at least one N and one P entry available.
         // Scan forwards to find the SP of the current P entry
-        u_int64_t sp_cur_P = 0;
+        uint64_t sp_cur_P = 0;
         unsigned int m = next_P + 1;
         while (1) {
           /* This assertion should hold because in a well formed
@@ -1349,7 +1352,7 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
           if (ent.is_ent_hint('Q'))
             break;
           if (ent.is_ent('S')) {
-            sp_cur_P = reinterpret_cast<u_int64_t>(ent.get_tagPtr());
+            sp_cur_P = reinterpret_cast<uint64_t>(ent.get_tagPtr());
             break;
           }
           m++;
@@ -1358,7 +1361,7 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
           if (0) LOG("  P  <=  last_was_P && sp_cur_P == 0");
           use_P = true;
         } else {
-          u_int64_t sp_cur_N = pairs[next_N].sp;
+          uint64_t sp_cur_N = pairs[next_N].sp;
           use_P = (sp_cur_P > sp_cur_N);
           if (0) LOGF("  %s  <=  sps P %p N %p",
                       use_P ? "P" : "N", (void*)(intptr_t)sp_cur_P, 
@@ -1400,7 +1403,7 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
     for (k = ix_last_hQ+1; k < buff->entsUsed; k++) {
       ProfileEntry ent = utb_get_profent(buff, k);
       // action flush-hints
-      if (ent.is_ent_hint('F')) { buff->aProfile->flush(); continue; }
+      if (ent.is_ent_hint('F')) { continue; }
       // skip ones we can't copy
       if (ent.is_ent_hint() || ent.is_ent('S')) { continue; }
       // and copy everything else
@@ -1418,16 +1421,13 @@ static void process_buffer(UnwinderThreadBuffer* buff, int oldest_ix)
   for (k = 0; k < buff->entsUsed; k++) {
     ProfileEntry ent = utb_get_profent(buff, k);
     if (show) ent.log();
-    if (ent.is_ent_hint('F')) {
-      /* This is a flush-hint */
-      buff->aProfile->flush();
-    } 
-    else if (ent.is_ent_hint('N')) {
+    if (ent.is_ent_hint('N')) {
       /* This is a do-a-native-unwind-right-now hint */
       MOZ_ASSERT(buff->haveNativeInfo);
       PCandSP* pairs = nullptr;
       unsigned int nPairs = 0;
       do_lul_unwind_Buffer(&pairs, &nPairs, buff, oldest_ix);
+      buff->aProfile->addTag( ProfileEntry('T', buff->aProfile->ThreadId()) );
       buff->aProfile->addTag( ProfileEntry('s', "(root)") );
       for (unsigned int i = 0; i < nPairs; i++) {
         buff->aProfile

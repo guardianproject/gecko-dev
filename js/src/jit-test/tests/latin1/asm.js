@@ -1,12 +1,12 @@
 load(libdir + "asm.js");
 
+setCachingEnabled(true);
 if (!isAsmJSCompilationAvailable() || !isCachingEnabled())
     quit();
 
 // Test Latin1 and TwoByte PropertyName serialization.
 
 // Latin1
-toLatin1("funName"); // Latin1 atom.
 var body1 = "'use asm'; function funName() { return 42 } return funName";
 var m = new Function(body1);
 assertEq(isAsmJSModule(m), true);

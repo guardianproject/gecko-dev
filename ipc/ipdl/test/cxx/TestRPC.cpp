@@ -33,11 +33,11 @@ TestRPCParent::Main()
 }
 
 bool
-TestRPCParent::AnswerTest1_Start(uint32_t* aResult)
+TestRPCParent::RecvTest1_Start(uint32_t* aResult)
 {
   uint32_t result;
-  if (!CallTest1_InnerQuery(&result))
-    fail("CallTest1_InnerQuery");
+  if (!SendTest1_InnerQuery(&result))
+    fail("SendTest1_InnerQuery");
   if (result != 300)
     fail("Wrong result (expected 300)");
 
@@ -46,11 +46,11 @@ TestRPCParent::AnswerTest1_Start(uint32_t* aResult)
 }
 
 bool
-TestRPCParent::AnswerTest1_InnerEvent(uint32_t* aResult)
+TestRPCParent::RecvTest1_InnerEvent(uint32_t* aResult)
 {
   uint32_t result;
-  if (!CallTest1_NoReenter(&result))
-    fail("CallTest1_NoReenter");
+  if (!SendTest1_NoReenter(&result))
+    fail("SendTest1_NoReenter");
   if (result != 400)
     fail("Wrong result (expected 400)");
 
@@ -63,8 +63,8 @@ TestRPCParent::RecvTest2_Start()
 {
   // Send a CPOW. During this time, we must NOT process the RPC message, as
   // we could start receiving CPOW replies out-of-order.
-  if (!CallTest2_FirstUrgent())
-    fail("CallTest2_FirstUrgent");
+  if (!SendTest2_FirstUrgent())
+    fail("SendTest2_FirstUrgent");
 
   MOZ_ASSERT(!reentered_);
   resolved_first_cpow_ = true;
@@ -72,12 +72,12 @@ TestRPCParent::RecvTest2_Start()
 }
 
 bool
-TestRPCParent::AnswerTest2_OutOfOrder()
+TestRPCParent::RecvTest2_OutOfOrder()
 {
   // Send a CPOW. If this RPC call was initiated while waiting for the first
   // CPOW to resolve, replies will be processed out of order, and we'll crash.
-  if (!CallTest2_SecondUrgent())
-    fail("CallTest2_SecondUrgent");
+  if (!SendTest2_SecondUrgent())
+    fail("SendTest2_SecondUrgent");
 
   reentered_ = true;
   return true;
@@ -86,32 +86,16 @@ TestRPCParent::AnswerTest2_OutOfOrder()
 bool
 TestRPCParent::RecvTest3_Start(uint32_t* aResult)
 {
-  if (!CallTest3_WakeUp(aResult))
-    fail("CallTest3_WakeUp");
+  if (!SendTest3_WakeUp(aResult))
+    fail("SendTest3_WakeUp");
 
   return true;
 }
 
 bool
-TestRPCParent::AnswerTest3_InnerEvent(uint32_t* aResult)
+TestRPCParent::RecvTest3_InnerEvent(uint32_t* aResult)
 {
   *aResult = 200;
-  return true;
-}
-
-bool
-TestRPCParent::AnswerTest4_Start(uint32_t* aResult)
-{
-  if (!CallTest4_WakeUp(aResult))
-    fail("CallTest4_WakeUp");
-
-  return true;
-}
-
-bool
-TestRPCParent::AnswerTest4_Inner(uint32_t* aResult)
-{
-  *aResult = 700;
   return true;
 }
 
@@ -133,16 +117,16 @@ bool
 TestRPCChild::RecvStart()
 {
   uint32_t result;
-  if (!CallTest1_Start(&result))
-    fail("CallTest1_Start");
+  if (!SendTest1_Start(&result))
+    fail("SendTest1_Start");
   if (result != 100)
     fail("Wrong result (expected 100)");
 
   if (!SendTest2_Start())
     fail("SendTest2_Start");
 
-  if (!CallTest2_OutOfOrder())
-    fail("CallTest2_OutOfOrder");
+  if (!SendTest2_OutOfOrder())
+    fail("SendTest2_OutOfOrder");
 
   result = 0;
   if (!SendTest3_Start(&result))
@@ -150,22 +134,16 @@ TestRPCChild::RecvStart()
   if (result != 200)
     fail("Wrong result (expected 200)");
 
-  // See bug 937216 (RPC calls within interrupts).
-  if (!CallTest4_Start(&result))
-    fail("SendTest4_Start");
-  if (result != 700)
-    fail("Wrong result (expected 700)");
-
   Close();
   return true;
 }
 
 bool
-TestRPCChild::AnswerTest1_InnerQuery(uint32_t* aResult)
+TestRPCChild::RecvTest1_InnerQuery(uint32_t* aResult)
 {
   uint32_t result;
-  if (!CallTest1_InnerEvent(&result))
-    fail("CallTest1_InnerEvent");
+  if (!SendTest1_InnerEvent(&result))
+    fail("SendTest1_InnerEvent");
   if (result != 200)
     fail("Wrong result (expected 200)");
 
@@ -174,38 +152,29 @@ TestRPCChild::AnswerTest1_InnerQuery(uint32_t* aResult)
 }
 
 bool
-TestRPCChild::AnswerTest1_NoReenter(uint32_t* aResult)
+TestRPCChild::RecvTest1_NoReenter(uint32_t* aResult)
 {
   *aResult = 400;
   return true;
 }
 
 bool
-TestRPCChild::AnswerTest2_FirstUrgent()
+TestRPCChild::RecvTest2_FirstUrgent()
 {
   return true;
 }
 
 bool
-TestRPCChild::AnswerTest2_SecondUrgent()
+TestRPCChild::RecvTest2_SecondUrgent()
 {
   return true;
 }
 
 bool
-TestRPCChild::AnswerTest3_WakeUp(uint32_t* aResult)
+TestRPCChild::RecvTest3_WakeUp(uint32_t* aResult)
 {
-  if (!CallTest3_InnerEvent(aResult))
-    fail("CallTest3_InnerEvent");
-
-  return true;
-}
-
-bool
-TestRPCChild::AnswerTest4_WakeUp(uint32_t* aResult)
-{
-  if (!CallTest4_Inner(aResult))
-    fail("CallTest4_Inner");
+  if (!SendTest3_InnerEvent(aResult))
+    fail("SendTest3_InnerEvent");
 
   return true;
 }

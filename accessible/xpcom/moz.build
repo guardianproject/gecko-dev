@@ -4,15 +4,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-EXPORTS += [
-    'xpcAccessibleHyperText.h',
-    'xpcAccessibleSelectable.h',
-    'xpcAccessibleValue.h',
-]
-
 UNIFIED_SOURCES += [
     'nsAccessibleRelation.cpp',
+    'xpcAccessible.cpp',
+    'xpcAccessibleApplication.cpp',
+    'xpcAccessibleDocument.cpp',
+    'xpcAccessibleGeneric.cpp',
+    'xpcAccessibleHyperLink.cpp',
     'xpcAccessibleHyperText.cpp',
+    'xpcAccessibleImage.cpp',
     'xpcAccessibleSelectable.cpp',
     'xpcAccessibleTable.cpp',
     'xpcAccessibleTableCell.cpp',
@@ -47,3 +47,6 @@ else:
     ]
 
 FINAL_LIBRARY = 'xul'
+
+if CONFIG['GNU_CXX']:
+    FAIL_ON_WARNINGS = True

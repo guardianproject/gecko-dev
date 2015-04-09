@@ -11,15 +11,14 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/bluetooth/BluetoothTypes.h"
 #include "mozilla/DOMEventTargetHelper.h"
-#include "mozilla/Observer.h"
 #include "nsISupportsImpl.h"
 
 BEGIN_BLUETOOTH_NAMESPACE
 
+class BluetoothDevice;
 class BluetoothValue;
 
-class BluetoothDiscoveryHandle MOZ_FINAL : public DOMEventTargetHelper
-                                         , public BluetoothSignalObserver
+class BluetoothDiscoveryHandle final : public DOMEventTargetHelper
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
@@ -27,30 +26,16 @@ public:
   static already_AddRefed<BluetoothDiscoveryHandle>
     Create(nsPIDOMWindow* aWindow);
 
+  void DispatchDeviceEvent(BluetoothDevice* aDevice);
+
   IMPL_EVENT_HANDLER(devicefound);
 
-  void Notify(const BluetoothSignal& aData); // BluetoothSignalObserver
-
-  virtual void DisconnectFromOwner() MOZ_OVERRIDE;
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx,
+                               JS::Handle<JSObject*> aGivenProto) override;
 
 private:
   BluetoothDiscoveryHandle(nsPIDOMWindow* aWindow);
   ~BluetoothDiscoveryHandle();
-
-  /**
-   * Start/Stop listening to bluetooth signal.
-   *
-   * @param aStart [in] Whether to start or stop listening to bluetooth signal
-   */
-  void ListenToBluetoothSignal(bool aStart);
-
-  /**
-   * Fire BluetoothDeviceEvent to trigger ondevicefound event handler.
-   *
-   * @param aValue [in] Properties array of the found device
-   */
-  void DispatchDeviceEvent(const BluetoothValue& aValue);
 };
 
 END_BLUETOOTH_NAMESPACE

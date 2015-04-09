@@ -21,8 +21,8 @@ namespace dom {
 
 class MessagePort;
 
-class MessageChannel MOZ_FINAL : public nsISupports
-                               , public nsWrapperCache
+class MessageChannel final : public nsISupports
+                           , public nsWrapperCache
 {
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
@@ -31,7 +31,7 @@ public:
   static bool Enabled(JSContext* aCx, JSObject* aGlobal);
 
 public:
-  MessageChannel(nsPIDOMWindow* aWindow);
+  explicit MessageChannel(nsPIDOMWindow* aWindow);
 
   nsPIDOMWindow*
   GetParentObject() const
@@ -40,7 +40,7 @@ public:
   }
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   static already_AddRefed<MessageChannel>
   Constructor(const GlobalObject& aGlobal, ErrorResult& aRv);

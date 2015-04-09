@@ -13,15 +13,27 @@
 class JSStreamWriter
 {
 public:
-  JSStreamWriter(std::ostream& aStream);
+  explicit JSStreamWriter(std::ostream& aStream);
   ~JSStreamWriter();
 
   void BeginObject();
   void EndObject();
   void BeginArray();
   void EndArray();
+
+  // Begin or end an array without emitting surrounding brackets. This is used
+  // for saving streamed samples and markers on JS shutdown, as some JS
+  // samples cannot be symbolicated without a JSRuntime.
+  void BeginBareList();
+  void EndBareList();
+
+  // Splices aElements into an open array context. Used in conjunction with
+  // previously saved array elements from {Begin,End}BareList above.
+  void SpliceArrayElements(const char* aElements);
+
   void Name(const char *name);
   void Value(int value);
+  void Value(unsigned value);
   void Value(double value);
   void Value(const char *value, size_t valueLength);
   void Value(const char *value);

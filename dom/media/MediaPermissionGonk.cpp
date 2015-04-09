@@ -6,7 +6,6 @@
 #include "MediaPermissionGonk.h"
 
 #include "nsCOMPtr.h"
-#include "nsCxPusher.h"
 #include "nsIContentPermissionPrompt.h"
 #include "nsIDocument.h"
 #include "nsIDOMNavigatorUserMedia.h"
@@ -16,10 +15,9 @@
 #include "nsPIDOMWindow.h"
 #include "nsTArray.h"
 #include "GetUserMediaRequest.h"
-#include "PCOMContentPermissionRequestChild.h"
 #include "mozilla/dom/PBrowserChild.h"
-#include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/MediaStreamTrackBinding.h"
+#include "mozilla/dom/MediaStreamError.h"
 #include "nsISupportsPrimitives.h"
 #include "nsServiceManagerUtils.h"
 #include "nsArrayUtils.h"
@@ -110,7 +108,6 @@ namespace {
  * to its owned type.
  */
 class MediaPermissionRequest : public nsIContentPermissionRequest
-                             , public PCOMContentPermissionRequestChild
 {
 public:
   NS_DECL_ISUPPORTS
@@ -118,11 +115,6 @@ public:
 
   MediaPermissionRequest(nsRefPtr<dom::GetUserMediaRequest> &aRequest,
                          nsTArray<nsCOMPtr<nsIMediaDevice> > &aDevices);
-
-  // It will be called when prompt dismissed.
-  virtual bool Recv__delete__(const bool &allow,
-                              const InfallibleTArray<PermissionChoice>& choices) MOZ_OVERRIDE;
-  virtual void IPDLRelease() MOZ_OVERRIDE { Release(); }
 
   already_AddRefed<nsPIDOMWindow> GetOwner();
 
@@ -233,7 +225,7 @@ MediaPermissionRequest::Cancel()
 {
   nsString callID;
   mRequest->GetCallID(callID);
-  NotifyPermissionDeny(callID, NS_LITERAL_STRING("Permission Denied"));
+  NotifyPermissionDeny(callID, NS_LITERAL_STRING("PermissionDeniedError"));
   return NS_OK;
 }
 
@@ -316,29 +308,6 @@ MediaPermissionRequest::GetOwner()
   return window.forget();
 }
 
-//PCOMContentPermissionRequestChild
-bool
-MediaPermissionRequest::Recv__delete__(const bool& allow,
-                                       const InfallibleTArray<PermissionChoice>& choices)
-{
-  if (allow) {
-    // get selected device name for audio and video
-    nsString audioDevice, videoDevice;
-    for (uint32_t i = 0; i < choices.Length(); ++i) {
-      const nsString &choice = choices[i].choice();
-      if (choices[i].type().EqualsLiteral(AUDIO_PERMISSION_NAME)) {
-        audioDevice = choice;
-      } else if (choices[i].type().EqualsLiteral(VIDEO_PERMISSION_NAME)) {
-        videoDevice = choice;
-      }
-    }
-    (void) DoAllow(audioDevice, videoDevice);
-  } else {
-    (void) Cancel();
-  }
-  return true;
-}
-
 // Success callback for MediaManager::GetUserMediaDevices().
 class MediaDeviceSuccessCallback: public nsIGetUserMediaDevicesSuccessCallback
 {
@@ -400,45 +369,8 @@ MediaDeviceSuccessCallback::OnSuccess(nsIVariant* aDevices)
 nsresult
 MediaDeviceSuccessCallback::DoPrompt(nsRefPtr<MediaPermissionRequest> &req)
 {
-  // for content process
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
-    MOZ_ASSERT(NS_IsMainThread()); // IPC can only be execute on main thread.
-
-    nsresult rv;
-
-    nsCOMPtr<nsPIDOMWindow> window(req->GetOwner());
-    NS_ENSURE_TRUE(window, NS_ERROR_FAILURE);
-
-    dom::TabChild* child = dom::TabChild::GetFrom(window->GetDocShell());
-    NS_ENSURE_TRUE(child, NS_ERROR_FAILURE);
-
-    nsCOMPtr<nsIArray> typeArray;
-    rv = req->GetTypes(getter_AddRefs(typeArray));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsTArray<PermissionRequest> permArray;
-    RemotePermissionRequest::ConvertArrayToPermissionRequest(typeArray, permArray);
-
-    nsCOMPtr<nsIPrincipal> principal;
-    rv = req->GetPrincipal(getter_AddRefs(principal));
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    req->AddRef();
-    child->SendPContentPermissionRequestConstructor(req,
-                                                    permArray,
-                                                    IPC::Principal(principal));
-
-    req->Sendprompt();
-    return NS_OK;
-  }
-
-  // for chrome process
-  nsCOMPtr<nsIContentPermissionPrompt> prompt =
-      do_GetService(NS_CONTENT_PERMISSION_PROMPT_CONTRACTID);
-  if (prompt) {
-    prompt->Prompt(req);
-  }
-  return NS_OK;
+  nsCOMPtr<nsPIDOMWindow> window(req->GetOwner());
+  return dom::nsContentPermissionUtils::AskPermission(req, window);
 }
 
 // Error callback for MediaManager::GetUserMediaDevices()
@@ -462,9 +394,16 @@ NS_IMPL_ISUPPORTS(MediaDeviceErrorCallback, nsIDOMGetUserMediaErrorCallback)
 
 // nsIDOMGetUserMediaErrorCallback method
 NS_IMETHODIMP
-MediaDeviceErrorCallback::OnError(const nsAString &aError)
+MediaDeviceErrorCallback::OnError(nsISupports* aError)
 {
-  return NotifyPermissionDeny(mCallID, aError);
+  nsRefPtr<MediaStreamError> error = do_QueryObject(aError);
+  if (!error) {
+    return NS_ERROR_NO_INTERFACE;
+  }
+
+  nsString name;
+  error->GetName(name);
+  return NotifyPermissionDeny(mCallID, name);
 }
 
 } // namespace anonymous

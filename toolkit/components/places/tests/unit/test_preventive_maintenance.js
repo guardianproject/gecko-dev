@@ -52,10 +52,10 @@ function addPlace(aUrl, aFavicon) {
 
 function addBookmark(aPlaceId, aType, aParent, aKeywordId, aFolderType, aTitle) {
   let stmt = mDBConn.createStatement(
-    "INSERT INTO moz_bookmarks (fk, type, parent, keyword_id, folder_type, "
-  +                            "title, guid) "
-  + "VALUES (:place_id, :type, :parent, :keyword_id, :folder_type, :title, "
-  +         "GENERATE_GUID())");
+    `INSERT INTO moz_bookmarks (fk, type, parent, keyword_id, folder_type,
+                                title, guid)
+     VALUES (:place_id, :type, :parent, :keyword_id, :folder_type, :title,
+             GENERATE_GUID())`);
   stmt.params["place_id"] = aPlaceId || null;
   stmt.params["type"] = aType || bs.TYPE_BOOKMARK;
   stmt.params["parent"] = aParent || bs.unfiledBookmarksFolder;
@@ -92,10 +92,10 @@ tests.push({
     stmt.execute();
     stmt.finalize();
     stmt = mDBConn.createStatement(
-      "INSERT INTO moz_annos (place_id, anno_attribute_id) "
-    + "VALUES (:place_id, "
-    +   "(SELECT id FROM moz_anno_attributes WHERE name = :anno)"
-    + ")"
+      `INSERT INTO moz_annos (place_id, anno_attribute_id)
+       VALUES (:place_id,
+         (SELECT id FROM moz_anno_attributes WHERE name = :anno)
+       )`
     );
     stmt.params['place_id'] = this._placeId;
     stmt.params['anno'] = this._obsoleteWeaveAttribute;
@@ -131,8 +131,8 @@ tests.push({
     this._bookmarkId = addBookmark(this._placeId);
     // Add an obsolete attribute.
     let stmt = mDBConn.createStatement(
-      "INSERT INTO moz_anno_attributes (name) "
-    + "VALUES (:anno1), (:anno2), (:anno3)"
+      `INSERT INTO moz_anno_attributes (name)
+       VALUES (:anno1), (:anno2), (:anno3)`
     );
     stmt.params['anno1'] = this._obsoleteSyncAttribute;
     stmt.params['anno2'] = this._obsoleteGuidAttribute;
@@ -140,10 +140,10 @@ tests.push({
     stmt.execute();
     stmt.finalize();
     stmt = mDBConn.createStatement(
-      "INSERT INTO moz_items_annos (item_id, anno_attribute_id) "
-    + "SELECT :item_id, id "
-    + "FROM moz_anno_attributes "
-    + "WHERE name IN (:anno1, :anno2, :anno3)"
+      `INSERT INTO moz_items_annos (item_id, anno_attribute_id)
+       SELECT :item_id, id
+       FROM moz_anno_attributes
+       WHERE name IN (:anno1, :anno2, :anno3)`
     );
     stmt.params['item_id'] = this._bookmarkId;
     stmt.params['anno1'] = this._obsoleteSyncAttribute;
@@ -156,8 +156,8 @@ tests.push({
   check: function() {
     // Check that the obsolete annotations have been removed.
     let stmt = mDBConn.createStatement(
-      "SELECT id FROM moz_anno_attributes "
-    + "WHERE name IN (:anno1, :anno2, :anno3)"
+      `SELECT id FROM moz_anno_attributes
+       WHERE name IN (:anno1, :anno2, :anno3)`
     );
     stmt.params['anno1'] = this._obsoleteSyncAttribute;
     stmt.params['anno2'] = this._obsoleteGuidAttribute;
@@ -545,53 +545,6 @@ tests.push({
 //------------------------------------------------------------------------------
 
 tests.push({
-  name: "D.5",
-  desc: "Fix wrong keywords",
-
-  _validKeywordItemId: null,
-  _invalidKeywordItemId: null,
-  _validKeywordId: 1,
-  _invalidKeywordId: 8888,
-  _placeId: null,
-
-  setup: function() {
-    // Insert a keyword
-    let stmt = mDBConn.createStatement("INSERT INTO moz_keywords (id, keyword) VALUES(:id, :keyword)");
-    stmt.params["id"] = this._validKeywordId;
-    stmt.params["keyword"] = "used";
-    stmt.execute();
-    stmt.finalize();
-    // Add a place to ensure place_id = 1 is valid
-    this._placeId = addPlace();
-    // Add a bookmark using the keyword
-    this._validKeywordItemId = addBookmark(this._placeId, bs.TYPE_BOOKMARK, bs.unfiledBookmarksFolder, this._validKeywordId);
-    // Add a bookmark using a nonexistent keyword
-    this._invalidKeywordItemId = addBookmark(this._placeId, bs.TYPE_BOOKMARK, bs.unfiledBookmarksFolder, this._invalidKeywordId);
-  },
-
-  check: function() {
-    // Check that item with valid keyword is there
-    let stmt = mDBConn.createStatement("SELECT id FROM moz_bookmarks WHERE id = :item_id AND keyword_id = :keyword");
-    stmt.params["item_id"] = this._validKeywordItemId;
-    stmt.params["keyword"] = this._validKeywordId;
-    do_check_true(stmt.executeStep());
-    stmt.reset();
-    // Check that item with invalid keyword has been corrected
-    stmt.params["item_id"] = this._invalidKeywordItemId;
-    stmt.params["keyword"] = this._invalidKeywordId;
-    do_check_false(stmt.executeStep());
-    stmt.finalize();
-    // Check that item with invalid keyword has not been removed
-    stmt = mDBConn.createStatement("SELECT id FROM moz_bookmarks WHERE id = :item_id");
-    stmt.params["item_id"] = this._invalidKeywordItemId;
-    do_check_true(stmt.executeStep());
-    stmt.finalize();
-  }
-});
-
-//------------------------------------------------------------------------------
-
-tests.push({
   name: "D.6",
   desc: "Fix wrong item types | bookmarks",
 
@@ -723,11 +676,11 @@ tests.push({
 
     function randomize_positions(aParent, aResultArray) {
       let stmt = mDBConn.createStatement(
-        "UPDATE moz_bookmarks SET position = :rand " +
-        "WHERE id IN ( " +
-          "SELECT id FROM moz_bookmarks WHERE parent = :parent " +
-          "ORDER BY RANDOM() LIMIT 1 " +
-        ") "
+        `UPDATE moz_bookmarks SET position = :rand
+         WHERE id IN (
+           SELECT id FROM moz_bookmarks WHERE parent = :parent
+           ORDER BY RANDOM() LIMIT 1
+         )`
       );
       for (let i = 0; i < (NUM_BOOKMARKS / 2); i++) {
         stmt.params["parent"] = aParent;
@@ -739,9 +692,9 @@ tests.push({
 
       // Build the expected ordered list of bookmarks.
       stmt = mDBConn.createStatement(
-        "SELECT id, position " +
-        "FROM moz_bookmarks WHERE parent = :parent " +
-        "ORDER BY position ASC, ROWID ASC "
+        `SELECT id, position
+         FROM moz_bookmarks WHERE parent = :parent
+         ORDER BY position ASC, ROWID ASC`
       );
       stmt.params["parent"] = aParent;
       while (stmt.executeStep()) {
@@ -762,8 +715,8 @@ tests.push({
     function check_order(aParent, aResultArray) {
       // Build the expected ordered list of bookmarks.
       let stmt = mDBConn.createStatement(
-        "SELECT id, position FROM moz_bookmarks WHERE parent = :parent " +
-        "ORDER BY position ASC"
+        `SELECT id, position FROM moz_bookmarks WHERE parent = :parent
+         ORDER BY position ASC`
       );
       stmt.params["parent"] = aParent;
       let pass = true;
@@ -1053,27 +1006,17 @@ tests.push({
 
   setup: function() {
     // Insert 2 keywords
-    let stmt = mDBConn.createStatement("INSERT INTO moz_keywords (id, keyword) VALUES(:id, :keyword)");
+    let stmt = mDBConn.createStatement("INSERT INTO moz_keywords (id, keyword, place_id) VALUES(:id, :keyword, :place_id)");
     stmt.params["id"] = 1;
-    stmt.params["keyword"] = "used";
-    stmt.execute();
-    stmt.reset();
-    stmt.params["id"] = 2;
     stmt.params["keyword"] = "unused";
+    stmt.params["place_id"] = 100;
     stmt.execute();
     stmt.finalize();
-    // Add a place to ensure place_id = 1 is valid
-    this._placeId = addPlace();
-    // Insert a bookmark using the "used" keyword
-    this._bookmarkId = addBookmark(this._placeId, bs.TYPE_BOOKMARK, bs.unfiledBookmarksFolder, 1);
   },
 
   check: function() {
     // Check that "used" keyword is still there
     let stmt = mDBConn.createStatement("SELECT id FROM moz_keywords WHERE keyword = :keyword");
-    stmt.params["keyword"] = "used";
-    do_check_true(stmt.executeStep());
-    stmt.reset();
     // Check that "unused" keyword has gone
     stmt.params["keyword"] = "unused";
     do_check_false(stmt.executeStep());
@@ -1154,23 +1097,23 @@ tests.push({
     let now = Date.now() * 1000;
     // Add a page with 1 visit.
     let url = "http://1.moz.org/";
-    yield promiseAddVisits({ uri: uri(url), visitDate: now++ });
+    yield PlacesTestUtils.addVisits({ uri: uri(url), visitDate: now++ });
     // Add a page with 1 visit and set wrong visit_count.
     url = "http://2.moz.org/";
-    yield promiseAddVisits({ uri: uri(url), visitDate: now++ });
+    yield PlacesTestUtils.addVisits({ uri: uri(url), visitDate: now++ });
     setVisitCount(url, 10);
     // Add a page with 1 visit and set wrong last_visit_date.
     url = "http://3.moz.org/";
-    yield promiseAddVisits({ uri: uri(url), visitDate: now++ });
+    yield PlacesTestUtils.addVisits({ uri: uri(url), visitDate: now++ });
     setLastVisitDate(url, now++);
     // Add a page with 1 visit and set wrong stats.
     url = "http://4.moz.org/";
-    yield promiseAddVisits({ uri: uri(url), visitDate: now++ });
+    yield PlacesTestUtils.addVisits({ uri: uri(url), visitDate: now++ });
     setVisitCount(url, 10);
     setLastVisitDate(url, now++);
 
     // Add a page without visits.
-    let url = "http://5.moz.org/";
+    url = "http://5.moz.org/";
     addPlace(url);
     // Add a page without visits and set wrong visit_count.
     url = "http://6.moz.org/";
@@ -1189,13 +1132,13 @@ tests.push({
 
   check: function() {
     let stmt = mDBConn.createStatement(
-      "SELECT h.id FROM moz_places h " +
-      "JOIN moz_historyvisits v ON v.place_id = h.id AND visit_type NOT IN (0,4,7,8) " +
-      "GROUP BY h.id HAVING h.visit_count <> count(*) " +
-      "UNION ALL " +
-      "SELECT h.id FROM moz_places h " +
-      "JOIN moz_historyvisits v ON v.place_id = h.id " +
-      "GROUP BY h.id HAVING h.last_visit_date <> MAX(v.visit_date) "
+      `SELECT h.id FROM moz_places h
+       JOIN moz_historyvisits v ON v.place_id = h.id AND visit_type NOT IN (0,4,7,8)
+       GROUP BY h.id HAVING h.visit_count <> count(*)
+       UNION ALL
+       SELECT h.id FROM moz_places h
+       JOIN moz_historyvisits v ON v.place_id = h.id
+       GROUP BY h.id HAVING h.last_visit_date <> MAX(v.visit_date)`
     );
     do_check_false(stmt.executeStep());
     stmt.finalize();
@@ -1209,7 +1152,7 @@ tests.push({
   desc: "recalculate hidden for redirects.",
 
   setup: function() {
-    promiseAddVisits([
+    PlacesTestUtils.addVisits([
       { uri: NetUtil.newURI("http://l3.moz.org/"),
         transition: TRANSITION_TYPED },
       { uri: NetUtil.newURI("http://l3.moz.org/redirecting/"),
@@ -1264,7 +1207,7 @@ tests.push({
 
   setup: function() {
     // use valid api calls to create a bunch of items
-    yield promiseAddVisits([
+    yield PlacesTestUtils.addVisits([
       { uri: this._uri1 },
       { uri: this._uri2 },
     ]);
@@ -1325,7 +1268,7 @@ add_task(function test_preventive_maintenance()
 {
   // Force initialization of the bookmarks hash. This test could cause
   // it to go out of sync due to direct queries on the database.
-  yield promiseAddVisits(uri("http://force.bookmarks.hash"));
+  yield PlacesTestUtils.addVisits(uri("http://force.bookmarks.hash"));
   do_check_false(bs.isBookmarked(uri("http://force.bookmarks.hash")));
 
   // Get current bookmarks max ID for cleanup

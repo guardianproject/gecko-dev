@@ -557,24 +557,11 @@ exports["test Collections 2"] = createProxyTest(html, function (helper) {
       for(let i in body.childNodes) {
         count++;
       }
-      assert(count == 6, "body.childNodes is iterable");
+
+      assert(count >= 3, "body.childNodes is iterable");
       done();
     }
   );
-
-});
-
-exports["test valueOf"] = createProxyTest("", function (helper) {
-
-    helper.createWorker(
-      'new ' + function ContentScriptScope() {
-        // Bug 787013: Until this bug is fixed, we are missing some methods
-        // on JS objects that comes from global `Object` object
-        assert(!('valueOf' in window), "valueOf is missing");
-        assert(!('toLocateString' in window), "toLocaleString is missing");
-        done();
-      }
-    );
 
 });
 
@@ -751,7 +738,7 @@ exports["testGlobalScope"] = createProxyTest("", function (helper) {
 // Create an http server in order to simulate real cross domain documents
 exports["test Cross Domain Iframe"] = createProxyTest("", function (helper) {
   let serverPort = 8099;
-  let server = require("sdk/test/httpd").startServerAsync(serverPort);
+  let server = require("./lib/httpd").startServerAsync(serverPort);
   server.registerPathHandler("/", function handle(request, response) {
     // Returns the webpage that receive a message and forward it back to its
     // parent document by appending ' world'.
@@ -866,4 +853,4 @@ exports["test nsEp for content-script"] = createProxyTest(html, function (helper
 
 });
 
-require("test").run(exports);
+require("sdk/test").run(exports);

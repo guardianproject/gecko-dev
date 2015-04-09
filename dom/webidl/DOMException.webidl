@@ -15,7 +15,8 @@
 
 interface StackFrame;
 
-[NoInterfaceObject]
+[NoInterfaceObject,
+ Exposed=(Window,Worker)]
 interface ExceptionMembers
 {
   // A custom message set by the thrower.  LenientThis so it can be
@@ -72,7 +73,9 @@ Exception implements ExceptionMembers;
 
 // XXXkhuey this is an 'exception', not an interface, but we don't have any
 // parser or codegen mechanisms for dealing with exceptions.
-[ExceptionClass]
+[ExceptionClass,
+ Exposed=(Window, Worker),
+ Constructor(optional DOMString message = "", optional DOMString name)]
 interface DOMException {
   const unsigned short INDEX_SIZE_ERR = 1;
   const unsigned short DOMSTRING_SIZE_ERR = 2; // historical

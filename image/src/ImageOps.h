@@ -4,11 +4,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef MOZILLA_IMAGELIB_IMAGEOPS_H_
-#define MOZILLA_IMAGELIB_IMAGEOPS_H_
+#ifndef mozilla_image_src_ImageOps_h
+#define mozilla_image_src_ImageOps_h
 
 #include "nsCOMPtr.h"
 
+class gfxDrawable;
 class imgIContainer;
 struct nsIntRect;
 
@@ -37,7 +38,8 @@ public:
    * @param aClip          The rectangle to clip the image against.
    */
   static already_AddRefed<Image> Clip(Image* aImage, nsIntRect aClip);
-  static already_AddRefed<imgIContainer> Clip(imgIContainer* aImage, nsIntRect aClip);
+  static already_AddRefed<imgIContainer> Clip(imgIContainer* aImage,
+                                              nsIntRect aClip);
 
   /**
    * Creates a version of an existing image which is rotated and/or flipped to
@@ -46,8 +48,18 @@ public:
    * @param aImage         The existing image.
    * @param aOrientation   The desired orientation.
    */
-  static already_AddRefed<Image> Orient(Image* aImage, Orientation aOrientation);
-  static already_AddRefed<imgIContainer> Orient(imgIContainer* aImage, Orientation aOrientation);
+  static already_AddRefed<Image> Orient(Image* aImage,
+                                        Orientation aOrientation);
+  static already_AddRefed<imgIContainer> Orient(imgIContainer* aImage,
+                                                Orientation aOrientation);
+
+  /**
+   * Creates an image from a gfxDrawable.
+   *
+   * @param aDrawable      The gfxDrawable.
+   */
+  static already_AddRefed<imgIContainer>
+  CreateFromDrawable(gfxDrawable* aDrawable);
 
 private:
   // This is a static utility class, so disallow instantiation.
@@ -57,4 +69,4 @@ private:
 } // namespace image
 } // namespace mozilla
 
-#endif // MOZILLA_IMAGELIB_IMAGEOPS_H_
+#endif // mozilla_image_src_ImageOps_h

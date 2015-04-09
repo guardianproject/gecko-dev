@@ -10,8 +10,6 @@ typedef TestJSImplInterface? NullableTestJSImplInterface;
 
 callback MyTestCallback = void();
 
-TestInterface implements ImplementedInterface;
-
 enum MyTestEnum {
   "a",
   "b"
@@ -47,6 +45,22 @@ interface TestJSImplInterface {
   readonly attribute byte cachedConstantByte;
   [Cached, Pure]
   attribute byte cachedWritableByte;
+  [Affects=Nothing]
+  attribute byte sideEffectFreeByte;
+  [Affects=Nothing, DependsOn=DOMState]
+  attribute byte domDependentByte;
+  [Affects=Nothing, DependsOn=Nothing]
+  readonly attribute byte constantByte;
+  [DependsOn=DeviceState, Affects=Nothing]
+  readonly attribute byte deviceStateDependentByte;
+  [Affects=Nothing]
+  byte returnByteSideEffectFree();
+  [Affects=Nothing, DependsOn=DOMState]
+  byte returnDOMDependentByte();
+  [Affects=Nothing, DependsOn=Nothing]
+  byte returnConstantByte();
+  [DependsOn=DeviceState, Affects=Nothing]
+  byte returnDeviceStateDependentByte();
 
   readonly attribute short readonlyShort;
   attribute short writableShort;
@@ -136,9 +150,8 @@ interface TestJSImplInterface {
   TestJSImplInterface receiveSelf();
   TestJSImplInterface? receiveNullableSelf();
 
-  // Callback interface ignores 'resultNotAddRefed'. See bug 843272.
-  //TestJSImplInterface receiveWeakSelf();
-  //TestJSImplInterface? receiveWeakNullableSelf();
+  TestJSImplInterface receiveWeakSelf();
+  TestJSImplInterface? receiveWeakNullableSelf();
 
   // A version to test for casting to TestJSImplInterface&
   void passSelf(TestJSImplInterface arg);
@@ -170,9 +183,8 @@ interface TestJSImplInterface {
   // Non-castable interface types
   IndirectlyImplementedInterface receiveOther();
   IndirectlyImplementedInterface? receiveNullableOther();
-  // Callback interface ignores 'resultNotAddRefed'. See bug 843272.
-  //IndirectlyImplementedInterface receiveWeakOther();
-  //IndirectlyImplementedInterface? receiveWeakNullableOther();
+  IndirectlyImplementedInterface receiveWeakOther();
+  IndirectlyImplementedInterface? receiveWeakNullableOther();
 
   void passOther(IndirectlyImplementedInterface arg);
   void passNullableOther(IndirectlyImplementedInterface? arg);
@@ -186,9 +198,8 @@ interface TestJSImplInterface {
   // External interface types
   TestExternalInterface receiveExternal();
   TestExternalInterface? receiveNullableExternal();
-  // Callback interface ignores 'resultNotAddRefed'. See bug 843272.
-  //TestExternalInterface receiveWeakExternal();
-  //TestExternalInterface? receiveWeakNullableExternal();
+  TestExternalInterface receiveWeakExternal();
+  TestExternalInterface? receiveWeakNullableExternal();
   void passExternal(TestExternalInterface arg);
   void passNullableExternal(TestExternalInterface? arg);
   attribute TestExternalInterface nonNullExternal;
@@ -201,9 +212,8 @@ interface TestJSImplInterface {
   // Callback interface types
   TestCallbackInterface receiveCallbackInterface();
   TestCallbackInterface? receiveNullableCallbackInterface();
-  // Callback interface ignores 'resultNotAddRefed'. See bug 843272.
-  //TestCallbackInterface receiveWeakCallbackInterface();
-  //TestCallbackInterface? receiveWeakNullableCallbackInterface();
+  TestCallbackInterface receiveWeakCallbackInterface();
+  TestCallbackInterface? receiveWeakNullableCallbackInterface();
   void passCallbackInterface(TestCallbackInterface arg);
   void passNullableCallbackInterface(TestCallbackInterface? arg);
   attribute TestCallbackInterface nonNullCallbackInterface;
@@ -273,6 +283,7 @@ interface TestJSImplInterface {
   sequence<object?> receiveNullableObjectSequence();
 
   void passSequenceOfSequences(sequence<sequence<long>> arg);
+  void passSequenceOfSequencesOfSequences(sequence<sequence<sequence<long>>> arg);
   //XXXbz No support for sequence of sequence return values yet.
   //sequence<sequence<long>> receiveSequenceOfSequences();
 
@@ -303,33 +314,30 @@ interface TestJSImplInterface {
   //MozMap<MozMap<long>> receiveMozMapOfMozMaps();
   MozMap<any> receiveAnyMozMap();
 
-  // ArrayBuffer is handled differently in callback interfaces and the example generator.
-  // Need to figure out what should be done there.  Seems like other typed array stuff is
-  // similarly not working in the JS implemented generator.  Probably some other issues
-  // here as well.
   // Typed array types
-  //void passArrayBuffer(ArrayBuffer arg);
-  //void passNullableArrayBuffer(ArrayBuffer? arg);
-  //void passOptionalArrayBuffer(optional ArrayBuffer arg);
-  //void passOptionalNullableArrayBuffer(optional ArrayBuffer? arg);
-  //void passOptionalNullableArrayBufferWithDefaultValue(optional ArrayBuffer? arg= null);
-  //void passArrayBufferView(ArrayBufferView arg);
-  //void passInt8Array(Int8Array arg);
-  //void passInt16Array(Int16Array arg);
-  //void passInt32Array(Int32Array arg);
-  //void passUint8Array(Uint8Array arg);
-  //void passUint16Array(Uint16Array arg);
-  //void passUint32Array(Uint32Array arg);
-  //void passUint8ClampedArray(Uint8ClampedArray arg);
-  //void passFloat32Array(Float32Array arg);
-  //void passFloat64Array(Float64Array arg);
-  //void passSequenceOfArrayBuffers(sequence<ArrayBuffer> arg);
-  //void passSequenceOfNullableArrayBuffers(sequence<ArrayBuffer?> arg);
-  //void passMozMapOfArrayBuffers(MozMap<ArrayBuffer> arg);
-  //void passMozMapOfNullableArrayBuffers(MozMap<ArrayBuffer?> arg);
-  //void passVariadicTypedArray(Float32Array... arg);
-  //void passVariadicNullableTypedArray(Float32Array?... arg);
-  //Uint8Array receiveUint8Array();
+  void passArrayBuffer(ArrayBuffer arg);
+  void passNullableArrayBuffer(ArrayBuffer? arg);
+  void passOptionalArrayBuffer(optional ArrayBuffer arg);
+  void passOptionalNullableArrayBuffer(optional ArrayBuffer? arg);
+  void passOptionalNullableArrayBufferWithDefaultValue(optional ArrayBuffer? arg= null);
+  void passArrayBufferView(ArrayBufferView arg);
+  void passInt8Array(Int8Array arg);
+  void passInt16Array(Int16Array arg);
+  void passInt32Array(Int32Array arg);
+  void passUint8Array(Uint8Array arg);
+  void passUint16Array(Uint16Array arg);
+  void passUint32Array(Uint32Array arg);
+  void passUint8ClampedArray(Uint8ClampedArray arg);
+  void passFloat32Array(Float32Array arg);
+  void passFloat64Array(Float64Array arg);
+  void passSequenceOfArrayBuffers(sequence<ArrayBuffer> arg);
+  void passSequenceOfNullableArrayBuffers(sequence<ArrayBuffer?> arg);
+  void passMozMapOfArrayBuffers(MozMap<ArrayBuffer> arg);
+  void passMozMapOfNullableArrayBuffers(MozMap<ArrayBuffer?> arg);
+  void passVariadicTypedArray(Float32Array... arg);
+  void passVariadicNullableTypedArray(Float32Array?... arg);
+  Uint8Array receiveUint8Array();
+  attribute Uint8Array uint8ArrayAttr;
 
   // DOMString types
   void passString(DOMString arg);
@@ -347,6 +355,16 @@ interface TestJSImplInterface {
   void passOptionalNullableByteString(optional ByteString? arg);
   void passVariadicByteString(ByteString... arg);
   void PassUnionByteString((ByteString or long) arg);
+
+  // USVString types
+  void passSVS(USVString arg);
+  void passNullableSVS(USVString? arg);
+  void passOptionalSVS(optional USVString arg);
+  void passOptionalSVSWithDefaultValue(optional USVString arg = "abc");
+  void passOptionalNullableSVS(optional USVString? arg);
+  void passOptionalNullableSVSWithDefaultValue(optional USVString? arg = null);
+  void passVariadicSVS(USVString... arg);
+  USVString receiveSVS();
 
   // Enumerated types
   void passEnum(MyTestEnum arg);
@@ -444,10 +462,18 @@ interface TestJSImplInterface {
   void passUnion20(optional (sequence<object> or long) arg = []);
   void passUnion21((MozMap<long> or long) arg);
   void passUnion22((MozMap<object> or long) arg);
+  void passUnion23((sequence<ImageData> or long) arg);
+  void passUnion24((sequence<ImageData?> or long) arg);
+  void passUnion25((sequence<sequence<ImageData>> or long) arg);
+  void passUnion26((sequence<sequence<ImageData?>> or long) arg);
+  void passUnion27(optional (sequence<DOMString> or EventInit) arg);
+  void passUnion28(optional (EventInit or sequence<DOMString>) arg);
   void passUnionWithCallback((EventHandler or long) arg);
+  void passUnionWithByteString((ByteString or long) arg);
   void passUnionWithMozMap((MozMap<DOMString> or DOMString) arg);
   void passUnionWithMozMapAndSequence((MozMap<DOMString> or sequence<DOMString>) arg);
   void passUnionWithSequenceAndMozMap((sequence<DOMString> or MozMap<DOMString>) arg);
+  void passUnionWithSVS((USVString or long) arg);
 #endif
   void passUnionWithNullable((object? or long) arg);
   void passNullableUnion((object or long)? arg);
@@ -503,15 +529,15 @@ interface TestJSImplInterface {
   // XXXbz no move constructor on some unions
   // void passMozMapOfUnions2(MozMap<(object or long)> arg);
 
-  //(CanvasPattern or CanvasGradient) receiveUnion();
-  //(object or long) receiveUnion2();
-  //(CanvasPattern? or CanvasGradient) receiveUnionContainingNull();
-  //(CanvasPattern or CanvasGradient)? receiveNullableUnion();
-  //(object or long)? receiveNullableUnion2();
+  (CanvasPattern or CanvasGradient) receiveUnion();
+  (object or long) receiveUnion2();
+  (CanvasPattern? or CanvasGradient) receiveUnionContainingNull();
+  (CanvasPattern or CanvasGradient)? receiveNullableUnion();
+  (object or long)? receiveNullableUnion2();
 
-  //attribute (CanvasPattern or CanvasGradient) writableUnion;
-  //attribute (CanvasPattern? or CanvasGradient) writableUnionContainingNull;
-  //attribute (CanvasPattern or CanvasGradient)? writableNullableUnion;
+  attribute (CanvasPattern or CanvasGradient) writableUnion;
+  attribute (CanvasPattern? or CanvasGradient) writableUnionContainingNull;
+  attribute (CanvasPattern or CanvasGradient)? writableNullableUnion;
 
   // Date types
   void passDate(Date arg);
@@ -527,9 +553,13 @@ interface TestJSImplInterface {
 
   // binaryNames tests
   void methodRenamedFrom();
+  [BinaryName="otherMethodRenamedTo"]
+  void otherMethodRenamedFrom();
   void methodRenamedFrom(byte argument);
   readonly attribute byte attributeGetterRenamedFrom;
   attribute byte attributeRenamedFrom;
+  [BinaryName="otherAttributeRenamedTo"]
+  attribute byte otherAttributeRenamedFrom;
 
   void passDictionary(optional Dict x);
   [Cached, Pure]
@@ -557,6 +587,7 @@ interface TestJSImplInterface {
   void passDictContainingDict(optional DictContainingDict arg);
   void passDictContainingSequence(optional DictContainingSequence arg);
   DictContainingSequence receiveDictContainingSequence();
+  void passVariadicDictionary(Dict... arg);
 
   // EnforceRange/Clamp tests
   void dontEnforceRangeOrClamp(byte arg);
@@ -619,6 +650,14 @@ interface TestJSImplInterface {
   void overload15(optional TestInterface arg);
   void overload16(long arg);
   void overload16(optional TestInterface? arg);
+  void overload17(sequence<long> arg);
+  void overload17(MozMap<long> arg);
+  void overload18(MozMap<DOMString> arg);
+  void overload18(sequence<DOMString> arg);
+  void overload19(sequence<long> arg);
+  void overload19(optional Dict arg);
+  void overload20(optional Dict arg);
+  void overload20(sequence<long> arg);
 
   // Variadic handling
   void passVariadicThirdArg(DOMString arg1, long arg2, TestJSImplInterface... arg3);
@@ -702,6 +741,9 @@ interface TestJSImplInterface {
   attribute TestCallbackInterface jsonifierShouldSkipThis3;
   jsonifier;
 
+  attribute byte dashed-attribute;
+  void dashed-method();
+
   // If you add things here, add them to TestCodeGen as well
 };
 
@@ -717,4 +759,11 @@ interface TestCImplementedInterface : TestJSImplInterface {
 };
 
 interface TestCImplementedInterface2 {
+};
+
+[NoInterfaceObject,
+ JSImplementation="@mozilla.org/test-js-impl-interface;2"]
+interface TestJSImplNoInterfaceObject {
+  [Cached, Pure]
+  readonly attribute byte cachedByte;
 };

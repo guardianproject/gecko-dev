@@ -10,13 +10,10 @@ UNIFIED_SOURCES += [
     'xpctest_attributes.cpp',
     'xpctest_module.cpp',
     'xpctest_params.cpp',
+    'xpctest_returncode.cpp',
 ]
 
-LIBRARY_NAME = 'xpctest'
-
-IS_COMPONENT = True
-
-FORCE_SHARED_LIB = True
+XPCOMBinaryComponent('xpctest')
 
 DEFINES['LIBRARY_FILENAME'] = '%s%s%s' % (
     CONFIG['DLL_PREFIX'],

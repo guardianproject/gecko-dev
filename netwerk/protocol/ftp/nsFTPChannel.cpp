@@ -131,12 +131,12 @@ nsFtpChannel::OnCallbacksChanged()
 
 namespace {
 
-class FTPEventSinkProxy MOZ_FINAL : public nsIFTPEventSink
+class FTPEventSinkProxy final : public nsIFTPEventSink
 {
     ~FTPEventSinkProxy() {}
 
 public:
-    FTPEventSinkProxy(nsIFTPEventSink* aTarget)
+    explicit FTPEventSinkProxy(nsIFTPEventSink* aTarget)
         : mTarget(aTarget)
         , mTargetThread(do_GetCurrentThread())
     { }

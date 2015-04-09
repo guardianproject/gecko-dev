@@ -21,77 +21,184 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef mozilla_pkix__pkixgtest_h
-#define mozilla_pkix__pkixgtest_h
+#ifndef mozilla_pkix_pkixgtest_h
+#define mozilla_pkix_pkixgtest_h
 
 #include <ostream>
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated"
+#pragma clang diagnostic ignored "-Wmissing-noreturn"
+#pragma clang diagnostic ignored "-Wshift-sign-overflow"
+#pragma clang diagnostic ignored "-Wsign-conversion"
+#pragma clang diagnostic ignored "-Wundef"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wextra"
+#elif defined(_MSC_VER)
+#pragma warning(push, 3)
+// C4224: Nonstandard extension used: formal parameter 'X' was previously
+//        defined as a type.
+#pragma warning(disable: 4224)
+// C4826: Conversion from 'type1 ' to 'type_2' is sign - extended. This may
+//        cause unexpected runtime behavior.
+#pragma warning(disable: 4826)
+#endif
+
 #include "gtest/gtest.h"
-#include "pkixutil.h"
-#include "prerror.h"
-#include "stdint.h"
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
+#include "pkix/pkix.h"
+#include "pkixtestutil.h"
+
+// PrintTo must be in the same namespace as the type we're overloading it for.
+namespace mozilla { namespace pkix {
+
+inline void
+PrintTo(const Result& result, ::std::ostream* os)
+{
+  const char* stringified = MapResultToName(result);
+  if (stringified) {
+    *os << stringified;
+  } else {
+    *os << "mozilla::pkix::Result(" << static_cast<unsigned int>(result) << ")";
+  }
+}
+
+} } // namespace mozilla::pkix
 
 namespace mozilla { namespace pkix { namespace test {
 
-class ResultWithPRErrorCode
+extern const std::time_t ONE_DAY_IN_SECONDS_AS_TIME_T;
+
+extern const std::time_t now;
+extern const std::time_t oneDayBeforeNow;
+extern const std::time_t oneDayAfterNow;
+
+
+class EverythingFailsByDefaultTrustDomain : public TrustDomain
 {
 public:
-  ResultWithPRErrorCode(Result rv, PRErrorCode errorCode)
-    : mRv(rv)
-    , mErrorCode(errorCode)
+  Result GetCertTrust(EndEntityOrCA, const CertPolicyId&,
+                      Input, /*out*/ TrustLevel&) override
   {
+    ADD_FAILURE();
+    return NotReached("GetCertTrust should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
   }
 
-  explicit ResultWithPRErrorCode(Result rv)
-    : mRv(rv)
-    , mErrorCode(rv == Success ? 0 : PR_GetError())
+  Result FindIssuer(Input, IssuerChecker&, Time) override
   {
+    ADD_FAILURE();
+    return NotReached("FindIssuer should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
   }
 
-  bool operator==(const ResultWithPRErrorCode& other) const
+  Result CheckRevocation(EndEntityOrCA, const CertID&, Time,
+                          /*optional*/ const Input*,
+                          /*optional*/ const Input*) override
   {
-    return mRv == other.mRv && mErrorCode == other.mErrorCode;
+    ADD_FAILURE();
+    return NotReached("CheckRevocation should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
   }
 
-private:
-  const Result mRv;
-  const PRErrorCode mErrorCode;
+  Result IsChainValid(const DERArray&, Time) override
+  {
+    ADD_FAILURE();
+    return NotReached("IsChainValid should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
+  }
 
-  friend std::ostream& operator<<(std::ostream& os,
-                                  const ResultWithPRErrorCode & value);
+  Result DigestBuf(Input, DigestAlgorithm, /*out*/ uint8_t*, size_t) override
+  {
+    ADD_FAILURE();
+    return NotReached("DigestBuf should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
+  }
 
-  void operator=(const ResultWithPRErrorCode&) /*= delete*/;
+  Result CheckSignatureDigestAlgorithm(DigestAlgorithm) override
+  {
+    ADD_FAILURE();
+    return NotReached("CheckSignatureDigestAlgorithm should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
+  }
+
+  Result CheckECDSACurveIsAcceptable(EndEntityOrCA, NamedCurve) override
+  {
+    ADD_FAILURE();
+    return NotReached("CheckECDSACurveIsAcceptable should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
+  }
+
+  Result VerifyECDSASignedDigest(const SignedDigest&, Input) override
+  {
+    ADD_FAILURE();
+    return NotReached("VerifyECDSASignedDigest should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
+  }
+
+  Result CheckRSAPublicKeyModulusSizeInBits(EndEntityOrCA, unsigned int)
+                                            override
+  {
+    ADD_FAILURE();
+    return NotReached("CheckRSAPublicKeyModulusSizeInBits should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
+  }
+
+  Result VerifyRSAPKCS1SignedDigest(const SignedDigest&, Input) override
+  {
+    ADD_FAILURE();
+    return NotReached("VerifyRSAPKCS1SignedDigest should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
+  }
 };
 
-::std::ostream& operator<<(::std::ostream&, const ResultWithPRErrorCode &);
+class DefaultCryptoTrustDomain : public EverythingFailsByDefaultTrustDomain
+{
+  Result DigestBuf(Input item, DigestAlgorithm digestAlg,
+                   /*out*/ uint8_t* digestBuf, size_t digestBufLen) override
+  {
+    return TestDigestBuf(item, digestAlg, digestBuf, digestBufLen);
+  }
 
-#define ASSERT_Success(rv) \
-  ASSERT_EQ(::mozilla::pkix::test::ResultWithPRErrorCode( \
-                ::mozilla::pkix::Success, 0), \
-            ::mozilla::pkix::test::ResultWithPRErrorCode(rv))
-#define EXPECT_Success(rv) \
-  EXPECT_EQ(::mozilla::pkix::test::ResultWithPRErrorCode( \
-                ::mozilla::pkix::Success, 0), \
-            ::mozilla::pkix::test::ResultWithPRErrorCode(rv))
+  Result CheckSignatureDigestAlgorithm(DigestAlgorithm) override
+  {
+    return Success;
+  }
 
-#define ASSERT_RecoverableError(expectedError, rv) \
-  ASSERT_EQ(::mozilla::pkix::test::ResultWithPRErrorCode( \
-                 ::mozilla::pkix::RecoverableError, expectedError), \
-            ::mozilla::pkix::test::ResultWithPRErrorCode(rv))
-#define EXPECT_RecoverableError(expectedError, rv) \
-  EXPECT_EQ(::mozilla::pkix::test::ResultWithPRErrorCode( \
-                 ::mozilla::pkix::RecoverableError, expectedError), \
-            ::mozilla::pkix::test::ResultWithPRErrorCode(rv))
+  Result CheckECDSACurveIsAcceptable(EndEntityOrCA, NamedCurve) override
+  {
+    return Success;
+  }
 
-#define ASSERT_FatalError(expectedError, rv) \
-  ASSERT_EQ(::mozilla::pkix::test::ResultWithPRErrorCode( \
-                 ::mozilla::pkix::FatalError, expectedError), \
-            ::mozilla::pkix::test::ResultWithPRErrorCode(rv))
-#define EXPECT_FatalError(expectedError, rv) \
-  EXPECT_EQ(::mozilla::pkix::test::ResultWithPRErrorCode( \
-                 ::mozilla::pkix::FatalError, expectedError), \
-            ::mozilla::pkix::test::ResultWithPRErrorCode(rv))
+  Result VerifyECDSASignedDigest(const SignedDigest& signedDigest,
+                                 Input subjectPublicKeyInfo) override
+  {
+    return TestVerifyECDSASignedDigest(signedDigest, subjectPublicKeyInfo);
+  }
+
+  Result CheckRSAPublicKeyModulusSizeInBits(EndEntityOrCA, unsigned int)
+                                            override
+  {
+    return Success;
+  }
+
+  Result VerifyRSAPKCS1SignedDigest(const SignedDigest& signedDigest,
+                                    Input subjectPublicKeyInfo) override
+  {
+    return TestVerifyRSAPKCS1SignedDigest(signedDigest, subjectPublicKeyInfo);
+  }
+};
 
 } } } // namespace mozilla::pkix::test
 
-#endif // mozilla_pkix__pkixgtest_h
+#endif // mozilla_pkix_pkixgtest_h

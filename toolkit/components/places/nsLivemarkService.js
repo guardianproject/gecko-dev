@@ -73,21 +73,22 @@ LivemarkService.prototype = {
   get _populateCacheSQL()
   {
     function getAnnoSQLFragment(aAnnoParam) {
-      return "SELECT a.content "
-           + "FROM moz_items_annos a "
-           + "JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id "
-           + "WHERE a.item_id = b.id "
-           +   "AND n.name = " + aAnnoParam;
+      return `SELECT a.content
+              FROM moz_items_annos a
+              JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id
+              WHERE a.item_id = b.id
+                AND n.name = ${aAnnoParam}`;
     }
 
-    return "SELECT b.id, b.title, b.parent, b.position, b.guid, b.lastModified, "
-         +        "(" + getAnnoSQLFragment(":feedURI_anno") + ") AS feedURI, "
-         +        "(" + getAnnoSQLFragment(":siteURI_anno") + ") AS siteURI "
-         + "FROM moz_bookmarks b "
-         + "JOIN moz_items_annos a ON a.item_id = b.id "
-         + "JOIN moz_anno_attributes n ON a.anno_attribute_id = n.id "
-         + "WHERE b.type = :folder_type "
-         +   "AND n.name = :feedURI_anno ";
+    return `SELECT b.id, b.title, b.parent, b.position, b.guid,
+                   b.dateAdded, b.lastModified,
+                   ( ${getAnnoSQLFragment(":feedURI_anno")} ) AS feedURI,
+                   ( ${getAnnoSQLFragment(":siteURI_anno")} ) AS siteURI
+            FROM moz_bookmarks b
+            JOIN moz_items_annos a ON a.item_id = b.id
+            JOIN moz_anno_attributes n ON a.anno_attribute_id = n.id
+            WHERE b.type = :folder_type
+              AND n.name = :feedURI_anno`;
   },
 
   _ensureAsynchronousCache: Task.async(function* () {
@@ -106,6 +107,7 @@ LivemarkService.prototype = {
                          title: row.getResultByName("title"),
                          parentId: row.getResultByName("parent"),
                          index: row.getResultByName("position"),
+                         dateAdded: row.getResultByName("dateAdded"),
                          lastModified: row.getResultByName("lastModified"),
                          feedURI: NetUtil.newURI(row.getResultByName("feedURI")),
                          siteURI: siteURL ? NetUtil.newURI(siteURL) : null });
@@ -202,11 +204,15 @@ LivemarkService.prototype = {
                               , feedURI:      aLivemarkInfo.feedURI
                               , siteURI:      aLivemarkInfo.siteURI
                               , guid:         aLivemarkInfo.guid
+                              , dateAdded:    aLivemarkInfo.dateAdded
                               , lastModified: aLivemarkInfo.lastModified
                               });
       if (this._itemAdded && this._itemAdded.id == livemark.id) {
         livemark.index = this._itemAdded.index;
         livemark.guid = this._itemAdded.guid;
+        if (!aLivemarkInfo.dateAdded) {
+          livemark.dateAdded = this._itemAdded.dateAdded;
+        }
         if (!aLivemarkInfo.lastModified) {
           livemark.lastModified = this._itemAdded.lastModified;
         }
@@ -411,6 +417,7 @@ LivemarkService.prototype = {
       this._itemAdded = { id: aItemId
                         , guid: aGUID
                         , index: aIndex
+                        , dateAdded: aDateAdded
                         , lastModified: aDateAdded
                         };
     }
@@ -422,11 +429,15 @@ LivemarkService.prototype = {
     if (aItemType == Ci.nsINavBookmarksService.TYPE_FOLDER) {
       if (this._itemAdded && this._itemAdded.id == aItemId) {
         this._itemAdded.lastModified = aLastModified;
-     }
+      }
       if (aItemId in this._livemarks) {
         if (aProperty == "title") {
           this._livemarks[aItemId].title = aValue;
         }
+        else if (aProperty == "dateAdded") {
+          this._livemark[aItemId].dateAdded = parseInt(aValue, 10);
+        }
+
         this._livemarks[aItemId].lastModified = aLastModified;
       }
     }
@@ -461,7 +472,11 @@ LivemarkService.prototype = {
   onPageChanged:      function () {},
   onTitleChanged:     function () {},
   onDeleteVisits:     function () {},
-  onClearHistory:     function () {},
+  onClearHistory() {
+    for each (let livemark in this._livemarks) {
+      livemark.updateURIVisitedStatus(null, false);
+    }
+  },
 
   onDeleteURI: function PS_onDeleteURI(aURI) {
     for each (let livemark in this._livemarks) {
@@ -526,8 +541,8 @@ function Livemark(aLivemarkInfo)
   this._nodes = new Map();
 
   this._guid = "";
+  this._dateAdded = 0;
   this._lastModified = 0;
-
   this.loadGroup = null;
   this.feedURI = null;
   this.siteURI = null;
@@ -539,6 +554,7 @@ function Livemark(aLivemarkInfo)
     this.guid = aLivemarkInfo.guid;
     this.feedURI = aLivemarkInfo.feedURI;
     this.siteURI = aLivemarkInfo.siteURI;
+    this.dateAdded = aLivemarkInfo.dateAdded;
     this.lastModified = aLivemarkInfo.lastModified;
   }
   else {
@@ -547,10 +563,13 @@ function Livemark(aLivemarkInfo)
                                                  aLivemarkInfo.title,
                                                  aLivemarkInfo.index,
                                                  aLivemarkInfo.guid);
-    PlacesUtils.bookmarks.setFolderReadonly(this.id, true);
     this.writeFeedURI(aLivemarkInfo.feedURI);
     if (aLivemarkInfo.siteURI) {
       this.writeSiteURI(aLivemarkInfo.siteURI);
+    }
+    if (aLivemarkInfo.dateAdded) {
+      this.dateAdded = aLivemarkInfo.dateAdded;
+      PlacesUtils.bookmarks.setItemDateAdded(this.id, this.dateAdded);
     }
     // Last modified time must be the last change.
     if (aLivemarkInfo.lastModified) {
@@ -615,16 +634,13 @@ Livemark.prototype = {
     this.siteURI = aSiteURI;
   },
 
-  set guid(aGUID) {
-    this._guid = aGUID;
-    return aGUID;
-  },
+  set guid(aGUID) this._guid = aGUID,
   get guid() this._guid,
 
-  set lastModified(aLastModified) {
-    this._lastModified = aLastModified;
-    return aLastModified;
-  },
+  set dateAdded(aDateAdded) this._dateAdded = aDateAdded,
+  get dateAdded() this._dateAdded,
+
+  set lastModified(aLastModified) this._lastModified = aLastModified,
   get lastModified() this._lastModified,
 
   /**
@@ -658,7 +674,16 @@ Livemark.prototype = {
       // cancel the channel.
       let loadgroup = Cc["@mozilla.org/network/load-group;1"].
                       createInstance(Ci.nsILoadGroup);
-      let channel = NetUtil.newChannel(this.feedURI.spec).
+      let feedPrincipal =
+        secMan.getNoAppCodebasePrincipal(this.feedURI);
+      let channel = NetUtil.newChannel2(this.feedURI.spec,
+                                        null,
+                                        null,
+                                        null,      // aLoadingNode
+                                        feedPrincipal,
+                                        null,      // aTriggeringPrincipal
+                                        Ci.nsILoadInfo.SEC_NORMAL,
+                                        Ci.nsIContentPolicy.TYPE_DATAREQUEST).
                     QueryInterface(Ci.nsIHttpChannel);
       channel.loadGroup = loadgroup;
       channel.loadFlags |= Ci.nsIRequest.LOAD_BACKGROUND |
@@ -782,11 +807,20 @@ Livemark.prototype = {
     }
   },
 
+  /**
+   * Updates the visited status of nodes observing this livemark.
+   *
+   * @param aURI
+   *        If provided will update nodes having the given uri,
+   *        otherwise any node.
+   * @param aVisitedStatus
+   *        Whether the nodes should be set as visited.
+   */
   updateURIVisitedStatus:
   function LM_updateURIVisitedStatus(aURI, aVisitedStatus)
   {
     for (let i = 0; i < this.children.length; i++) {
-      if (this.children[i].uri.equals(aURI)) {
+      if (!aURI || this.children[i].uri.equals(aURI)) {
         this.children[i].visited = aVisitedStatus;
       }
     }
@@ -798,7 +832,7 @@ Livemark.prototype = {
         let nodes = this._nodes.get(container);
         for (let j = 0; j < nodes.length; j++) {
           let node = nodes[j];
-          if (node.uri == aURI.spec) {
+          if (!aURI || node.uri == aURI.spec) {
             Services.tm.mainThread.dispatch((function () {
               observer.nodeHistoryDetailsChanged(node, 0, aVisitedStatus);
             }).bind(this), Ci.nsIThread.DISPATCH_NORMAL);

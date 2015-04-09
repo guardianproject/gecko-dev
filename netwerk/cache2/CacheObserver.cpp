@@ -33,8 +33,8 @@ static int32_t sAutoDeleteCacheVersion = kAutoDeleteCacheVersion;
 static int32_t const kDefaultHalfLifeExperiment = -1; // Disabled
 int32_t CacheObserver::sHalfLifeExperiment = kDefaultHalfLifeExperiment;
 
-static uint32_t const kDefaultHalfLifeHours = 6; // 6 hours
-uint32_t CacheObserver::sHalfLifeHours = kDefaultHalfLifeHours;
+static float const kDefaultHalfLifeHours = 1.0F; // 1 hour
+float CacheObserver::sHalfLifeHours = kDefaultHalfLifeHours;
 
 static bool const kDefaultUseDiskCache = true;
 bool CacheObserver::sUseDiskCache = kDefaultUseDiskCache;
@@ -86,6 +86,9 @@ bool CacheObserver::sSanitizeOnShutdown = kDefaultSanitizeOnShutdown;
 static bool kDefaultClearCacheOnShutdown = false;
 bool CacheObserver::sClearCacheOnShutdown = kDefaultClearCacheOnShutdown;
 
+static bool kDefaultCacheFSReported = false;
+bool CacheObserver::sCacheFSReported = kDefaultCacheFSReported;
+
 NS_IMPL_ISUPPORTS(CacheObserver,
                   nsIObserver,
                   nsISupportsWeakReference)
@@ -108,7 +111,7 @@ CacheObserver::Init()
 
   obs->AddObserver(sSelf, "prefservice:after-app-defaults", true);
   obs->AddObserver(sSelf, "profile-do-change", true);
-  obs->AddObserver(sSelf, "sessionstore-windows-restored", true);
+  obs->AddObserver(sSelf, "browser-delayed-startup-finished", true);
   obs->AddObserver(sSelf, "profile-before-change", true);
   obs->AddObserver(sSelf, "xpcom-shutdown", true);
   obs->AddObserver(sSelf, "last-pb-context-exited", true);
@@ -208,22 +211,22 @@ CacheObserver::AttachToPreferences()
 
   switch (sHalfLifeExperiment) {
   case 1: // The experiment is engaged
-    sHalfLifeHours = 6;
+    sHalfLifeHours = 0.083F; // ~5 mintues
     break;
   case 2:
-    sHalfLifeHours = 24;
+    sHalfLifeHours = 0.25F; // 15 mintues
     break;
   case 3:
-    sHalfLifeHours = 7 * 24;
+    sHalfLifeHours = 1.0F;
     break;
   case 4:
-    sHalfLifeHours = 50 * 24;
+    sHalfLifeHours = 6.0F;
     break;
 
   case -1:
   default: // The experiment is off or broken
     sHalfLifeExperiment = -1;
-    sHalfLifeHours = std::max(1U, std::min(1440U, mozilla::Preferences::GetUint(
+    sHalfLifeHours = std::max(0.01F, std::min(1440.0F, mozilla::Preferences::GetFloat(
       "browser.cache.frecency_half_life_hours", kDefaultHalfLifeHours)));
     break;
   }
@@ -315,6 +318,32 @@ CacheObserver::StoreDiskCacheCapacity()
 {
   mozilla::Preferences::SetInt("browser.cache.disk.capacity",
                                sDiskCacheCapacity);
+}
+
+// static
+void
+CacheObserver::SetCacheFSReported()
+{
+  sCacheFSReported = true;
+
+  if (!sSelf) {
+    return;
+  }
+
+  if (NS_IsMainThread()) {
+    sSelf->StoreCacheFSReported();
+  } else {
+    nsCOMPtr<nsIRunnable> event =
+      NS_NewRunnableMethod(sSelf, &CacheObserver::StoreCacheFSReported);
+    NS_DispatchToMainThread(event);
+  }
+}
+
+void
+CacheObserver::StoreCacheFSReported()
+{
+  mozilla::Preferences::SetInt("browser.cache.disk.filesystem_reported",
+                               sCacheFSReported);
 }
 
 // static
@@ -450,7 +479,7 @@ CacheObserver::Observe(nsISupports* aSubject,
     return NS_OK;
   }
 
-  if (!strcmp(aTopic, "sessionstore-windows-restored")) {
+  if (!strcmp(aTopic, "browser-delayed-startup-finished")) {
     uint32_t activeVersion = UseNewCache() ? 1 : 0;
     CacheStorageService::CleaupCacheDirectories(sAutoDeleteCacheVersion, activeVersion);
     return NS_OK;

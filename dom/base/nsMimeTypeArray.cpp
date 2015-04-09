@@ -33,7 +33,6 @@ NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(nsMimeTypeArray,
 nsMimeTypeArray::nsMimeTypeArray(nsPIDOMWindow* aWindow)
   : mWindow(aWindow)
 {
-  SetIsDOMBinding();
 }
 
 nsMimeTypeArray::~nsMimeTypeArray()
@@ -41,9 +40,9 @@ nsMimeTypeArray::~nsMimeTypeArray()
 }
 
 JSObject*
-nsMimeTypeArray::WrapObject(JSContext* aCx)
+nsMimeTypeArray::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MimeTypeArrayBinding::Wrap(aCx, this);
+  return MimeTypeArrayBinding::Wrap(aCx, this, aGivenProto);
 }
 
 void
@@ -233,7 +232,6 @@ nsMimeType::nsMimeType(nsPIDOMWindow* aWindow, nsPluginElement* aPluginElement,
     mPluginTagMimeIndex(aPluginTagMimeIndex),
     mType(aType)
 {
-  SetIsDOMBinding();
 }
 
 nsMimeType::nsMimeType(nsPIDOMWindow* aWindow, const nsAString& aType)
@@ -242,7 +240,6 @@ nsMimeType::nsMimeType(nsPIDOMWindow* aWindow, const nsAString& aType)
     mPluginTagMimeIndex(0),
     mType(aType)
 {
-  SetIsDOMBinding();
 }
 
 nsMimeType::~nsMimeType()
@@ -257,9 +254,9 @@ nsMimeType::GetParentObject() const
 }
 
 JSObject*
-nsMimeType::WrapObject(JSContext* aCx)
+nsMimeType::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MimeTypeBinding::Wrap(aCx, this);
+  return MimeTypeBinding::Wrap(aCx, this, aGivenProto);
 }
 
 void

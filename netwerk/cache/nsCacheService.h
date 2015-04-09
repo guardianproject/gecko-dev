@@ -62,8 +62,8 @@ private:
  *  nsCacheService
  ******************************************************************************/
 
-class nsCacheService : public nsICacheServiceInternal,
-                       public nsIMemoryReporter
+class nsCacheService final : public nsICacheServiceInternal,
+                             public nsIMemoryReporter
 {
     virtual ~nsCacheService();
 
@@ -182,7 +182,7 @@ public:
     /**
      * Methods called by nsCacheProfilePrefObserver
      */
-    static void      OnProfileShutdown(bool cleanse);
+    static void      OnProfileShutdown();
     static void      OnProfileChanged();
 
     static void      SetDiskCacheEnabled(bool    enabled);
@@ -393,7 +393,7 @@ private:
 // execution scope.
 class nsCacheServiceAutoLock {
 public:
-    nsCacheServiceAutoLock(mozilla::Telemetry::ID mainThreadLockerID) {
+    explicit nsCacheServiceAutoLock(mozilla::Telemetry::ID mainThreadLockerID) {
         nsCacheService::Lock(mainThreadLockerID);
     }
     ~nsCacheServiceAutoLock() {

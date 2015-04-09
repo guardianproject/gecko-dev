@@ -120,12 +120,6 @@ function removeCacheFile() {
   return OS.File.remove(path);
 }
 
-function disableCertificateChecks() {
-  let pref = "experiments.manifest.cert.checkAttributes";
-  Services.prefs.setBoolPref(pref, false);
-  do_register_cleanup(() => Services.prefs.clearUserPref(pref));
-}
-
 function patchPolicy(policy, data) {
   for (let key of Object.keys(data)) {
     Object.defineProperty(policy, key, {
@@ -157,6 +151,15 @@ function loadAddonManager() {
   ns.Services.scriptloader.loadSubScript(uri.spec, gGlobalScope);
   createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "1.9.2");
   startupManager();
+}
+
+// Starts the addon manager without creating app info. We can't directly use
+// |loadAddonManager| defined above in test_conditions.js as it would make the test fail.
+function startAddonManagerOnly() {
+  let addonManager = Cc["@mozilla.org/addons/integration;1"]
+                       .getService(Ci.nsIObserver)
+                       .QueryInterface(Ci.nsITimerCallback);
+  addonManager.observe(null, "addons-startup", null);
 }
 
 function getExperimentAddons(previous=false) {

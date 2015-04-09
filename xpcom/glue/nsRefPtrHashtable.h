@@ -29,8 +29,8 @@ public:
   typedef nsBaseHashtable<KeyClass, nsRefPtr<RefPtr>, RefPtr*> base_type;
 
   nsRefPtrHashtable() {}
-  explicit nsRefPtrHashtable(uint32_t aInitSize)
-    : nsBaseHashtable<KeyClass, nsRefPtr<RefPtr>, RefPtr*>(aInitSize)
+  explicit nsRefPtrHashtable(uint32_t aInitLength)
+    : nsBaseHashtable<KeyClass, nsRefPtr<RefPtr>, RefPtr*>(aInitLength)
   {
   }
 
@@ -147,8 +147,8 @@ void
 nsRefPtrHashtable<KeyClass, RefPtr>::Put(KeyType aKey,
                                          already_AddRefed<RefPtr> aData)
 {
-  if (!Put(aKey, mozilla::Move(aData), mozilla::fallible_t())) {
-    NS_ABORT_OOM(this->mTable.entrySize * this->mTable.entryCount);
+  if (!Put(aKey, mozilla::Move(aData), mozilla::fallible)) {
+    NS_ABORT_OOM(this->mTable.EntrySize() * this->mTable.EntryCount());
   }
 }
 

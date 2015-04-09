@@ -37,9 +37,16 @@ nsAccUtils::SetAccAttr(nsIPersistentProperties *aAttributes,
                        nsIAtom *aAttrName, const nsAString& aAttrValue)
 {
   nsAutoString oldValue;
-  nsAutoCString attrName;
-
   aAttributes->SetStringProperty(nsAtomCString(aAttrName), aAttrValue, oldValue);
+}
+
+void
+nsAccUtils::SetAccAttr(nsIPersistentProperties *aAttributes,
+                       nsIAtom* aAttrName, nsIAtom* aAttrValue)
+{
+  nsAutoString oldValue;
+  aAttributes->SetStringProperty(nsAtomCString(aAttrName),
+                                 nsAtomString(aAttrValue), oldValue);
 }
 
 void
@@ -368,14 +375,7 @@ nsAccUtils::IsTextInterfaceSupportCorrect(Accessible* aAccessible)
     }
   }
 
-  if (foundText) {
-    // found text child node
-    nsCOMPtr<nsIAccessibleText> text = do_QueryObject(aAccessible);
-    if (!text)
-      return false;
-  }
-
-  return true;
+  return !foundText || aAccessible->IsHyperText();
 }
 #endif
 
@@ -400,7 +400,7 @@ nsAccUtils::TextLength(Accessible* aAccessible)
 
 bool
 nsAccUtils::MustPrune(Accessible* aAccessible)
-{ 
+{
   roles::Role role = aAccessible->Role();
 
   // Don't prune the tree for certain roles if the tree is more complex than

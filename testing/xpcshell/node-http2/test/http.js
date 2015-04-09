@@ -11,10 +11,10 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 var options = {
   key: fs.readFileSync(path.join(__dirname, '../example/localhost.key')),
   cert: fs.readFileSync(path.join(__dirname, '../example/localhost.crt')),
-  log: util.log
+  log: util.serverLog
 };
 
-http2.globalAgent = new http2.Agent({ log: util.log });
+http2.globalAgent = new http2.Agent({ log: util.clientLog });
 
 describe('http.js', function() {
   describe('Server', function() {
@@ -55,7 +55,7 @@ describe('http.js', function() {
   describe('Agent', function() {
     describe('property `maxSockets`', function() {
       it('should be a proxy for the backing HTTPS agent\'s `maxSockets` property', function() {
-        var agent = new http2.Agent({ log: util.log });
+        var agent = new http2.Agent({ log: util.clientLog });
         var backingAgent = agent._httpsAgent;
         var newMaxSockets = backingAgent.maxSockets + 1;
         agent.maxSockets = newMaxSockets;
@@ -66,7 +66,7 @@ describe('http.js', function() {
     describe('method `request(options, [callback])`', function() {
       it('should throw when trying to use with \'http\' scheme', function() {
         expect(function() {
-          var agent = new http2.Agent({ log: util.log });
+          var agent = new http2.Agent({ log: util.clientLog });
           agent.request({ protocol: 'http:' });
         }).to.throw(Error);
       });
@@ -85,7 +85,7 @@ describe('http.js', function() {
       request[name].apply(request, originalArguments);
       var mockFallbackRequest = { on: util.noop };
       mockFallbackRequest[name] = function() {
-        expect(arguments).to.deep.equal(originalArguments);
+        expect(Array.prototype.slice.call(arguments)).to.deep.equal(originalArguments);
         done();
       };
       request._fallback(mockFallbackRequest);
@@ -111,6 +111,22 @@ describe('http.js', function() {
       });
     });
   });
+  describe('OutgoingResponse', function() {
+    it('should throw error when writeHead is called multiple times on it', function() {
+      var called = false;
+      var stream = { _log: util.log, headers: function () {
+        if (called) {
+          throw new Error('Should not send headers twice');
+        } else {
+          called = true;
+        }
+      }, once: util.noop };
+      var response = new http2.OutgoingResponse(stream);
+
+      response.writeHead(200);
+      response.writeHead(404);
+    });
+  });
   describe('test scenario', function() {
     describe('simple request', function() {
       it('should work as expected', function(done) {
@@ -130,6 +146,66 @@ describe('http.js', function() {
               done();
             });
           });
+        });
+      });
+    });
+    describe('2 simple request in parallel', function() {
+      it('should work as expected', function(originalDone) {
+        var path = '/x';
+        var message = 'Hello world';
+        done = util.callNTimes(2, function() {
+          server.close();
+          originalDone();
+        });
+
+        var server = http2.createServer(options, function(request, response) {
+          expect(request.url).to.equal(path);
+          response.end(message);
+        });
+
+        server.listen(1234, function() {
+          http2.get('https://localhost:1234' + path, function(response) {
+            response.on('data', function(data) {
+              expect(data.toString()).to.equal(message);
+              done();
+            });
+          });
+          http2.get('https://localhost:1234' + path, function(response) {
+            response.on('data', function(data) {
+              expect(data.toString()).to.equal(message);
+              done();
+            });
+          });
+        });
+      });
+    });
+    describe('100 simple request in a series', function() {
+      it('should work as expected', function(done) {
+        var path = '/x';
+        var message = 'Hello world';
+
+        var server = http2.createServer(options, function(request, response) {
+          expect(request.url).to.equal(path);
+          response.end(message);
+        });
+
+        var n = 100;
+        server.listen(1242, function() {
+          doRequest();
+          function doRequest() {
+            http2.get('https://localhost:1242' + path, function(response) {
+              response.on('data', function(data) {
+                expect(data.toString()).to.equal(message);
+                if (n) {
+                  n -= 1;
+                  doRequest();
+                } else {
+                  server.close();
+                  done();
+                }
+              });
+            });
+          }
         });
       });
     });
@@ -223,21 +299,44 @@ describe('http.js', function() {
         var path = '/x';
         var message = 'Hello world';
 
-        var server = http2.createServer({
-          plain: true,
-          log: util.log
+        var server = http2.raw.createServer({
+          log: util.serverLog
         }, function(request, response) {
           expect(request.url).to.equal(path);
           response.end(message);
         });
 
         server.listen(1237, function() {
-          var request = http2.request({
+          var request = http2.raw.request({
             plain: true,
             host: 'localhost',
             port: 1237,
             path: path
           }, function(response) {
+            response.on('data', function(data) {
+              expect(data.toString()).to.equal(message);
+              server.close();
+              done();
+            });
+          });
+          request.end();
+        });
+      });
+    });
+    describe('get over plain TCP', function() {
+      it('should work as expected', function(done) {
+        var path = '/x';
+        var message = 'Hello world';
+
+        var server = http2.raw.createServer({
+          log: util.serverLog
+        }, function(request, response) {
+          expect(request.url).to.equal(path);
+          response.end(message);
+        });
+
+        server.listen(1237, function() {
+          var request = http2.raw.get('http://localhost:1237/x', function(response) {
             response.on('data', function(data) {
               expect(data.toString()).to.equal(message);
               server.close();
@@ -260,6 +359,36 @@ describe('http.js', function() {
 
         server.listen(5678, function() {
           http2.get('https://localhost:5678' + path, function(response) {
+            response.on('data', function(data) {
+              expect(data.toString()).to.equal(message);
+              done();
+            });
+          });
+        });
+      });
+    });
+    describe('2 parallel request to an HTTPS/1 server', function() {
+      it('should fall back to HTTPS/1 successfully', function(originalDone) {
+        var path = '/x';
+        var message = 'Hello world';
+        done = util.callNTimes(2, function() {
+          server.close();
+          originalDone();
+        });
+
+        var server = https.createServer(options, function(request, response) {
+          expect(request.url).to.equal(path);
+          response.end(message);
+        });
+
+        server.listen(6789, function() {
+          http2.get('https://localhost:6789' + path, function(response) {
+            response.on('data', function(data) {
+              expect(data.toString()).to.equal(message);
+              done();
+            });
+          });
+          http2.get('https://localhost:6789' + path, function(response) {
             response.on('data', function(data) {
               expect(data.toString()).to.equal(message);
               done();

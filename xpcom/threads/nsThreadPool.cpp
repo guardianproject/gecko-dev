@@ -122,7 +122,7 @@ nsThreadPool::PutEvent(nsIRunnable* aEvent)
     // of nsStreamCopier. To prevent this situation, dispatch a shutdown event
     // to the current thread instead of calling nsIThread::Shutdown() directly.
 
-    nsRefPtr<nsIRunnable> r = NS_NewRunnableMethod(thread,
+    nsCOMPtr<nsIRunnable> r = NS_NewRunnableMethod(thread,
                                                    &nsIThread::Shutdown);
     NS_DispatchToCurrentThread(r);
   } else {
@@ -142,7 +142,7 @@ nsThreadPool::ShutdownThread(nsIThread* aThread)
 
   MOZ_ASSERT(!NS_IsMainThread(), "wrong thread");
 
-  nsRefPtr<nsIRunnable> r = NS_NewRunnableMethod(aThread, &nsIThread::Shutdown);
+  nsCOMPtr<nsIRunnable> r = NS_NewRunnableMethod(aThread, &nsIThread::Shutdown);
   NS_DispatchToMainThread(r);
 }
 
@@ -150,7 +150,6 @@ NS_IMETHODIMP
 nsThreadPool::Run()
 {
   LOG(("THRD-P(%p) enter\n", this));
-
   mThreadNaming.SetThreadPoolName(mName);
 
   nsCOMPtr<nsIThread> current;
@@ -208,6 +207,9 @@ nsThreadPool::Run()
         } else {
           PRIntervalTime delta = timeout - (now - idleSince);
           LOG(("THRD-P(%p) waiting [%d]\n", this, delta));
+#ifdef MOZ_NUWA_PROCESS
+          nsThreadManager::get()->SetThreadIdle(nullptr);
+#endif // MOZ_NUWA_PROCESS
           mon.Wait(delta);
         }
       } else if (wasIdle) {
@@ -217,6 +219,9 @@ nsThreadPool::Run()
     }
     if (event) {
       LOG(("THRD-P(%p) running [%p]\n", this, event.get()));
+#ifdef MOZ_NUWA_PROCESS
+      nsThreadManager::get()->SetThreadWorking();
+#endif // MOZ_NUWA_PROCESS
       event->Run();
     }
   } while (!exitThread);

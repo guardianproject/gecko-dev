@@ -154,7 +154,7 @@ function test() {
       test: fragment => {
         is(countAll(fragment), 1);
         is(getUrl(fragment), "images/arrow.gif");
-        is(fragment.textContent, "url('images/arrow.gif')!important");
+        is(fragment.textContent, "url(\"images/arrow.gif\")!important");
       }
     },
     {
@@ -292,6 +292,20 @@ function test() {
       value: "top 3s step-end",
       test: fragment => {
         is(countAll(fragment), 0);
+      }
+    },
+    {
+      name: "background",
+      value: "rgb(255, var(--g-value), 192)",
+      test: fragment => {
+	is(fragment.textContent, "rgb(255, var(--g-value), 192)");
+      }
+    },
+    {
+      name: "background",
+      value: "rgb(255, var(--g-value, 0), 192)",
+      test: fragment => {
+	is(fragment.textContent, "rgb(255, var(--g-value, 0), 192)");
       }
     }
   ];

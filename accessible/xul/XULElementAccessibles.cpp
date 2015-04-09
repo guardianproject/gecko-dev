@@ -20,7 +20,6 @@
 #include "Logging.h"
 #endif
 
-#include "nsIAccessibleRelation.h"
 #include "nsIDOMXULDescriptionElement.h"
 #include "nsNameSpaceManager.h"
 #include "nsNetUtil.h"
@@ -93,7 +92,7 @@ XULLabelAccessible::RelationByType(RelationType aType)
   if (aType == RelationType::LABEL_FOR) {
     // Caption is the label for groupbox
     nsIContent* parent = mContent->GetFlattenedTreeParent();
-    if (parent && parent->Tag() == nsGkAtoms::caption) {
+    if (parent && parent->IsXULElement(nsGkAtoms::caption)) {
       Accessible* parent = Parent();
       if (parent && parent->Role() == roles::GROUPING)
         rel.AppendTarget(parent);
@@ -188,12 +187,8 @@ XULLinkAccessible::~XULLinkAccessible()
 {
 }
 
-// Expose nsIAccessibleHyperLink unconditionally
-NS_IMPL_ISUPPORTS_INHERITED(XULLinkAccessible, XULLabelAccessible,
-                            nsIAccessibleHyperLink)
-
 ////////////////////////////////////////////////////////////////////////////////
-// XULLinkAccessible. nsIAccessible
+// XULLinkAccessible: Accessible
 
 void
 XULLinkAccessible::Value(nsString& aValue)
@@ -233,29 +228,23 @@ XULLinkAccessible::ActionCount()
   return 1;
 }
 
-NS_IMETHODIMP
-XULLinkAccessible::GetActionName(uint8_t aIndex, nsAString& aName)
+void
+XULLinkAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 {
   aName.Truncate();
 
-  if (aIndex != eAction_Jump)
-    return NS_ERROR_INVALID_ARG;
-
-  aName.AssignLiteral("jump");
-  return NS_OK;
+  if (aIndex == eAction_Jump)
+    aName.AssignLiteral("jump");
 }
 
-NS_IMETHODIMP
+bool
 XULLinkAccessible::DoAction(uint8_t aIndex)
 {
   if (aIndex != eAction_Jump)
-    return NS_ERROR_INVALID_ARG;
-
-  if (IsDefunct())
-    return NS_ERROR_FAILURE;
+    return false;
 
   DoCommand();
-  return NS_OK;
+  return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

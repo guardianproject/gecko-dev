@@ -5,6 +5,7 @@
 
 #include "AnimationTimeline.h"
 #include "mozilla/dom/AnimationTimelineBinding.h"
+#include "AnimationUtils.h"
 #include "nsContentUtils.h"
 #include "nsIPresShell.h"
 #include "nsPresContext.h"
@@ -14,38 +15,106 @@
 namespace mozilla {
 namespace dom {
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(AnimationTimeline, mDocument)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(AnimationTimeline, mDocument, mWindow)
 
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(AnimationTimeline, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(AnimationTimeline, Release)
 
 JSObject*
-AnimationTimeline::WrapObject(JSContext* aCx)
+AnimationTimeline::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return AnimationTimelineBinding::Wrap(aCx, this);
+  return AnimationTimelineBinding::Wrap(aCx, this, aGivenProto);
+}
+
+Nullable<TimeDuration>
+AnimationTimeline::GetCurrentTime() const
+{
+  return ToTimelineTime(GetCurrentTimeStamp());
 }
 
 Nullable<double>
-AnimationTimeline::GetCurrentTime() const
+AnimationTimeline::GetCurrentTimeAsDouble() const
 {
-  Nullable<double> result; // Default ctor initializes to null
+  return AnimationUtils::TimeDurationToDouble(GetCurrentTime());
+}
 
-  nsIPresShell* presShell = mDocument->GetShell();
-  if (!presShell)
-    return result;
+TimeStamp
+AnimationTimeline::GetCurrentTimeStamp() const
+{
+  nsRefreshDriver* refreshDriver = GetRefreshDriver();
+  TimeStamp refreshTime = refreshDriver
+                          ? refreshDriver->MostRecentRefresh()
+                          : TimeStamp();
 
-  nsPresContext* presContext = presShell->GetPresContext();
-  if (!presContext)
-    return result;
+  // Always return the same object to benefit from return-value optimization.
+  TimeStamp result = !refreshTime.IsNull()
+                     ? refreshTime
+                     : mLastRefreshDriverTime;
 
-  nsRefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
-  if (!timing)
-    return result;
+  // If we don't have a refresh driver and we've never had one use the
+  // timeline's zero time.
+  if (result.IsNull()) {
+    nsRefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
+    if (timing) {
+      result = timing->GetNavigationStartTimeStamp();
+      // Also, let this time represent the current refresh time. This way
+      // we'll save it as the last refresh time and skip looking up
+      // navigation timing each time.
+      refreshTime = result;
+    }
+  }
 
-  TimeStamp now = presContext->RefreshDriver()->MostRecentRefresh();
-  result.SetValue(timing->TimeStampToDOMHighRes(now));
+  if (!refreshTime.IsNull()) {
+    mLastRefreshDriverTime = refreshTime;
+  }
 
   return result;
+}
+
+Nullable<TimeDuration>
+AnimationTimeline::ToTimelineTime(const TimeStamp& aTimeStamp) const
+{
+  Nullable<TimeDuration> result; // Initializes to null
+  if (aTimeStamp.IsNull()) {
+    return result;
+  }
+
+  nsRefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
+  if (MOZ_UNLIKELY(!timing)) {
+    return result;
+  }
+
+  result.SetValue(aTimeStamp - timing->GetNavigationStartTimeStamp());
+  return result;
+}
+
+TimeStamp
+AnimationTimeline::ToTimeStamp(const TimeDuration& aTimeDuration) const
+{
+  TimeStamp result;
+  nsRefPtr<nsDOMNavigationTiming> timing = mDocument->GetNavigationTiming();
+  if (MOZ_UNLIKELY(!timing)) {
+    return result;
+  }
+
+  result = timing->GetNavigationStartTimeStamp() + aTimeDuration;
+  return result;
+}
+
+nsRefreshDriver*
+AnimationTimeline::GetRefreshDriver() const
+{
+  nsIPresShell* presShell = mDocument->GetShell();
+  if (MOZ_UNLIKELY(!presShell)) {
+    return nullptr;
+  }
+
+  nsPresContext* presContext = presShell->GetPresContext();
+  if (MOZ_UNLIKELY(!presContext)) {
+    return nullptr;
+  }
+
+  return presContext->RefreshDriver();
 }
 
 } // namespace dom

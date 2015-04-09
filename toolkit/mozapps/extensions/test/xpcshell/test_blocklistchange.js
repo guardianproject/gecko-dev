@@ -35,6 +35,7 @@ const Cr = Components.results;
 const URI_EXTENSION_BLOCKLIST_DIALOG = "chrome://mozapps/content/extensions/blocklist.xul";
 
 Cu.import("resource://gre/modules/NetUtil.jsm");
+Cu.import("resource://testing-common/MockRegistrar.jsm");
 
 // Allow insecure updates
 Services.prefs.setBoolPref("extensions.checkUpdateSecurity", false)
@@ -360,13 +361,7 @@ var WindowWatcher = {
   }
 };
 
-var WindowWatcherFactory = {
-  createInstance: function createInstance(outer, iid) {
-    if (outer != null)
-      throw Components.results.NS_ERROR_NO_AGGREGATION;
-    return WindowWatcher.QueryInterface(iid);
-  }
-};
+MockRegistrar.register("@mozilla.org/embedcomp/window-watcher;1", WindowWatcher);
 
 var InstallConfirm = {
   confirm: function(aWindow, aUrl, aInstalls, aInstallCount) {
@@ -393,9 +388,6 @@ var InstallConfirmFactory = {
 };
 
 var registrar = Components.manager.QueryInterface(Components.interfaces.nsIComponentRegistrar);
-registrar.registerFactory(Components.ID("{1dfeb90a-2193-45d5-9cb8-864928b2af55}"),
-                          "Fake Window Watcher",
-                          "@mozilla.org/embedcomp/window-watcher;1", WindowWatcherFactory);
 registrar.registerFactory(Components.ID("{f0863905-4dde-42e2-991c-2dc8209bc9ca}"),
                           "Fake Install Prompt",
                           "@mozilla.org/addons/web-install-prompt;1", InstallConfirmFactory);
@@ -793,7 +785,7 @@ add_task(function* run_blocklist_update_test() {
   yield Pload_blocklist("blocklist_update2.xml");
   yield promiseRestartManager();
 
-  let [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
+  [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
 
   check_addon(s1, "1.0", true, true, Ci.nsIBlocklistService.STATE_SOFTBLOCKED);
   check_addon(s2, "1.0", true, true, Ci.nsIBlocklistService.STATE_SOFTBLOCKED);
@@ -815,7 +807,7 @@ add_task(function* run_blocklist_update_test() {
   yield Pload_blocklist("blocklist_update2.xml");
   yield promiseRestartManager();
 
-  let [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
+  [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
 
   check_addon(s1, "1.0", true, true, Ci.nsIBlocklistService.STATE_SOFTBLOCKED);
   check_addon(s2, "1.0", true, false, Ci.nsIBlocklistService.STATE_SOFTBLOCKED);
@@ -829,7 +821,7 @@ add_task(function* run_blocklist_update_test() {
   yield Pload_blocklist("blocklist_update1.xml");
   yield promiseRestartManager();
 
-  let [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
+  [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
 
   check_addon(s1, "1.0", false, false, Ci.nsIBlocklistService.STATE_NOT_BLOCKED);
   check_addon(s2, "1.0", true, false, Ci.nsIBlocklistService.STATE_NOT_BLOCKED);
@@ -1098,7 +1090,7 @@ add_task(function* run_background_update_test() {
   yield Pbackground_update();
   yield promiseRestartManager();
 
-  let [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
+  [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
 
   check_addon(s1, "1.0", false, false, Ci.nsIBlocklistService.STATE_NOT_BLOCKED);
   check_addon(s2, "1.0", false, false, Ci.nsIBlocklistService.STATE_NOT_BLOCKED);
@@ -1155,7 +1147,7 @@ add_task(function* run_background_update_2_test() {
   yield Pbackground_update();
   yield promiseRestartManager();
 
-  let [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
+  [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
 
   check_addon(s1, "1.0", false, false, Ci.nsIBlocklistService.STATE_NOT_BLOCKED);
   check_addon(s2, "1.0", true, false, Ci.nsIBlocklistService.STATE_NOT_BLOCKED);
@@ -1198,7 +1190,7 @@ add_task(function* run_manual_update_test() {
   yield Pmanual_update("2");
   yield promiseRestartManager();
 
-  let [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
+  [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
 
   check_addon(s1, "2.0", true, true, Ci.nsIBlocklistService.STATE_SOFTBLOCKED);
   check_addon(s2, "2.0", true, false, Ci.nsIBlocklistService.STATE_SOFTBLOCKED);
@@ -1212,7 +1204,7 @@ add_task(function* run_manual_update_test() {
   yield Pmanual_update("3");
   yield promiseRestartManager();
 
-  let [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
+  [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
 
   check_addon(s1, "3.0", false, false, Ci.nsIBlocklistService.STATE_NOT_BLOCKED);
   check_addon(s2, "3.0", true, false, Ci.nsIBlocklistService.STATE_NOT_BLOCKED);
@@ -1268,7 +1260,7 @@ add_task(function* run_manual_update_2_test() {
   yield Pmanual_update("2");
   yield promiseRestartManager();
 
-  let [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
+  [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
 
   check_addon(s1, "2.0", true, true, Ci.nsIBlocklistService.STATE_SOFTBLOCKED);
   check_addon(s2, "2.0", true, false, Ci.nsIBlocklistService.STATE_SOFTBLOCKED);
@@ -1282,7 +1274,7 @@ add_task(function* run_manual_update_2_test() {
   yield Pmanual_update("3");
   yield promiseRestartManager();
 
-  let [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
+  [s1, s2, s3, s4, s5, h, r] = yield promiseAddonsByIDs(ADDON_IDS);
 
   check_addon(s1, "3.0", false, false, Ci.nsIBlocklistService.STATE_NOT_BLOCKED);
   check_addon(s2, "3.0", true, false, Ci.nsIBlocklistService.STATE_NOT_BLOCKED);

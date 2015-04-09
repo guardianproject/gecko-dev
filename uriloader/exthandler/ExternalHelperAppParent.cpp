@@ -81,13 +81,14 @@ ExternalHelperAppParent::Init(ContentParent *parent,
 
   nsCOMPtr<nsIInterfaceRequestor> window;
   if (aBrowser) {
-    TabParent* tabParent = static_cast<TabParent*>(aBrowser);
+    TabParent* tabParent = TabParent::GetFrom(aBrowser);
     if (tabParent->GetOwnerElement())
       window = do_QueryInterface(tabParent->GetOwnerElement()->OwnerDoc()->GetWindow());
   }
 
   helperAppService->DoContent(aMimeContentType, this, window,
-                              aForceSave, getter_AddRefs(mListener));
+                              aForceSave, nullptr,
+                              getter_AddRefs(mListener));
 }
 
 void

@@ -30,6 +30,7 @@
 #include "nsGkAtoms.h"
 #include "nsImageFrame.h"
 #include "nsLayoutStylesheetCache.h"
+#include "nsPrincipal.h"
 #include "nsRange.h"
 #include "nsRegion.h"
 #include "nsRepeatService.h"
@@ -46,7 +47,7 @@
 #include "nsCCUncollectableMarker.h"
 #include "nsTextFragment.h"
 #include "nsCSSRuleProcessor.h"
-#include "nsCrossSiteListenerProxy.h"
+#include "nsCORSListenerProxy.h"
 #include "nsHTMLDNSPrefetch.h"
 #include "nsHtml5Module.h"
 #include "mozilla/dom/FallbackEncoding.h"
@@ -63,6 +64,9 @@
 #include "DisplayItemClip.h"
 #include "ActiveLayerTracker.h"
 #include "CounterStyleManager.h"
+#include "FrameLayerBuilder.h"
+#include "mozilla/dom/RequestSyncWifiService.h"
+#include "AnimationCommon.h"
 
 #include "AudioChannelService.h"
 #include "mozilla/dom/DataStoreService.h"
@@ -85,8 +89,8 @@
 #include "nsSynthVoiceRegistry.h"
 #endif
 
-#ifdef MOZ_MEDIA_PLUGINS
-#include "MediaPluginHost.h"
+#ifdef MOZ_ANDROID_OMX
+#include "AndroidMediaPluginHost.h"
 #endif
 
 #ifdef MOZ_WMF
@@ -101,7 +105,7 @@
 #include "FFmpegRuntimeLinker.h"
 #endif
 
-#include "AudioStream.h"
+#include "CubebUtils.h"
 #include "Latency.h"
 #include "WebAudioUtils.h"
 
@@ -132,6 +136,7 @@ using namespace mozilla::system;
 #include "nsDocument.h"
 #include "mozilla/dom/HTMLVideoElement.h"
 #include "CameraPreferences.h"
+#include "TouchManager.h"
 
 using namespace mozilla;
 using namespace mozilla::net;
@@ -215,7 +220,6 @@ nsLayoutStatics::Initialize()
 
   nsMathMLOperators::AddRefTable();
 
-  nsEditProperty::RegisterAtoms();
   nsTextServicesDocument::RegisterAtoms();
 
 #ifdef DEBUG
@@ -241,11 +245,8 @@ nsLayoutStatics::Initialize()
     return rv;
   }
 
-  rv = nsCSSRuleProcessor::Startup();
-  if (NS_FAILED(rv)) {
-    NS_ERROR("Could not initialize nsCSSRuleProcessor");
-    return rv;
-  }
+  nsCSSParser::Startup();
+  nsCSSRuleProcessor::Startup();
 
 #ifdef MOZ_XUL
   rv = nsXULPopupManager::Init();
@@ -262,14 +263,16 @@ nsLayoutStatics::Initialize()
   }
 
   AsyncLatencyLogger::InitializeStatics();
-  AudioStream::InitLibrary();
+  CubebUtils::InitLibrary();
 
   nsContentSink::InitializeStatics();
   nsHtml5Module::InitializeStatics();
   mozilla::dom::FallbackEncoding::Initialize();
   nsLayoutUtils::Initialize();
   nsIPresShell::InitializeStatics();
+  TouchManager::InitializeStatics();
   nsRefreshDriver::InitializeStatics();
+  nsPrincipal::InitializeStatics();
 
   nsCORSListenerProxy::Startup();
 
@@ -298,6 +301,19 @@ nsLayoutStatics::Initialize()
 
   CameraPreferences::Initialize();
 
+  IMEStateManager::Init();
+
+  ServiceWorkerRegistrar::Initialize();
+
+#ifdef MOZ_B2G
+  RequestSyncWifiService::Init();
+#endif
+
+#ifdef DEBUG
+  nsStyleContext::Initialize();
+  mozilla::css::CommonAnimationManager::Initialize();
+#endif
+
   return NS_OK;
 }
 
@@ -307,7 +323,7 @@ nsLayoutStatics::Shutdown()
   // Don't need to shutdown nsWindowMemoryReporter, that will be done by the
   // memory reporter manager.
 
-  nsFrameScriptExecutor::Shutdown();
+  nsMessageManagerScriptExecutor::Shutdown();
   nsFocusManager::Shutdown();
 #ifdef MOZ_XUL
   nsXULPopupManager::Shutdown();
@@ -364,8 +380,8 @@ nsLayoutStatics::Shutdown()
   nsAutoCopyListener::Shutdown();
   FrameLayerBuilder::Shutdown();
 
-#ifdef MOZ_MEDIA_PLUGINS
-  MediaPluginHost::Shutdown();
+#ifdef MOZ_ANDROID_OMX
+  AndroidMediaPluginHost::Shutdown();
 #endif
 
 #ifdef MOZ_GSTREAMER
@@ -376,7 +392,7 @@ nsLayoutStatics::Shutdown()
   FFmpegRuntimeLinker::Unlink();
 #endif
 
-  AudioStream::ShutdownLibrary();
+  CubebUtils::ShutdownLibrary();
   AsyncLatencyLogger::ShutdownLogger();
   WebAudioUtils::Shutdown();
 
@@ -396,6 +412,8 @@ nsLayoutStatics::Shutdown()
   nsCORSListenerProxy::Shutdown();
 
   nsIPresShell::ReleaseStatics();
+
+  TouchManager::ReleaseStatics();
 
   nsTreeSanitizer::ReleaseStatics();
 

@@ -29,13 +29,12 @@ using namespace hal;
 
 #undef near
 
-// also see sDefaultSensorHint in mobile/android/base/GeckoAppShell.java
 #define DEFAULT_SENSOR_POLL 100
 
 static const nsTArray<nsIDOMWindow*>::index_type NoIndex =
   nsTArray<nsIDOMWindow*>::NoIndex;
 
-class nsDeviceSensorData MOZ_FINAL : public nsIDeviceSensorData
+class nsDeviceSensorData final : public nsIDeviceSensorData
 {
 public:
   NS_DECL_ISUPPORTS
@@ -114,7 +113,7 @@ nsDeviceSensors::nsDeviceSensors()
 nsDeviceSensors::~nsDeviceSensors()
 {
   for (int i = 0; i < NUM_SENSOR_TYPE; i++) {
-    if (IsSensorEnabled(i))  
+    if (IsSensorEnabled(i))
       UnregisterSensorObserver((SensorType)i, this);
   }
 
@@ -343,44 +342,44 @@ nsDeviceSensors::FireDOMMotionEvent(nsIDOMDocument *domdoc,
 
   switch (type) {
   case nsIDeviceSensorData::TYPE_LINEAR_ACCELERATION:
-    if (mLastAcceleration.empty()) {
-      mLastAcceleration.construct();
+    if (!mLastAcceleration) {
+      mLastAcceleration.emplace();
     }
-    mLastAcceleration.ref().mX.SetValue(x);
-    mLastAcceleration.ref().mY.SetValue(y);
-    mLastAcceleration.ref().mZ.SetValue(z);
+    mLastAcceleration->mX.SetValue(x);
+    mLastAcceleration->mY.SetValue(y);
+    mLastAcceleration->mZ.SetValue(z);
     break;
   case nsIDeviceSensorData::TYPE_ACCELERATION:
-    if (mLastAccelerationIncluduingGravity.empty()) {
-      mLastAccelerationIncluduingGravity.construct();
+    if (!mLastAccelerationIncludingGravity) {
+      mLastAccelerationIncludingGravity.emplace();
     }
-    mLastAccelerationIncluduingGravity.ref().mX.SetValue(x);
-    mLastAccelerationIncluduingGravity.ref().mY.SetValue(y);
-    mLastAccelerationIncluduingGravity.ref().mZ.SetValue(z);
+    mLastAccelerationIncludingGravity->mX.SetValue(x);
+    mLastAccelerationIncludingGravity->mY.SetValue(y);
+    mLastAccelerationIncludingGravity->mZ.SetValue(z);
     break;
   case nsIDeviceSensorData::TYPE_GYROSCOPE:
-    if (mLastRotationRate.empty()) {
-      mLastRotationRate.construct();
+    if (!mLastRotationRate) {
+      mLastRotationRate.emplace();
     }
-    mLastRotationRate.ref().mAlpha.SetValue(x);
-    mLastRotationRate.ref().mBeta.SetValue(y);
-    mLastRotationRate.ref().mGamma.SetValue(z);
+    mLastRotationRate->mAlpha.SetValue(x);
+    mLastRotationRate->mBeta.SetValue(y);
+    mLastRotationRate->mGamma.SetValue(z);
     break;
   }
 
   if (fireEvent) {
-    if (mLastAcceleration.empty()) {
-      mLastAcceleration.construct();
+    if (!mLastAcceleration) {
+      mLastAcceleration.emplace();
     }
-    if (mLastAccelerationIncluduingGravity.empty()) {
-      mLastAccelerationIncluduingGravity.construct();
+    if (!mLastAccelerationIncludingGravity) {
+      mLastAccelerationIncludingGravity.emplace();
     }
-    if (mLastRotationRate.empty()) {
-      mLastRotationRate.construct();
+    if (!mLastRotationRate) {
+      mLastRotationRate.emplace();
     }
-  } else if (mLastAcceleration.empty() ||
-             mLastAccelerationIncluduingGravity.empty() ||
-             mLastRotationRate.empty()) {
+  } else if (!mLastAcceleration ||
+             !mLastAccelerationIncludingGravity ||
+             !mLastRotationRate) {
     return;
   }
 
@@ -393,9 +392,9 @@ nsDeviceSensors::FireDOMMotionEvent(nsIDOMDocument *domdoc,
   me->InitDeviceMotionEvent(NS_LITERAL_STRING("devicemotion"),
                             true,
                             false,
-                            mLastAcceleration.ref(),
-                            mLastAccelerationIncluduingGravity.ref(),
-                            mLastRotationRate.ref(),
+                            *mLastAcceleration,
+                            *mLastAccelerationIncludingGravity,
+                            *mLastRotationRate,
                             Nullable<double>(DEFAULT_SENSOR_POLL),
                             rv);
 
@@ -404,8 +403,8 @@ nsDeviceSensors::FireDOMMotionEvent(nsIDOMDocument *domdoc,
   bool defaultActionEnabled = true;
   target->DispatchEvent(event, &defaultActionEnabled);
 
-  mLastRotationRate.destroy();
-  mLastAccelerationIncluduingGravity.destroy();
-  mLastAcceleration.destroy();
+  mLastRotationRate.reset();
+  mLastAccelerationIncludingGravity.reset();
+  mLastAcceleration.reset();
   mLastDOMMotionEventTime = TimeStamp::Now();
 }

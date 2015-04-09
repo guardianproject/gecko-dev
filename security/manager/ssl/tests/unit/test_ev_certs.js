@@ -5,9 +5,6 @@
 
 "use strict";
 
-// XXX: The isDebugBuild tests you see are here because the test EV root is
-// only enabled for EV in debug builds, as a security measure. An ugly hack.
-
 do_get_profile(); // must be called before getting nsIX509CertDB
 const certdb = Cc["@mozilla.org/security/x509certdb;1"]
                  .getService(Ci.nsIX509CertDB);
@@ -29,7 +26,7 @@ let certList = [
   // Testing a root that looks like EV but is not EV enabled
   'int-non-ev-root',
   'non-ev-root',
-]
+];
 
 function load_ca(ca_name) {
   var ca_filename = ca_name + ".der";
@@ -66,7 +63,7 @@ function check_ee_for_ev(cert_name, expected_ev) {
     let error = certdb.verifyCertNow(cert, certificateUsageSSLServer,
                                      NO_FLAGS, verifiedChain, hasEVPolicy);
     do_check_eq(hasEVPolicy.value, expected_ev);
-    do_check_eq(0, error);
+    do_check_eq(error, PRErrorCodeSuccess);
 }
 
 function run_test() {
@@ -84,9 +81,9 @@ function run_test() {
   add_test(function () {
     clearOCSPCache();
     let ocspResponder = start_ocsp_responder(
-                          isDebugBuild ? ["int-ev-valid", "ev-valid"]
-                                       : ["ev-valid"]);
-    check_ee_for_ev("ev-valid", isDebugBuild);
+                          gEVExpected ? ["int-ev-valid", "ev-valid"]
+                                      : ["ev-valid"]);
+    check_ee_for_ev("ev-valid", gEVExpected);
     ocspResponder.stop(run_next_test);
   });
 
@@ -95,9 +92,9 @@ function run_test() {
     clearOCSPCache();
 
     let ocspResponder = start_ocsp_responder(
-                          isDebugBuild ? ["int-ev-valid-anypolicy-int", "ev-valid-anypolicy-int"]
-                                       : ["ev-valid-anypolicy-int"]);
-    check_ee_for_ev("ev-valid-anypolicy-int", isDebugBuild);
+                          gEVExpected ? ["int-ev-valid-anypolicy-int", "ev-valid-anypolicy-int"]
+                                      : ["ev-valid-anypolicy-int"]);
+    check_ee_for_ev("ev-valid-anypolicy-int", gEVExpected);
     ocspResponder.stop(run_next_test);
   });
 
@@ -110,10 +107,8 @@ function run_test() {
 
   add_test(function() {
     clearOCSPCache();
-    // libpkix will attempt to validate the intermediate, which does have an
-    // OCSP URL.
-    let ocspResponder = isDebugBuild ? start_ocsp_responder(["int-ev-valid"])
-                                     : failingOCSPResponder();
+    let ocspResponder = gEVExpected ? start_ocsp_responder(["int-ev-valid"])
+                                    : failingOCSPResponder();
     check_ee_for_ev("no-ocsp-url-cert", false);
     ocspResponder.stop(run_next_test);
   });
@@ -141,9 +136,9 @@ function run_test() {
 
     clearOCSPCache();
     let ocspResponder = start_ocsp_responder(
-                          isDebugBuild ? ["int-ev-valid", "ev-valid"]
-                                       : ["ev-valid"]);
-    check_ee_for_ev("ev-valid", isDebugBuild);
+                          gEVExpected ? ["int-ev-valid", "ev-valid"]
+                                      : ["ev-valid"]);
+    check_ee_for_ev("ev-valid", gEVExpected);
     ocspResponder.stop(run_next_test);
   });
 
@@ -164,9 +159,9 @@ function run_test() {
   add_test(function () {
     clearOCSPCache();
     let ocspResponder = start_ocsp_responder(
-                          isDebugBuild ? ["int-ev-valid", "ev-valid"]
-                                       : ["ev-valid"]);
-    check_ee_for_ev("ev-valid", isDebugBuild);
+                          gEVExpected ? ["int-ev-valid", "ev-valid"]
+                                      : ["ev-valid"]);
+    check_ee_for_ev("ev-valid", gEVExpected);
     ocspResponder.stop(function () {
       // without net it must be able to EV verify
       let failingOcspResponder = failingOCSPResponder();
@@ -178,9 +173,10 @@ function run_test() {
 
       let error = certdb.verifyCertNow(cert, certificateUsageSSLServer,
                                        flags, verifiedChain, hasEVPolicy);
-      do_check_eq(hasEVPolicy.value, isDebugBuild);
+      do_check_eq(hasEVPolicy.value, gEVExpected);
       do_check_eq(error,
-                  isDebugBuild ? 0 : SEC_ERROR_POLICY_VALIDATION_FAILED);
+                  gEVExpected ? PRErrorCodeSuccess
+                              : SEC_ERROR_POLICY_VALIDATION_FAILED);
       failingOcspResponder.stop(run_next_test);
     });
   });
@@ -190,12 +186,12 @@ function run_test() {
     clearOCSPCache();
     let ocspResponder = startOCSPResponder(SERVER_PORT, "www.example.com", [],
                           "test_ev_certs",
-                          isDebugBuild ? ["int-ev-valid", "ev-valid"]
-                                       : ["ev-valid"],
+                          gEVExpected ? ["int-ev-valid", "ev-valid"]
+                                      : ["ev-valid"],
                           [], [],
-                          isDebugBuild ? ["longvalidityalmostold", "good"]
-                                       : ["good"]);
-    check_ee_for_ev("ev-valid", isDebugBuild);
+                          gEVExpected ? ["longvalidityalmostold", "good"]
+                                      : ["good"]);
+    check_ee_for_ev("ev-valid", gEVExpected);
     ocspResponder.stop(run_next_test);
   });
 
@@ -212,10 +208,10 @@ function run_test() {
                               "longvalidityalmostold"];
     let ocspResponder = startOCSPResponder(SERVER_PORT, "www.example.com", [],
                           "test_ev_certs",
-                          isDebugBuild ? debugCertNickArray : ["ev-valid"],
+                          gEVExpected ? debugCertNickArray : ["ev-valid"],
                           [], [],
-                          isDebugBuild ? debugResponseArray
-                                       : ["longvalidityalmostold"]);
+                          gEVExpected ? debugResponseArray
+                                      : ["longvalidityalmostold"]);
     check_ee_for_ev("ev-valid", false);
     ocspResponder.stop(run_next_test);
   });
@@ -229,10 +225,10 @@ function run_test() {
                               "ancientstillvalid"];
     let ocspResponder = startOCSPResponder(SERVER_PORT, "www.example.com", [],
                           "test_ev_certs",
-                          isDebugBuild ? debugCertNickArray : ["ev-valid"],
+                          gEVExpected ? debugCertNickArray : ["ev-valid"],
                           [], [],
-                          isDebugBuild ? debugResponseArray
-                                       : ["ancientstillvalid"]);
+                          gEVExpected ? debugResponseArray
+                                      : ["ancientstillvalid"]);
     check_ee_for_ev("ev-valid", false);
     ocspResponder.stop(run_next_test);
   });
@@ -260,9 +256,5 @@ function check_no_ocsp_requests(cert_name, expected_error) {
   // Since we're not doing OCSP requests, no certificate will be EV.
   do_check_eq(hasEVPolicy.value, false);
   do_check_eq(expected_error, error);
-  // Also check that isExtendedValidation doesn't cause OCSP requests.
-  let identityInfo = cert.QueryInterface(Ci.nsIIdentityInfo);
-  do_check_eq(identityInfo.isExtendedValidation, false);
   ocspResponder.stop(run_next_test);
 }
-

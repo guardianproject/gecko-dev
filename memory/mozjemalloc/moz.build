@@ -12,7 +12,8 @@ if not CONFIG['MOZ_JEMALLOC3']:
     SOURCES += [
         'jemalloc.c',
     ]
-    LIBRARY_NAME = 'jemalloc'
+    Library('mozjemalloc')
+    STATIC_LIBRARY_NAME = 'jemalloc'
     FORCE_STATIC_LIB = True
 
 # For non release/esr builds, enable (some) fatal jemalloc assertions.  This
@@ -21,9 +22,6 @@ if CONFIG['MOZ_UPDATE_CHANNEL'] not in ('release', 'esr'):
     DEFINES['MOZ_JEMALLOC_HARD_ASSERTS'] = True
 
 DEFINES['abort'] = 'moz_abort'
-
-if CONFIG['MOZ_REPLACE_MALLOC']:
-    DEFINES['MOZ_REPLACE_MALLOC'] = True
 
 DEFINES['MOZ_JEMALLOC_IMPL'] = True
 

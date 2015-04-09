@@ -8,8 +8,12 @@
 #include "ApplicationAccessible.h"
 #include "ARIAMap.h"
 #include "DocAccessible-inl.h"
+#include "DocAccessibleChild.h"
+#include "DocAccessibleParent.h"
 #include "nsAccessibilityService.h"
+#include "Platform.h"
 #include "RootAccessibleWrap.h"
+#include "xpcAccessibleDocument.h"
 
 #ifdef A11Y_LOG
 #include "Logging.h"
@@ -27,17 +31,21 @@
 #include "nsServiceManagerUtils.h"
 #include "nsIWebProgress.h"
 #include "nsCoreUtils.h"
+#include "nsXULAppAPI.h"
+#include "mozilla/dom/ContentChild.h"
 
 using namespace mozilla;
 using namespace mozilla::a11y;
 using namespace mozilla::dom;
+
+StaticAutoPtr<nsTArray<DocAccessibleParent*>> DocManager::sRemoteDocuments;
 
 ////////////////////////////////////////////////////////////////////////////////
 // DocManager
 ////////////////////////////////////////////////////////////////////////////////
 
 DocManager::DocManager()
-  : mDocAccessibleCache(4)
+  : mDocAccessibleCache(2), mXPCDocumentCache(0)
 {
 }
 
@@ -70,6 +78,34 @@ DocManager::FindAccessibleInCache(nsINode* aNode) const
                                     static_cast<void*>(&arg));
 
   return arg.mAccessible;
+}
+
+void
+DocManager::NotifyOfDocumentShutdown(DocAccessible* aDocument,
+                                     nsIDocument* aDOMDocument)
+{
+  xpcAccessibleDocument* xpcDoc = mXPCDocumentCache.GetWeak(aDocument);
+  if (xpcDoc) {
+    xpcDoc->Shutdown();
+    mXPCDocumentCache.Remove(aDocument);
+  }
+
+  mDocAccessibleCache.Remove(aDOMDocument);
+  RemoveListeners(aDOMDocument);
+}
+
+xpcAccessibleDocument*
+DocManager::GetXPCDocument(DocAccessible* aDocument)
+{
+  if (!aDocument)
+    return nullptr;
+
+  xpcAccessibleDocument* xpcDoc = mXPCDocumentCache.GetWeak(aDocument);
+  if (!xpcDoc) {
+    xpcDoc = new xpcAccessibleDocument(aDocument);
+    mXPCDocumentCache.Put(aDocument, xpcDoc);
+  }
+  return xpcDoc;
 }
 
 #ifdef DEBUG
@@ -418,6 +454,12 @@ DocManager::CreateDocOrRootAccessible(nsIDocument* aDocument)
     docAcc->FireDelayedEvent(nsIAccessibleEvent::EVENT_REORDER,
                              ApplicationAcc());
 
+    if (IPCAccessibilityActive()) {
+      DocAccessibleChild* ipcDoc = new DocAccessibleChild(docAcc);
+      docAcc->SetIPCDoc(ipcDoc);
+    auto contentChild = dom::ContentChild::GetSingleton();
+    contentChild->SendPDocAccessibleConstructor(ipcDoc, nullptr, 0);
+    }
   } else {
     parentDocAcc->BindChildDocument(docAcc);
   }
@@ -495,3 +537,17 @@ DocManager::SearchIfDocIsRefreshing(const nsIDocument* aKey,
   return PL_DHASH_NEXT;
 }
 #endif
+
+void
+DocManager::RemoteDocAdded(DocAccessibleParent* aDoc)
+{
+  if (!sRemoteDocuments) {
+    sRemoteDocuments = new nsTArray<DocAccessibleParent*>;
+    ClearOnShutdown(&sRemoteDocuments);
+  }
+
+  MOZ_ASSERT(!sRemoteDocuments->Contains(aDoc),
+      "How did we already have the doc!");
+  sRemoteDocuments->AppendElement(aDoc);
+  ProxyCreated(aDoc, 0);
+}

@@ -115,8 +115,7 @@ BluetoothProfileController::AddProfileWithServiceClass(
       profile = BluetoothHidManager::Get();
       break;
     default:
-      DispatchBluetoothReply(mRunnable, BluetoothValue(),
-                             NS_LITERAL_STRING(ERR_UNKNOWN_PROFILE));
+      DispatchReplyError(mRunnable, NS_LITERAL_STRING(ERR_UNKNOWN_PROFILE));
       mCallback();
       return;
   }
@@ -129,8 +128,7 @@ BluetoothProfileController::AddProfile(BluetoothProfileManagerBase* aProfile,
                                        bool aCheckConnected)
 {
   if (!aProfile) {
-    DispatchBluetoothReply(mRunnable, BluetoothValue(),
-                           NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    DispatchReplyError(mRunnable, NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
     mCallback();
     return;
   }
@@ -175,6 +173,16 @@ BluetoothProfileController::SetupProfiles(bool aAssignServiceClass)
   bool isRemoteControl = IS_REMOTE_CONTROL(mTarget.cod);
   bool isKeyboard = IS_KEYBOARD(mTarget.cod);
   bool isPointingDevice = IS_POINTING_DEVICE(mTarget.cod);
+  bool isInvalid = IS_INVALID_COD(mTarget.cod);
+
+  // The value of CoD is invalid. Since the device didn't declare its class of
+  // device properly, we assume the device may support all of these profiles.
+  if (isInvalid) {
+    AddProfile(BluetoothHfpManager::Get());
+    AddProfile(BluetoothA2dpManager::Get());
+    AddProfile(BluetoothHidManager::Get());
+    return;
+  }
 
   NS_ENSURE_TRUE_VOID(hasAudio || hasRendering || isPeripheral);
 
@@ -255,13 +263,11 @@ BluetoothProfileController::EndSession()
   // The action has completed, so the DOM request should be replied then invoke
   // the callback.
   if (mSuccess) {
-    DispatchBluetoothReply(mRunnable, BluetoothValue(true), EmptyString());
+    DispatchReplySuccess(mRunnable);
   } else if (mConnect) {
-    DispatchBluetoothReply(mRunnable, BluetoothValue(true),
-                           NS_LITERAL_STRING(ERR_CONNECTION_FAILED));
+    DispatchReplyError(mRunnable, NS_LITERAL_STRING(ERR_CONNECTION_FAILED));
   } else {
-    DispatchBluetoothReply(mRunnable, BluetoothValue(true),
-                           NS_LITERAL_STRING(ERR_DISCONNECTION_FAILED));
+    DispatchReplyError(mRunnable, NS_LITERAL_STRING(ERR_DISCONNECTION_FAILED));
   }
 
   mCallback();

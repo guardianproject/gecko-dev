@@ -15,14 +15,13 @@
 #include "nsUnicharUtils.h"
 #include "nsNSSCertificate.h"
 #include "nsNSSCertHelper.h"
-#include "nsINSSCertCache.h"
 #include "nsIMutableArray.h"
 #include "nsArrayUtils.h"
 #include "nsISupportsPrimitives.h"
 #include "nsXPCOMCID.h"
 #include "nsTHashtable.h"
 #include "nsHashKeys.h"
- 
+
 #include "prlog.h"
 
 using namespace mozilla;
@@ -71,17 +70,12 @@ CompareCacheMatchEntry(PLDHashTable *table, const PLDHashEntryHdr *hdr,
   return entryPtr->entry->key == key;
 }
 
-static bool
-CompareCacheInitEntry(PLDHashTable *table, PLDHashEntryHdr *hdr,
-                     const void *key)
+static void
+CompareCacheInitEntry(PLDHashEntryHdr *hdr, const void *key)
 {
   new (hdr) CompareCacheHashEntryPtr();
   CompareCacheHashEntryPtr *entryPtr = static_cast<CompareCacheHashEntryPtr*>(hdr);
-  if (!entryPtr->entry) {
-    return false;
-  }
   entryPtr->entry->key = (void*)key;
-  return true;
 }
 
 static void
@@ -92,13 +86,10 @@ CompareCacheClearEntry(PLDHashTable *table, PLDHashEntryHdr *hdr)
 }
 
 static const PLDHashTableOps gMapOps = {
-  PL_DHashAllocTable,
-  PL_DHashFreeTable,
   PL_DHashVoidPtrKeyStub,
   CompareCacheMatchEntry,
   PL_DHashMoveEntryStub,
   CompareCacheClearEntry,
-  PL_DHashFinalizeStub,
   CompareCacheInitEntry
 };
 
@@ -164,7 +155,6 @@ nsCertTree::nsCertTree() : mTreeArray(nullptr)
 {
   static NS_DEFINE_CID(kNSSComponentCID, NS_NSSCOMPONENT_CID);
 
-  mCompareCache.ops = nullptr;
   mNSSComponent = do_GetService(kNSSComponentCID);
   mOverrideService = do_GetService("@mozilla.org/security/certoverride;1");
   // Might be a different service if someone is overriding the contract
@@ -177,18 +167,16 @@ nsCertTree::nsCertTree() : mTreeArray(nullptr)
 
 void nsCertTree::ClearCompareHash()
 {
-  if (mCompareCache.ops) {
+  if (mCompareCache.IsInitialized()) {
     PL_DHashTableFinish(&mCompareCache);
-    mCompareCache.ops = nullptr;
   }
 }
 
 nsresult nsCertTree::InitCompareHash()
 {
   ClearCompareHash();
-  if (!PL_DHashTableInit(&mCompareCache, &gMapOps, nullptr,
-                         sizeof(CompareCacheHashEntryPtr), 128, fallible_t())) {
-    mCompareCache.ops = nullptr;
+  if (!PL_DHashTableInit(&mCompareCache, &gMapOps,
+                         sizeof(CompareCacheHashEntryPtr), fallible, 64)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
   return NS_OK;
@@ -210,15 +198,14 @@ CompareCacheHashEntry *
 nsCertTree::getCacheEntry(void *cache, void *aCert)
 {
   PLDHashTable &aCompareCache = *reinterpret_cast<PLDHashTable*>(cache);
-  CompareCacheHashEntryPtr *entryPtr = 
-    static_cast<CompareCacheHashEntryPtr*>
-               (PL_DHashTableOperate(&aCompareCache, aCert, PL_DHASH_ADD));
+  CompareCacheHashEntryPtr *entryPtr = static_cast<CompareCacheHashEntryPtr*>
+    (PL_DHashTableAdd(&aCompareCache, aCert, fallible));
   return entryPtr ? entryPtr->entry : nullptr;
 }
 
 void nsCertTree::RemoveCacheEntry(void *key)
 {
-  PL_DHashTableOperate(&mCompareCache, key, PL_DHASH_REMOVE);
+  PL_DHashTableRemove(&mCompareCache, key);
 }
 
 // CountOrganizations
@@ -643,14 +630,23 @@ nsCertTree::GetCertsByType(uint32_t           aType,
                                     aCertCmpFnArg);
 }
 
-nsresult 
-nsCertTree::GetCertsByTypeFromCache(nsINSSCertCache   *aCache,
+nsresult
+nsCertTree::GetCertsByTypeFromCache(nsIX509CertList   *aCache,
                                     uint32_t           aType,
                                     nsCertCompareFunc  aCertCmpFn,
                                     void              *aCertCmpFnArg)
 {
   NS_ENSURE_ARG_POINTER(aCache);
-  CERTCertList *certList = reinterpret_cast<CERTCertList*>(aCache->GetCachedCerts());
+  // GetRawCertList checks for NSS shutdown since we can't do it ourselves here
+  // easily. We still have to acquire a shutdown prevention lock to prevent NSS
+  // shutting down after GetRawCertList has returned. While cumbersome, this is
+  // at least mostly correct. The rest of this implementation doesn't even go
+  // this far in attempting to check for or prevent NSS shutdown at the
+  // appropriate times. If this were reimplemented at a higher level using
+  // more encapsulated types that handled NSS shutdown themselves, we wouldn't
+  // be having these kinds of problems.
+  nsNSSShutDownPreventionLock locker;
+  CERTCertList *certList = reinterpret_cast<CERTCertList*>(aCache->GetRawCertList());
   if (!certList)
     return NS_ERROR_FAILURE;
   return GetCertsByTypeFromCertList(certList, aType, aCertCmpFn, aCertCmpFnArg);
@@ -660,8 +656,8 @@ nsCertTree::GetCertsByTypeFromCache(nsINSSCertCache   *aCache,
 //
 // Load all of the certificates in the DB for this type.  Sort them
 // by token, organization, then common name.
-NS_IMETHODIMP 
-nsCertTree::LoadCertsFromCache(nsINSSCertCache *aCache, uint32_t aType)
+NS_IMETHODIMP
+nsCertTree::LoadCertsFromCache(nsIX509CertList *aCache, uint32_t aType)
 {
   if (mTreeArray) {
     FreeCertArray();

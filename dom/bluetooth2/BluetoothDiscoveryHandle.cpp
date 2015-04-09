@@ -24,29 +24,10 @@ BluetoothDiscoveryHandle::BluetoothDiscoveryHandle(nsPIDOMWindow* aWindow)
   : DOMEventTargetHelper(aWindow)
 {
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(IsDOMBinding());
-
-  ListenToBluetoothSignal(true);
 }
 
 BluetoothDiscoveryHandle::~BluetoothDiscoveryHandle()
 {
-  ListenToBluetoothSignal(false);
-}
-
-void
-BluetoothDiscoveryHandle::ListenToBluetoothSignal(bool aStart)
-{
-  BluetoothService* bs = BluetoothService::Get();
-  NS_ENSURE_TRUE_VOID(bs);
-
-  if (aStart) {
-    bs->RegisterBluetoothSignalHandler(
-      NS_LITERAL_STRING(KEY_DISCOVERY_HANDLE), this);
-  } else {
-    bs->UnregisterBluetoothSignalHandler(
-      NS_LITERAL_STRING(KEY_DISCOVERY_HANDLE), this);
-  }
 }
 
 // static
@@ -62,15 +43,13 @@ BluetoothDiscoveryHandle::Create(nsPIDOMWindow* aWindow)
 }
 
 void
-BluetoothDiscoveryHandle::DispatchDeviceEvent(const BluetoothValue& aValue)
+BluetoothDiscoveryHandle::DispatchDeviceEvent(BluetoothDevice* aDevice)
 {
-  // Create a new BluetoothDevice
-  nsRefPtr<BluetoothDevice> device =
-    BluetoothDevice::Create(GetOwner(), aValue);
+  MOZ_ASSERT(aDevice);
 
-  // Notify application of discovered device
   BluetoothDeviceEventInit init;
-  init.mDevice = device;
+  init.mDevice = aDevice;
+
   nsRefPtr<BluetoothDeviceEvent> event =
     BluetoothDeviceEvent::Constructor(this,
                                       NS_LITERAL_STRING("devicefound"),
@@ -78,28 +57,9 @@ BluetoothDiscoveryHandle::DispatchDeviceEvent(const BluetoothValue& aValue)
   DispatchTrustedEvent(event);
 }
 
-void
-BluetoothDiscoveryHandle::Notify(const BluetoothSignal& aData)
-{
-  BT_LOGD("[DH] %s", NS_ConvertUTF16toUTF8(aData.name()).get());
-
-  if (aData.name().EqualsLiteral("DeviceFound")) {
-    DispatchDeviceEvent(aData.value());
-  } else {
-    BT_WARNING("Not handling discovery handle signal: %s",
-               NS_ConvertUTF16toUTF8(aData.name()).get());
-  }
-}
-
-void
-BluetoothDiscoveryHandle::DisconnectFromOwner()
-{
-  DOMEventTargetHelper::DisconnectFromOwner();
-  ListenToBluetoothSignal(false);
-}
-
 JSObject*
-BluetoothDiscoveryHandle::WrapObject(JSContext* aCx)
+BluetoothDiscoveryHandle::WrapObject(JSContext* aCx,
+                                     JS::Handle<JSObject*> aGivenProto)
 {
-  return BluetoothDiscoveryHandleBinding::Wrap(aCx, this);
+  return BluetoothDiscoveryHandleBinding::Wrap(aCx, this, aGivenProto);
 }

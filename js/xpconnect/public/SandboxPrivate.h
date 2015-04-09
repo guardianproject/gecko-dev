@@ -24,9 +24,10 @@ class SandboxPrivate : public nsIGlobalObject,
                        public nsWrapperCache
 {
 public:
-    SandboxPrivate(nsIPrincipal *principal, JSObject *global)
+    SandboxPrivate(nsIPrincipal* principal, JSObject* global)
         : mPrincipal(principal)
     {
+        SetIsNotDOMBinding();
         SetWrapper(global);
     }
 
@@ -34,12 +35,12 @@ public:
     NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(SandboxPrivate,
                                                            nsIGlobalObject)
 
-    nsIPrincipal *GetPrincipal()
+    nsIPrincipal* GetPrincipal() override
     {
         return mPrincipal;
     }
 
-    JSObject *GetGlobalJSObject()
+    JSObject* GetGlobalJSObject() override
     {
         return GetWrapper();
     }
@@ -47,6 +48,16 @@ public:
     void ForgetGlobalObject()
     {
         ClearWrapper();
+    }
+
+    virtual JSObject* WrapObject(JSContext* cx, JS::Handle<JSObject*> aGivenProto) override
+    {
+        MOZ_CRASH("SandboxPrivate doesn't use DOM bindings!");
+    }
+
+    void ObjectMoved(JSObject* obj, const JSObject* old)
+    {
+        UpdateWrapper(obj, old);
     }
 
 private:

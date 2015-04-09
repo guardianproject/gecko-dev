@@ -31,7 +31,7 @@ struct nsXBLTextWithLineNumber
   ~nsXBLTextWithLineNumber() {
     MOZ_COUNT_DTOR(nsXBLTextWithLineNumber);
     if (mText) {
-      nsMemory::Free(mText);
+      free(mText);
     }
   }
 
@@ -39,7 +39,7 @@ struct nsXBLTextWithLineNumber
     if (mText) {
       char16_t* temp = mText;
       mText = ToNewUnicode(nsDependentString(temp) + aText);
-      nsMemory::Free(temp);
+      free(temp);
     } else {
       mText = ToNewUnicode(aText);
     }
@@ -61,14 +61,14 @@ struct nsXBLTextWithLineNumber
 class nsXBLProtoImplMember
 {
 public:
-  nsXBLProtoImplMember(const char16_t* aName)
+  explicit nsXBLProtoImplMember(const char16_t* aName)
     : mNext(nullptr)
     , mExposeToUntrustedContent(false)
   {
     mName = ToNewUnicode(nsDependentString(aName));
   }
   virtual ~nsXBLProtoImplMember() {
-    nsMemory::Free(mName);
+    free(mName);
     NS_CONTENT_DELETE_LIST_MEMBER(nsXBLProtoImplMember, this, mNext);
   }
 
@@ -80,7 +80,7 @@ public:
 
   virtual nsresult InstallMember(JSContext* aCx,
                                  JS::Handle<JSObject*> aTargetClassObject) = 0;
-  virtual nsresult CompileMember(const nsCString& aClassStr,
+  virtual nsresult CompileMember(mozilla::dom::AutoJSAPI& jsapi, const nsString& aClassStr,
                                  JS::Handle<JSObject*> aClassObject) = 0;
 
   virtual void Trace(const TraceCallbacks& aCallbacks, void *aClosure) = 0;

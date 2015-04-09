@@ -23,20 +23,6 @@ template class mozilla::a11y::ProgressMeterAccessible<1>;
 template class mozilla::a11y::ProgressMeterAccessible<100>;
 
 ////////////////////////////////////////////////////////////////////////////////
-// nsISupports
-
-template<int Max>
-NS_IMPL_ADDREF_INHERITED(ProgressMeterAccessible<Max>, LeafAccessible)
-
-template<int Max>
-NS_IMPL_RELEASE_INHERITED(ProgressMeterAccessible<Max>, LeafAccessible)
-
-template<int Max>
-NS_IMPL_QUERY_INTERFACE_INHERITED(ProgressMeterAccessible<Max>,
-                                  LeafAccessible,
-                                  nsIAccessibleValue)
-
-////////////////////////////////////////////////////////////////////////////////
 // Accessible
 
 template<int Max>
@@ -73,7 +59,7 @@ ProgressMeterAccessible<Max>::IsWidget() const
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// nsIAccessibleValue
+// ProgressMeterAccessible<Max>: Value
 
 template<int Max>
 void
@@ -174,24 +160,21 @@ RadioButtonAccessible::ActionCount()
   return 1;
 }
 
-NS_IMETHODIMP
-RadioButtonAccessible::GetActionName(uint8_t aIndex, nsAString& aName)
+void
+RadioButtonAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 {
-  if (aIndex == eAction_Click) {
-    aName.AssignLiteral("select"); 
-    return NS_OK;
-  }
-  return NS_ERROR_INVALID_ARG;
+  if (aIndex == eAction_Click)
+    aName.AssignLiteral("select");
 }
 
-NS_IMETHODIMP
+bool
 RadioButtonAccessible::DoAction(uint8_t aIndex)
 {
   if (aIndex != eAction_Click)
-    return NS_ERROR_INVALID_ARG;
+    return false;
 
   DoCommand();
-  return NS_OK;
+  return true;
 }
 
 role

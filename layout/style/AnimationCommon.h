@@ -10,26 +10,30 @@
 #include "nsIStyleRule.h"
 #include "nsRefreshDriver.h"
 #include "prclist.h"
+#include "nsChangeHint.h"
 #include "nsCSSProperty.h"
+#include "nsDisplayList.h" // For nsDisplayItem::Type
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StyleAnimationValue.h"
+#include "mozilla/dom/AnimationPlayer.h"
 #include "mozilla/dom/Element.h"
-#include "nsSMILKeySpline.h"
+#include "mozilla/dom/Nullable.h"
 #include "nsStyleStruct.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/Assertions.h"
 #include "mozilla/FloatingPoint.h"
 #include "nsCSSPseudoElements.h"
+#include "nsCycleCollectionParticipant.h"
+#include "nsCSSPropertySet.h"
 
 class nsIFrame;
 class nsPresContext;
 class nsStyleChangeList;
 
-
 namespace mozilla {
 
-class StyleAnimationValue;
-struct ElementPropertyTransition;
-struct ElementAnimationCollection;
+class RestyleTracker;
+struct AnimationPlayerCollection;
 
 namespace css {
 
@@ -38,144 +42,149 @@ bool IsGeometricProperty(nsCSSProperty aProperty);
 class CommonAnimationManager : public nsIStyleRuleProcessor,
                                public nsARefreshObserver {
 public:
-  CommonAnimationManager(nsPresContext *aPresContext);
+  explicit CommonAnimationManager(nsPresContext *aPresContext);
 
   // nsISupports
   NS_DECL_ISUPPORTS
 
   // nsIStyleRuleProcessor (parts)
-  virtual nsRestyleHint HasStateDependentStyle(StateRuleProcessorData* aData) MOZ_OVERRIDE;
-  virtual nsRestyleHint HasStateDependentStyle(PseudoElementStateRuleProcessorData* aData) MOZ_OVERRIDE;
-  virtual bool HasDocumentStateDependentStyle(StateRuleProcessorData* aData) MOZ_OVERRIDE;
+  virtual nsRestyleHint HasStateDependentStyle(StateRuleProcessorData* aData) override;
+  virtual nsRestyleHint HasStateDependentStyle(PseudoElementStateRuleProcessorData* aData) override;
+  virtual bool HasDocumentStateDependentStyle(StateRuleProcessorData* aData) override;
   virtual nsRestyleHint
-    HasAttributeDependentStyle(AttributeRuleProcessorData* aData) MOZ_OVERRIDE;
-  virtual bool MediumFeaturesChanged(nsPresContext* aPresContext) MOZ_OVERRIDE;
+    HasAttributeDependentStyle(AttributeRuleProcessorData* aData) override;
+  virtual bool MediumFeaturesChanged(nsPresContext* aPresContext) override;
+  virtual void RulesMatching(ElementRuleProcessorData* aData) override;
+  virtual void RulesMatching(PseudoElementRuleProcessorData* aData) override;
+  virtual void RulesMatching(AnonBoxRuleProcessorData* aData) override;
+#ifdef MOZ_XUL
+  virtual void RulesMatching(XULTreeRuleProcessorData* aData) override;
+#endif
   virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf)
-    const MOZ_MUST_OVERRIDE MOZ_OVERRIDE;
+    const MOZ_MUST_OVERRIDE override;
   virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
-    const MOZ_MUST_OVERRIDE MOZ_OVERRIDE;
+    const MOZ_MUST_OVERRIDE override;
+
+#ifdef DEBUG
+  static void Initialize();
+#endif
+
+  // NOTE:  This can return null after Disconnect().
+  nsPresContext* PresContext() const { return mPresContext; }
 
   /**
    * Notify the manager that the pres context is going away.
    */
   void Disconnect();
 
+  // Tell the restyle tracker about all the styles that we're currently
+  // animating, so that it can update the animation rule for these
+  // elements.
+  void AddStyleUpdatesTo(mozilla::RestyleTracker& aTracker);
+
+  AnimationPlayerCollection*
+  GetAnimations(dom::Element *aElement,
+                nsCSSPseudoElements::Type aPseudoType,
+                bool aCreateIfNeeded);
+
+  // Returns true if aContent or any of its ancestors has an animation
+  // or transition.
+  static bool ContentOrAncestorHasAnimation(nsIContent* aContent) {
+    do {
+      if (aContent->GetProperty(nsGkAtoms::animationsProperty) ||
+          aContent->GetProperty(nsGkAtoms::transitionsProperty)) {
+        return true;
+      }
+    } while ((aContent = aContent->GetParent()));
+
+    return false;
+  }
+
+  // Notify this manager that one of its collections of animation players,
+  // has been updated.
+  void NotifyCollectionUpdated(AnimationPlayerCollection& aCollection);
+
   enum FlushFlags {
     Can_Throttle,
     Cannot_Throttle
   };
 
+  nsIStyleRule* GetAnimationRule(mozilla::dom::Element* aElement,
+                                 nsCSSPseudoElements::Type aPseudoType);
+
   static bool ExtractComputedValueForTransition(
                   nsCSSProperty aProperty,
                   nsStyleContext* aStyleContext,
                   mozilla::StyleAnimationValue& aComputedValue);
+
+  // For CSS properties that may be animated on a separate layer, represents
+  // a record of the corresponding layer type and change hint.
+  struct LayerAnimationRecord {
+    nsCSSProperty mProperty;
+    nsDisplayItem::Type mLayerType;
+    nsChangeHint mChangeHint;
+  };
+
+protected:
+  static const size_t kLayerRecords = 2;
+
+public:
+  static const LayerAnimationRecord sLayerAnimationInfo[kLayerRecords];
+
+  // Will return non-null for any property with the
+  // CSS_PROPERTY_CAN_ANIMATE_ON_COMPOSITOR flag; should only be called
+  // on such properties.
+  static const LayerAnimationRecord*
+    LayerAnimationRecordFor(nsCSSProperty aProperty);
+
 protected:
   virtual ~CommonAnimationManager();
 
   // For ElementCollectionRemoved
-  friend struct mozilla::ElementAnimationCollection;
+  friend struct mozilla::AnimationPlayerCollection;
 
-  virtual void
-  AddElementCollection(ElementAnimationCollection* aCollection) = 0;
-  virtual void ElementCollectionRemoved() = 0;
+  void AddElementCollection(AnimationPlayerCollection* aCollection);
+  void ElementCollectionRemoved() { MaybeStartOrStopObservingRefreshDriver(); }
   void RemoveAllElementCollections();
 
-  // When this returns a value other than nullptr, it also,
-  // as a side-effect, notifies the ActiveLayerTracker.
-  static ElementAnimationCollection*
+  // We should normally only call MaybeStartOrStopObservingRefreshDriver in
+  // situations where we will also queue events since otherwise we may stop
+  // getting refresh driver ticks before we queue the necessary events.
+  void MaybeStartObservingRefreshDriver();
+  void MaybeStartOrStopObservingRefreshDriver();
+  bool NeedsRefresh() const;
+
+  virtual nsIAtom* GetAnimationsAtom() = 0;
+  virtual nsIAtom* GetAnimationsBeforeAtom() = 0;
+  virtual nsIAtom* GetAnimationsAfterAtom() = 0;
+
+  virtual bool IsAnimationManager() {
+    return false;
+  }
+
+  static AnimationPlayerCollection*
   GetAnimationsForCompositor(nsIContent* aContent,
                              nsIAtom* aElementProperty,
                              nsCSSProperty aProperty);
 
-  // Update the style on aElement from the transition stored in this manager and
-  // the new parent style - aParentStyle. aElement must be transitioning or
-  // animated. Returns the updated style.
-  nsStyleContext* UpdateThrottledStyle(mozilla::dom::Element* aElement,
-                                       nsStyleContext* aParentStyle,
-                                       nsStyleChangeList &aChangeList);
-  // Reparent the style of aContent and any :before and :after pseudo-elements.
-  already_AddRefed<nsStyleContext> ReparentContent(nsIContent* aContent,
-                                                  nsStyleContext* aParentStyle);
-  // reparent :before and :after pseudo elements of aElement
-  static void ReparentBeforeAndAfter(dom::Element* aElement,
-                                     nsIFrame* aPrimaryFrame,
-                                     nsStyleContext* aNewStyle,
-                                     nsStyleSet* aStyleSet);
-
   PRCList mElementCollections;
   nsPresContext *mPresContext; // weak (non-null from ctor to Disconnect)
+  bool mIsObservingRefreshDriver;
 };
-
-// The internals of UpdateAllThrottledStyles, used by nsAnimationManager and
-// nsTransitionManager, see the comments in the declaration of the latter.
-#define IMPL_UPDATE_ALL_THROTTLED_STYLES_INTERNAL(class_, animations_getter_)  \
-void                                                                           \
-class_::UpdateAllThrottledStylesInternal()                                     \
-{                                                                              \
-  TimeStamp now = mPresContext->RefreshDriver()->MostRecentRefresh();          \
-                                                                               \
-  nsStyleChangeList changeList;                                                \
-                                                                               \
-  /* update each transitioning element by finding its root-most ancestor
-     with a transition, and flushing the style on that ancestor and all
-     its descendants*/                                                         \
-  PRCList *next = PR_LIST_HEAD(&mElementCollections);                          \
-  while (next != &mElementCollections) {                                       \
-    ElementAnimationCollection* collection =                                   \
-      static_cast<ElementAnimationCollection*>(next);                          \
-    next = PR_NEXT_LINK(next);                                                 \
-                                                                               \
-    if (collection->mFlushGeneration == now) {                                 \
-      /* this element has been ticked already */                               \
-      continue;                                                                \
-    }                                                                          \
-                                                                               \
-    /* element is initialised to the starting element (i.e., one we know has
-       an animation) and ends up with the root-most animated ancestor,
-       that is, the element where we begin updates. */                         \
-    dom::Element* element = collection->mElement;                              \
-    /* make a list of ancestors */                                             \
-    nsTArray<dom::Element*> ancestors;                                         \
-    do {                                                                       \
-      ancestors.AppendElement(element);                                        \
-    } while ((element = element->GetParentElement()));                         \
-                                                                               \
-    /* walk down the ancestors until we find one with a throttled transition */\
-    for (int32_t i = ancestors.Length() - 1; i >= 0; --i) {                    \
-      if (animations_getter_(ancestors[i],                                     \
-                            nsCSSPseudoElements::ePseudo_NotPseudoElement,     \
-                            false)) {                                          \
-        element = ancestors[i];                                                \
-        break;                                                                 \
-      }                                                                        \
-    }                                                                          \
-                                                                               \
-    nsIFrame* primaryFrame;                                                    \
-    if (element &&                                                             \
-        (primaryFrame = nsLayoutUtils::GetStyleFrame(element))) {              \
-      UpdateThrottledStylesForSubtree(element,                                 \
-        primaryFrame->StyleContext()->GetParent(), changeList);                \
-    }                                                                          \
-  }                                                                            \
-                                                                               \
-  RestyleManager* restyleManager = mPresContext->RestyleManager();             \
-  restyleManager->ProcessRestyledFrames(changeList);                           \
-  restyleManager->FlushOverflowChangedTracker();                               \
-}
 
 /**
  * A style rule that maps property-StyleAnimationValue pairs.
  */
-class AnimValuesStyleRule MOZ_FINAL : public nsIStyleRule
+class AnimValuesStyleRule final : public nsIStyleRule
 {
 public:
   // nsISupports implementation
   NS_DECL_ISUPPORTS
 
   // nsIStyleRule implementation
-  virtual void MapRuleInfoInto(nsRuleData* aRuleData) MOZ_OVERRIDE;
+  virtual void MapRuleInfoInto(nsRuleData* aRuleData) override;
 #ifdef DEBUG
-  virtual void List(FILE* out = stdout, int32_t aIndent = 0) const MOZ_OVERRIDE;
+  virtual void List(FILE* out = stdout, int32_t aIndent = 0) const override;
 #endif
 
   void AddValue(nsCSSProperty aProperty,
@@ -198,242 +207,61 @@ public:
     mozilla::StyleAnimationValue mValue;
   };
 
+  void AddPropertiesToSet(nsCSSPropertySet& aSet) const
+  {
+    for (size_t i = 0, i_end = mPropertyValuePairs.Length(); i < i_end; ++i) {
+      const PropertyValuePair &cv = mPropertyValuePairs[i];
+      aSet.AddProperty(cv.mProperty);
+    }
+  }
+
 private:
   ~AnimValuesStyleRule() {}
 
   InfallibleTArray<PropertyValuePair> mPropertyValuePairs;
 };
 
-class ComputedTimingFunction {
-public:
-  typedef nsTimingFunction::Type Type;
-  void Init(const nsTimingFunction &aFunction);
-  double GetValue(double aPortion) const;
-  const nsSMILKeySpline* GetFunction() const {
-    NS_ASSERTION(mType == nsTimingFunction::Function, "Type mismatch");
-    return &mTimingFunction;
-  }
-  Type GetType() const { return mType; }
-  uint32_t GetSteps() const { return mSteps; }
-private:
-  Type mType;
-  nsSMILKeySpline mTimingFunction;
-  uint32_t mSteps;
-};
-
 } /* end css sub-namespace */
 
-struct AnimationPropertySegment
-{
-  float mFromKey, mToKey;
-  mozilla::StyleAnimationValue mFromValue, mToValue;
-  mozilla::css::ComputedTimingFunction mTimingFunction;
-};
-
-struct AnimationProperty
-{
-  nsCSSProperty mProperty;
-  InfallibleTArray<AnimationPropertySegment> mSegments;
-};
-
-/**
- * Input timing parameters.
- *
- * Eventually this will represent all the input timing parameters specified
- * by content but for now it encapsulates just the subset of those
- * parameters passed to GetPositionInIteration.
- */
-struct AnimationTiming
-{
-  mozilla::TimeDuration mIterationDuration;
-  mozilla::TimeDuration mDelay;
-  float mIterationCount; // mozilla::PositiveInfinity<float>() means infinite
-  uint8_t mDirection;
-  uint8_t mFillMode;
-
-  bool FillsForwards() const {
-    return mFillMode == NS_STYLE_ANIMATION_FILL_MODE_BOTH ||
-           mFillMode == NS_STYLE_ANIMATION_FILL_MODE_FORWARDS;
-  }
-  bool FillsBackwards() const {
-    return mFillMode == NS_STYLE_ANIMATION_FILL_MODE_BOTH ||
-           mFillMode == NS_STYLE_ANIMATION_FILL_MODE_BACKWARDS;
-  }
-};
-
-/**
- * Stores the results of calculating the timing properties of an animation
- * at a given sample time.
- *
- * The members of a default-constructed object of this type are not meaningful.
- * Rather, this object is intended to be used as the return value of
- * ElementAnimation::GetComputedTimingAt which ensures all members are set
- * correctly.
- */
-struct ComputedTiming
-{
-  ComputedTiming()
-  : mTimeFraction(kNullTimeFraction),
-    mCurrentIteration(0)
-  { }
-
-  static const double kNullTimeFraction;
-
-  // The total duration of the animation including all iterations.
-  // Will equal TimeDuration::Forever() if the animation repeats indefinitely.
-  TimeDuration mActiveDuration;
-
-  // Will be kNullTimeFraction if the animation is neither animating nor
-  // filling at the sampled time.
-  double mTimeFraction;
-
-  // Zero-based iteration index (meaningless if mTimeFraction is
-  // kNullTimeFraction).
-  uint64_t mCurrentIteration;
-
-  enum {
-    // Sampled prior to the start of the active interval
-    AnimationPhase_Before,
-    // Sampled within the active interval
-    AnimationPhase_Active,
-    // Sampled after (or at) the end of the active interval
-    AnimationPhase_After
-  } mPhase;
-};
-
-/**
- * Data about one animation (i.e., one of the values of
- * 'animation-name') running on an element.
- */
-struct ElementAnimation
-{
-protected:
-  virtual ~ElementAnimation() { }
-
-public:
-  ElementAnimation()
-    : mIsRunningOnCompositor(false)
-    , mLastNotification(LAST_NOTIFICATION_NONE)
-  {
-  }
-
-  // FIXME: If we succeed in moving transition-specific code to a type of
-  // AnimationEffect (as per the Web Animations API) we should remove these
-  // virtual methods.
-  virtual ElementPropertyTransition* AsTransition() { return nullptr; }
-  virtual const ElementPropertyTransition* AsTransition() const {
-    return nullptr;
-  }
-
-  bool IsPaused() const {
-    return mPlayState == NS_STYLE_ANIMATION_PLAY_STATE_PAUSED;
-  }
-
-  // After transitions finish they need to be retained for one throttle-able
-  // cycle (for reasons see explanation in nsTransitionManager.cpp). In the
-  // meantime, however, they should be ignored.
-  bool IsFinishedTransition() const {
-    return mStartTime.IsNull();
-  }
-  void SetFinishedTransition() {
-    MOZ_ASSERT(AsTransition(),
-               "Calling SetFinishedTransition but it's not a transition");
-    mStartTime = mozilla::TimeStamp();
-  }
-
-  bool HasAnimationOfProperty(nsCSSProperty aProperty) const;
-  bool IsRunningAt(mozilla::TimeStamp aTime) const;
-  bool IsCurrentAt(mozilla::TimeStamp aTime) const;
-
-  // Return the duration at aTime (or, if paused, mPauseStart) since
-  // the start of the delay period.  May be negative.
-  mozilla::TimeDuration GetLocalTimeAt(mozilla::TimeStamp aTime) const {
-    MOZ_ASSERT(!IsPaused() || aTime >= mPauseStart,
-               "if paused, aTime must be at least mPauseStart");
-    MOZ_ASSERT(!IsFinishedTransition(),
-               "GetLocalTimeAt should not be called on a finished transition");
-    return (IsPaused() ? mPauseStart : aTime) - mStartTime;
-  }
-
-  // Return the duration from the start the active interval to the point where
-  // the animation begins playback. This is zero unless the animation has
-  // a negative delay in which case it is the absolute value of the delay.
-  // This is used for setting the elapsedTime member of AnimationEvents.
-  mozilla::TimeDuration InitialAdvance() const {
-    return std::max(TimeDuration(), mTiming.mDelay * -1);
-  }
-
-  // This function takes as input the timing parameters of an animation and
-  // returns the computed timing at the specified moment.
-  //
-  // This function returns ComputedTiming::kNullTimeFraction for the
-  // mTimeFraction member of the return value if the animation should not be
-  // run (because it is not currently active and is not filling at this time).
-  static ComputedTiming GetComputedTimingAt(TimeDuration aLocalTime,
-                                            const AnimationTiming& aTiming);
-
-  // Return the duration of the active interval for the given timing parameters.
-  static mozilla::TimeDuration ActiveDuration(const AnimationTiming& aTiming);
-
-  nsString mName;
-  AnimationTiming mTiming;
-  // The beginning of the delay period.  This is also set to a null
-  // timestamp to mark transitions that have finished and are due to
-  // be removed on the next throttle-able cycle.
-  mozilla::TimeStamp mStartTime;
-  mozilla::TimeStamp mPauseStart;
-  uint8_t mPlayState;
-  bool mIsRunningOnCompositor;
-
-  enum {
-    LAST_NOTIFICATION_NONE = uint64_t(-1),
-    LAST_NOTIFICATION_END = uint64_t(-2)
-  };
-  // One of the above constants, or an integer for the iteration
-  // whose start we last notified on.
-  uint64_t mLastNotification;
-
-  InfallibleTArray<AnimationProperty> mProperties;
-
-  NS_INLINE_DECL_REFCOUNTING(ElementAnimation)
-};
-
-typedef InfallibleTArray<nsRefPtr<ElementAnimation> > ElementAnimationPtrArray;
+typedef InfallibleTArray<nsRefPtr<dom::AnimationPlayer> >
+  AnimationPlayerPtrArray;
 
 enum EnsureStyleRuleFlags {
   EnsureStyleRule_IsThrottled,
   EnsureStyleRule_IsNotThrottled
 };
 
-struct ElementAnimationCollection : public PRCList
+struct AnimationPlayerCollection : public PRCList
 {
-  ElementAnimationCollection(dom::Element *aElement, nsIAtom *aElementProperty,
-                             mozilla::css::CommonAnimationManager *aManager,
-                             TimeStamp aNow)
+  AnimationPlayerCollection(dom::Element *aElement, nsIAtom *aElementProperty,
+                            mozilla::css::CommonAnimationManager *aManager)
     : mElement(aElement)
     , mElementProperty(aElementProperty)
     , mManager(aManager)
     , mAnimationGeneration(0)
-    , mFlushGeneration(aNow)
+    , mCheckGeneration(0)
     , mNeedsRefreshes(true)
 #ifdef DEBUG
     , mCalledPropertyDtor(false)
 #endif
   {
-    MOZ_COUNT_CTOR(ElementAnimationCollection);
+    MOZ_COUNT_CTOR(AnimationPlayerCollection);
     PR_INIT_CLIST(this);
   }
-  ~ElementAnimationCollection()
+  ~AnimationPlayerCollection()
   {
-    NS_ABORT_IF_FALSE(mCalledPropertyDtor,
-                      "must call destructor through element property dtor");
-    MOZ_COUNT_DTOR(ElementAnimationCollection);
+    MOZ_ASSERT(mCalledPropertyDtor,
+               "must call destructor through element property dtor");
+    MOZ_COUNT_DTOR(AnimationPlayerCollection);
     PR_REMOVE_LINK(this);
     mManager->ElementCollectionRemoved();
   }
 
   void Destroy()
   {
+    for (size_t playerIdx = mPlayers.Length(); playerIdx-- != 0; ) {
+      mPlayers[playerIdx]->Cancel();
+    }
     // This will call our destructor.
     mElement->DeleteProperty(mElementProperty);
   }
@@ -441,10 +269,8 @@ struct ElementAnimationCollection : public PRCList
   static void PropertyDtor(void *aObject, nsIAtom *aPropertyName,
                            void *aPropertyValue, void *aData);
 
-  // This updates mNeedsRefreshes so the caller may need to check
-  // for changes to values (for example, nsAnimationManager provides
-  // CheckNeedsRefresh to register or unregister from observing the refresh
-  // driver when this value changes).
+  void Tick();
+
   void EnsureStyleRuleFor(TimeStamp aRefreshTime, EnsureStyleRuleFlags aFlags);
 
   bool CanThrottleTransformChanges(mozilla::TimeStamp aTime);
@@ -480,6 +306,9 @@ struct ElementAnimationCollection : public PRCList
   // (This is useful for determining whether throttle the animation
   // (suppress main-thread style updates).)
   bool CanPerformOnCompositorThread(CanAnimateFlags aFlags) const;
+
+  void PostUpdateLayerAnimations();
+
   bool HasAnimationOfProperty(nsCSSProperty aProperty) const;
 
   bool IsForElement() const { // rather than for a pseudo-element
@@ -487,22 +316,66 @@ struct ElementAnimationCollection : public PRCList
            mElementProperty == nsGkAtoms::transitionsProperty;
   }
 
-  nsString PseudoElement()
+  bool IsForBeforePseudo() const {
+    return mElementProperty == nsGkAtoms::animationsOfBeforeProperty ||
+           mElementProperty == nsGkAtoms::transitionsOfBeforeProperty;
+  }
+
+  bool IsForAfterPseudo() const {
+    return mElementProperty == nsGkAtoms::animationsOfAfterProperty ||
+           mElementProperty == nsGkAtoms::transitionsOfAfterProperty;
+  }
+
+  bool IsForTransitions() const {
+    return mElementProperty == nsGkAtoms::transitionsProperty ||
+           mElementProperty == nsGkAtoms::transitionsOfBeforeProperty ||
+           mElementProperty == nsGkAtoms::transitionsOfAfterProperty;
+  }
+
+  bool IsForAnimations() const {
+    return mElementProperty == nsGkAtoms::animationsProperty ||
+           mElementProperty == nsGkAtoms::animationsOfBeforeProperty ||
+           mElementProperty == nsGkAtoms::animationsOfAfterProperty;
+  }
+
+  nsString PseudoElement() const
   {
     if (IsForElement()) {
       return EmptyString();
-    } else if (mElementProperty == nsGkAtoms::animationsOfBeforeProperty ||
-               mElementProperty == nsGkAtoms::transitionsOfBeforeProperty) {
+    }
+    if (IsForBeforePseudo()) {
       return NS_LITERAL_STRING("::before");
-    } else {
-      return NS_LITERAL_STRING("::after");
+    }
+    MOZ_ASSERT(IsForAfterPseudo(),
+               "::before & ::after should be the only pseudo-elements here");
+    return NS_LITERAL_STRING("::after");
+  }
+
+  nsCSSPseudoElements::Type PseudoElementType() const
+  {
+    if (IsForElement()) {
+      return nsCSSPseudoElements::ePseudo_NotPseudoElement;
+    }
+    if (IsForBeforePseudo()) {
+      return nsCSSPseudoElements::ePseudo_before;
+    }
+    MOZ_ASSERT(IsForAfterPseudo(),
+               "::before & ::after should be the only pseudo-elements here");
+    return nsCSSPseudoElements::ePseudo_after;
+  }
+
+  mozilla::dom::Element* GetElementToRestyle() const;
+
+  void PostRestyleForAnimation(nsPresContext *aPresContext) {
+    mozilla::dom::Element* element = GetElementToRestyle();
+    if (element) {
+      nsRestyleHint hint = IsForTransitions() ? eRestyle_CSSTransitions
+                                              : eRestyle_CSSAnimations;
+      aPresContext->PresShell()->RestyleForAnimation(element, hint);
     }
   }
 
-  void PostRestyleForAnimation(nsPresContext *aPresContext) {
-    nsRestyleHint styleHint = IsForElement() ? eRestyle_Self : eRestyle_Subtree;
-    aPresContext->PresShell()->RestyleForAnimation(mElement, styleHint);
-  }
+  void NotifyPlayerUpdated();
 
   static void LogAsyncAnimationFailure(nsCString& aMessage,
                                        const nsIContent* aContent = nullptr);
@@ -515,7 +388,7 @@ struct ElementAnimationCollection : public PRCList
 
   mozilla::css::CommonAnimationManager *mManager;
 
-  mozilla::ElementAnimationPtrArray mAnimations;
+  mozilla::AnimationPlayerPtrArray mPlayers;
 
   // This style rule contains the style data for currently animating
   // values.  It only matches when styling with animation.  When we
@@ -536,17 +409,25 @@ struct ElementAnimationCollection : public PRCList
   // Update mAnimationGeneration to nsCSSFrameConstructor's count
   void UpdateAnimationGeneration(nsPresContext* aPresContext);
 
-  // Returns true if there is an animation in the before or active phase at
-  // the given time.
-  bool HasCurrentAnimationsAt(mozilla::TimeStamp aTime);
+  // For CSS transitions only, we also record the most recent generation
+  // for which we've done the transition update, so that we avoid doing
+  // it more than once per style change.  This should be greater than or
+  // equal to mAnimationGeneration, except when the generation counter
+  // cycles, or when animations are updated through the DOM Animation
+  // interfaces.
+  uint64_t mCheckGeneration;
+  // Update mAnimationGeneration to nsCSSFrameConstructor's count
+  void UpdateCheckGeneration(nsPresContext* aPresContext);
+
+  // Returns true if there is an animation that has yet to finish.
+  bool HasCurrentAnimations() const;
+  // Returns true if there is an animation of any of the specified properties
+  // that has yet to finish.
+  bool HasCurrentAnimationsForProperties(const nsCSSProperty* aProperties,
+                                         size_t aPropertyCount) const;
 
   // The refresh time associated with mStyleRule.
   TimeStamp mStyleRuleRefreshTime;
-
-  // Generation counter for flushes of throttled animations.
-  // Used to prevent updating the styles twice for a given element during
-  // UpdateAllThrottledStyles.
-  TimeStamp mFlushGeneration;
 
   // False when we know that our current style rule is valid
   // indefinitely into the future (because all of our animations are

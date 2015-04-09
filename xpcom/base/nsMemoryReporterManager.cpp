@@ -45,6 +45,9 @@ using namespace mozilla;
 
 #if defined(XP_LINUX)
 
+#include <string.h>
+#include <stdlib.h>
+
 static nsresult
 GetProcSelfStatmField(int aField, int64_t* aN)
 {
@@ -68,30 +71,54 @@ GetProcSelfStatmField(int aField, int64_t* aN)
 static nsresult
 GetProcSelfSmapsPrivate(int64_t* aN)
 {
-  // You might be tempted to calculate USS by subtracting the "shared"
-  // value from the "resident" value in /proc/<pid>/statm. But at least
-  // on Linux, statm's "shared" value actually counts pages backed by
-  // files, which has little to do with whether the pages are actually
-  // shared. /proc/self/smaps on the other hand appears to give us the
-  // correct information.
+  // You might be tempted to calculate USS by subtracting the "shared" value
+  // from the "resident" value in /proc/<pid>/statm. But at least on Linux,
+  // statm's "shared" value actually counts pages backed by files, which has
+  // little to do with whether the pages are actually shared. /proc/self/smaps
+  // on the other hand appears to give us the correct information.
 
   FILE* f = fopen("/proc/self/smaps", "r");
   if (NS_WARN_IF(!f)) {
     return NS_ERROR_UNEXPECTED;
   }
 
+  // We carry over the end of the buffer to the beginning to make sure we only
+  // interpret complete lines.
+  static const uint32_t carryOver = 32;
+  static const uint32_t readSize = 4096;
+
   int64_t amount = 0;
-  char line[256];
-  while (fgets(line, sizeof(line), f)) {
-    long long val = 0;
-    if (sscanf(line, "Private_Dirty: %lld kB", &val) == 1 ||
-        sscanf(line, "Private_Clean: %lld kB", &val) == 1) {
-      amount += val * 1024; // convert from kB to bytes
+  char buffer[carryOver + readSize + 1];
+
+  // Fill the beginning of the buffer with spaces, as a sentinel for the first
+  // iteration.
+  memset(buffer, ' ', carryOver);
+
+  for (;;) {
+    size_t bytes = fread(buffer + carryOver, sizeof(*buffer), readSize, f);
+    char* end = buffer + bytes;
+    char* ptr = buffer;
+    end[carryOver] = '\0';
+    // We are looking for lines like "Private_{Clean,Dirty}: 4 kB".
+    while ((ptr = strstr(ptr, "Private"))) {
+      if (ptr >= end) {
+        break;
+      }
+      ptr += sizeof("Private_Xxxxx:");
+      amount += strtol(ptr, nullptr, 10);
     }
+    if (bytes < readSize) {
+      // We do not expect any match within the end of the buffer.
+      MOZ_ASSERT(!strstr(end, "Private"));
+      break;
+    }
+    // Carry the end of the buffer over to the beginning.
+    memcpy(buffer, end, carryOver);
   }
 
   fclose(f);
-  *aN = amount;
+  // Convert from kB to bytes.
+  *aN = amount * 1024;
   return NS_OK;
 }
 
@@ -114,14 +141,14 @@ ResidentFastDistinguishedAmount(int64_t* aN)
   return ResidentDistinguishedAmount(aN);
 }
 
-#define HAVE_RESIDENT_UNIQUE_REPORTER
+#define HAVE_RESIDENT_UNIQUE_REPORTER 1
 static nsresult
 ResidentUniqueDistinguishedAmount(int64_t* aN)
 {
   return GetProcSelfSmapsPrivate(aN);
 }
 
-class ResidentUniqueReporter MOZ_FINAL : public nsIMemoryReporter
+class ResidentUniqueReporter final : public nsIMemoryReporter
 {
   ~ResidentUniqueReporter() {}
 
@@ -129,7 +156,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                           nsISupports* aData, bool aAnonymize)
+                           nsISupports* aData, bool aAnonymize) override
   {
     int64_t amount = 0;
     nsresult rv = ResidentUniqueDistinguishedAmount(&amount);
@@ -264,7 +291,7 @@ GetKinfoVmentrySelf(int64_t* aPrss, uint64_t* aMaxreg)
   return NS_OK;
 }
 
-#define HAVE_PRIVATE_REPORTER
+#define HAVE_PRIVATE_REPORTER 1
 static nsresult
 PrivateDistinguishedAmount(int64_t* aN)
 {
@@ -502,7 +529,7 @@ VsizeMaxContiguousDistinguishedAmount(int64_t* aN)
   return NS_OK;
 }
 
-#define HAVE_PRIVATE_REPORTER
+#define HAVE_PRIVATE_REPORTER 1
 static nsresult
 PrivateDistinguishedAmount(int64_t* aN)
 {
@@ -517,10 +544,161 @@ PrivateDistinguishedAmount(int64_t* aN)
   *aN = pmcex.PrivateUsage;
   return NS_OK;
 }
+
+class WindowsAddressSpaceReporter final : public nsIMemoryReporter
+{
+  ~WindowsAddressSpaceReporter() {}
+
+public:
+  NS_DECL_ISUPPORTS
+
+  NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
+                           nsISupports* aData, bool aAnonymize) override
+  {
+    MEMORY_BASIC_INFORMATION info = { 0 };
+    bool isPrevSegStackGuard = false;
+    for (size_t currentAddress = 0; ; ) {
+      if (!VirtualQuery((LPCVOID)currentAddress, &info, sizeof(info))) {
+        // Something went wrong, just return whatever we've got already.
+        break;
+      }
+
+      size_t size = info.RegionSize;
+
+      // For each range of pages, we consider one or more of its State, Type
+      // and Protect values. These are documented at
+      // https://msdn.microsoft.com/en-us/library/windows/desktop/aa366775%28v=vs.85%29.aspx
+      // (for State and Type) and
+      // https://msdn.microsoft.com/en-us/library/windows/desktop/aa366786%28v=vs.85%29.aspx
+      // (for Protect).
+      //
+      // Not all State values have accompanying Type and Protection values.
+      bool doType = false;
+      bool doProtect = false;
+
+      nsCString path("address-space");
+
+      switch (info.State) {
+        case MEM_FREE:
+          path.AppendLiteral("/free");
+          break;
+
+        case MEM_RESERVE:
+          path.AppendLiteral("/reserved");
+          doType = true;
+          break;
+
+        case MEM_COMMIT:
+          path.AppendLiteral("/commit");
+          doType = true;
+          doProtect = true;
+          break;
+
+        default:
+          // Should be impossible, but handle it just in case.
+          path.AppendLiteral("/???");
+          break;
+      }
+
+      if (doType) {
+        switch (info.Type) {
+          case MEM_IMAGE:
+            path.AppendLiteral("/image");
+            break;
+
+          case MEM_MAPPED:
+            path.AppendLiteral("/mapped");
+            break;
+
+          case MEM_PRIVATE:
+            path.AppendLiteral("/private");
+            break;
+
+          default:
+            // Should be impossible, but handle it just in case.
+            path.AppendLiteral("/???");
+            break;
+        }
+      }
+
+      if (doProtect) {
+        // Basic attributes. Exactly one of these should be set.
+        if (info.Protect & PAGE_EXECUTE) {
+          path.AppendLiteral("/execute");
+        }
+        if (info.Protect & PAGE_EXECUTE_READ) {
+          path.AppendLiteral("/execute-read");
+        }
+        if (info.Protect & PAGE_EXECUTE_READWRITE) {
+          path.AppendLiteral("/execute-readwrite");
+        }
+        if (info.Protect & PAGE_EXECUTE_WRITECOPY) {
+          path.AppendLiteral("/execute-writecopy");
+        }
+        if (info.Protect & PAGE_NOACCESS) {
+          path.AppendLiteral("/noaccess");
+        }
+        if (info.Protect & PAGE_READONLY) {
+          path.AppendLiteral("/readonly");
+        }
+        if (info.Protect & PAGE_READWRITE) {
+          path.AppendLiteral("/readwrite");
+        }
+        if (info.Protect & PAGE_WRITECOPY) {
+          path.AppendLiteral("/writecopy");
+        }
+
+        // Modifiers. At most one of these should be set.
+        if (info.Protect & PAGE_GUARD) {
+          path.AppendLiteral("+guard");
+        }
+        if (info.Protect & PAGE_NOCACHE) {
+          path.AppendLiteral("+nocache");
+        }
+        if (info.Protect & PAGE_WRITECOMBINE) {
+          path.AppendLiteral("+writecombine");
+        }
+
+        // Annotate likely stack segments, too.
+        if (isPrevSegStackGuard &&
+            info.State == MEM_COMMIT &&
+            doType && info.Type == MEM_PRIVATE &&
+            doProtect && info.Protect == PAGE_READWRITE) {
+          path.AppendLiteral(" (stack)");
+        }
+      }
+
+      isPrevSegStackGuard =
+        info.State == MEM_COMMIT &&
+        doType && info.Type == MEM_PRIVATE &&
+        doProtect && info.Protect == (PAGE_READWRITE|PAGE_GUARD);
+
+      nsresult rv;
+      rv = aHandleReport->Callback(
+        EmptyCString(), path, KIND_OTHER, UNITS_BYTES, size,
+        NS_LITERAL_CSTRING("From MEMORY_BASIC_INFORMATION."), aData);
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return rv;
+      }
+
+      size_t lastAddress = currentAddress;
+      currentAddress += size;
+
+      // If we overflow, we've examined all of the address space.
+      if (currentAddress < lastAddress) {
+        break;
+      }
+    }
+
+    return NS_OK;
+  }
+};
+NS_IMPL_ISUPPORTS(WindowsAddressSpaceReporter, nsIMemoryReporter)
+
 #endif  // XP_<PLATFORM>
 
 #ifdef HAVE_VSIZE_MAX_CONTIGUOUS_REPORTER
-class VsizeMaxContiguousReporter MOZ_FINAL : public nsIMemoryReporter
+class VsizeMaxContiguousReporter final : public nsIMemoryReporter
 {
   ~VsizeMaxContiguousReporter() {}
 
@@ -528,7 +706,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                           nsISupports* aData, bool aAnonymize)
+                           nsISupports* aData, bool aAnonymize) override
   {
     int64_t amount;
     nsresult rv = VsizeMaxContiguousDistinguishedAmount(&amount);
@@ -543,7 +721,7 @@ NS_IMPL_ISUPPORTS(VsizeMaxContiguousReporter, nsIMemoryReporter)
 #endif
 
 #ifdef HAVE_PRIVATE_REPORTER
-class PrivateReporter MOZ_FINAL : public nsIMemoryReporter
+class PrivateReporter final : public nsIMemoryReporter
 {
   ~PrivateReporter() {}
 
@@ -551,7 +729,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                           nsISupports* aData, bool aAnonymize)
+                           nsISupports* aData, bool aAnonymize) override
   {
     int64_t amount;
     nsresult rv = PrivateDistinguishedAmount(&amount);
@@ -567,7 +745,7 @@ NS_IMPL_ISUPPORTS(PrivateReporter, nsIMemoryReporter)
 #endif
 
 #ifdef HAVE_VSIZE_AND_RESIDENT_REPORTERS
-class VsizeReporter MOZ_FINAL : public nsIMemoryReporter
+class VsizeReporter final : public nsIMemoryReporter
 {
   ~VsizeReporter() {}
 
@@ -575,7 +753,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                           nsISupports* aData, bool aAnonymize)
+                           nsISupports* aData, bool aAnonymize) override
   {
     int64_t amount;
     nsresult rv = VsizeDistinguishedAmount(&amount);
@@ -594,7 +772,7 @@ public:
 };
 NS_IMPL_ISUPPORTS(VsizeReporter, nsIMemoryReporter)
 
-class ResidentReporter MOZ_FINAL : public nsIMemoryReporter
+class ResidentReporter final : public nsIMemoryReporter
 {
   ~ResidentReporter() {}
 
@@ -602,7 +780,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                           nsISupports* aData, bool aAnonymize)
+                           nsISupports* aData, bool aAnonymize) override
   {
     int64_t amount;
     nsresult rv = ResidentDistinguishedAmount(&amount);
@@ -626,9 +804,56 @@ NS_IMPL_ISUPPORTS(ResidentReporter, nsIMemoryReporter)
 
 #include <sys/resource.h>
 
+#define HAVE_RESIDENT_PEAK_REPORTER 1
+
+static nsresult
+ResidentPeakDistinguishedAmount(int64_t* aN)
+{
+  struct rusage usage;
+  if (0 == getrusage(RUSAGE_SELF, &usage)) {
+    // The units for ru_maxrrs:
+    // - Mac: bytes
+    // - Solaris: pages? But some sources it actually always returns 0, so
+    //   check for that
+    // - Linux, {Net/Open/Free}BSD, DragonFly: KiB
+#ifdef XP_MACOSX
+    *aN = usage.ru_maxrss;
+#elif defined(SOLARIS)
+    *aN = usage.ru_maxrss * getpagesize();
+#else
+    *aN = usage.ru_maxrss * 1024;
+#endif
+    if (*aN > 0) {
+      return NS_OK;
+    }
+  }
+  return NS_ERROR_FAILURE;
+}
+
+class ResidentPeakReporter final : public nsIMemoryReporter
+{
+  ~ResidentPeakReporter() {}
+
+public:
+  NS_DECL_ISUPPORTS
+
+  NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
+                           nsISupports* aData, bool aAnonymize) override
+  {
+    int64_t amount = 0;
+    nsresult rv = ResidentPeakDistinguishedAmount(&amount);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    return MOZ_COLLECT_REPORT(
+      "resident-peak", KIND_OTHER, UNITS_BYTES, amount,
+"The peak 'resident' value for the lifetime of the process.");
+  }
+};
+NS_IMPL_ISUPPORTS(ResidentPeakReporter, nsIMemoryReporter)
+
 #define HAVE_PAGE_FAULT_REPORTERS 1
 
-class PageFaultsSoftReporter MOZ_FINAL : public nsIMemoryReporter
+class PageFaultsSoftReporter final : public nsIMemoryReporter
 {
   ~PageFaultsSoftReporter() {}
 
@@ -636,7 +861,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                           nsISupports* aData, bool aAnonymize)
+                           nsISupports* aData, bool aAnonymize) override
   {
     struct rusage usage;
     int err = getrusage(RUSAGE_SELF, &usage);
@@ -672,7 +897,7 @@ PageFaultsHardDistinguishedAmount(int64_t* aAmount)
   return NS_OK;
 }
 
-class PageFaultsHardReporter MOZ_FINAL : public nsIMemoryReporter
+class PageFaultsHardReporter final : public nsIMemoryReporter
 {
   ~PageFaultsHardReporter() {}
 
@@ -680,7 +905,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                           nsISupports* aData, bool aAnonymize)
+                           nsISupports* aData, bool aAnonymize) override
   {
     int64_t amount = 0;
     nsresult rv = PageFaultsHardDistinguishedAmount(&amount);
@@ -702,7 +927,7 @@ public:
 };
 NS_IMPL_ISUPPORTS(PageFaultsHardReporter, nsIMemoryReporter)
 
-#endif  // HAVE_PAGE_FAULT_REPORTERS
+#endif  // XP_UNIX
 
 /**
  ** memory reporter implementation for jemalloc and OSX malloc,
@@ -721,7 +946,7 @@ HeapOverheadRatio(jemalloc_stats_t* aStats)
     ((double)aStats->allocated);
 }
 
-class JemallocHeapReporter MOZ_FINAL : public nsIMemoryReporter
+class JemallocHeapReporter final : public nsIMemoryReporter
 {
   ~JemallocHeapReporter() {}
 
@@ -729,7 +954,7 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                           nsISupports* aData, bool aAnonymize)
+                           nsISupports* aData, bool aAnonymize) override
   {
     jemalloc_stats_t stats;
     jemalloc_stats(&stats);
@@ -825,7 +1050,7 @@ NS_IMPL_ISUPPORTS(JemallocHeapReporter, nsIMemoryReporter)
 // However, the obvious time to register it is when the table is initialized,
 // and that happens before XPCOM components are initialized, which means the
 // RegisterStrongMemoryReporter call fails.  So instead we do it here.
-class AtomTablesReporter MOZ_FINAL : public nsIMemoryReporter
+class AtomTablesReporter final : public nsIMemoryReporter
 {
   MOZ_DEFINE_MALLOC_SIZE_OF(MallocSizeOf)
 
@@ -835,28 +1060,67 @@ public:
   NS_DECL_ISUPPORTS
 
   NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                           nsISupports* aData, bool aAnonymize)
+                           nsISupports* aData, bool aAnonymize) override
   {
-    return MOZ_COLLECT_REPORT(
-      "explicit/atom-tables", KIND_HEAP, UNITS_BYTES,
-      NS_SizeOfAtomTablesIncludingThis(MallocSizeOf),
-      "Memory used by the dynamic and static atoms tables.");
+    size_t Main, Static;
+    NS_SizeOfAtomTablesIncludingThis(MallocSizeOf, &Main, &Static);
+
+    nsresult rv;
+    rv = MOZ_COLLECT_REPORT(
+      "explicit/atom-tables/main", KIND_HEAP, UNITS_BYTES, Main,
+      "Memory used by the main atoms table.");
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = MOZ_COLLECT_REPORT(
+      "explicit/atom-tables/static", KIND_HEAP, UNITS_BYTES, Static,
+      "Memory used by the static atoms table.");
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    return NS_OK;
   }
 };
 NS_IMPL_ISUPPORTS(AtomTablesReporter, nsIMemoryReporter)
+
+#ifdef DEBUG
+
+// Ideally, this would be implemented in BlockingResourceBase.cpp.
+// However, this ends up breaking the linking step of various unit tests due
+// to adding a new dependency to libdmd for a commonly used feature (mutexes)
+// in  DMD  builds. So instead we do it here.
+class DeadlockDetectorReporter final : public nsIMemoryReporter
+{
+  MOZ_DEFINE_MALLOC_SIZE_OF(MallocSizeOf)
+
+  ~DeadlockDetectorReporter() {}
+
+public:
+  NS_DECL_ISUPPORTS
+
+  NS_METHOD CollectReports(nsIHandleReportCallback* aHandleReport,
+                           nsISupports* aData, bool aAnonymize) override
+  {
+    return MOZ_COLLECT_REPORT(
+      "explicit/deadlock-detector", KIND_HEAP, UNITS_BYTES,
+      BlockingResourceBase::SizeOfDeadlockDetector(MallocSizeOf),
+      "Memory used by the deadlock detector.");
+  }
+};
+NS_IMPL_ISUPPORTS(DeadlockDetectorReporter, nsIMemoryReporter)
+
+#endif
 
 #ifdef MOZ_DMD
 
 namespace mozilla {
 namespace dmd {
 
-class DMDReporter MOZ_FINAL : public nsIMemoryReporter
+class DMDReporter final : public nsIMemoryReporter
 {
 public:
   NS_DECL_ISUPPORTS
 
   NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
-                            nsISupports* aData, bool aAnonymize)
+                            nsISupports* aData, bool aAnonymize) override
   {
     dmd::Sizes sizes;
     dmd::SizeOf(&sizes);
@@ -886,9 +1150,13 @@ public:
            sizes.mStackTraceTable,
            "Memory used by DMD's stack trace table.");
 
-    REPORT("explicit/dmd/block-table",
-           sizes.mBlockTable,
+    REPORT("explicit/dmd/live-block-table",
+           sizes.mLiveBlockTable,
            "Memory used by DMD's live block table.");
+
+    REPORT("explicit/dmd/dead-block-list",
+           sizes.mDeadBlockTable,
+           "Memory used by DMD's dead block list.");
 
 #undef REPORT
 
@@ -914,7 +1182,7 @@ NS_IMPL_ISUPPORTS(nsMemoryReporterManager, nsIMemoryReporterManager)
 NS_IMETHODIMP
 nsMemoryReporterManager::Init()
 {
-#if defined(HAVE_JEMALLOC_STATS) && defined(XP_LINUX)
+#if defined(HAVE_JEMALLOC_STATS) && defined(MOZ_GLUE_IN_PROGRAM)
   if (!jemalloc_stats) {
     return NS_ERROR_FAILURE;
   }
@@ -933,6 +1201,10 @@ nsMemoryReporterManager::Init()
   RegisterStrongReporter(new VsizeMaxContiguousReporter());
 #endif
 
+#ifdef HAVE_RESIDENT_PEAK_REPORTER
+  RegisterStrongReporter(new ResidentPeakReporter());
+#endif
+
 #ifdef HAVE_RESIDENT_UNIQUE_REPORTER
   RegisterStrongReporter(new ResidentUniqueReporter());
 #endif
@@ -948,8 +1220,16 @@ nsMemoryReporterManager::Init()
 
   RegisterStrongReporter(new AtomTablesReporter());
 
+#ifdef DEBUG
+  RegisterStrongReporter(new DeadlockDetectorReporter());
+#endif
+
 #ifdef MOZ_DMD
   RegisterStrongReporter(new mozilla::dmd::DMDReporter());
+#endif
+
+#ifdef XP_WIN
+  RegisterStrongReporter(new WindowsAddressSpaceReporter());
 #endif
 
 #ifdef XP_UNIX
@@ -1024,7 +1304,7 @@ nsMemoryReporterManager::GetReports(
                             aFinishReporting, aFinishReportingData,
                             aAnonymize,
                             /* minimize = */ false,
-                            /* DMDident = */ nsString());
+                            /* DMDident = */ EmptyString());
 }
 
 NS_IMETHODIMP
@@ -1062,8 +1342,7 @@ nsMemoryReporterManager::GetReportsExtended(
     // Request memory reports from child processes.  We do this *before*
     // collecting reports for this process so each process can collect
     // reports in parallel.
-    nsCOMPtr<nsIObserverService> obs =
-      do_GetService("@mozilla.org/observer-service;1");
+    nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
     NS_ENSURE_STATE(obs);
 
     nsPrintfCString genStr("generation=%x anonymize=%d minimize=%d DMDident=",
@@ -1103,7 +1382,8 @@ nsMemoryReporterManager::GetReportsExtended(
   }
 
   if (aMinimize) {
-    rv = MinimizeMemoryUsage(NS_NewRunnableMethod(this, &nsMemoryReporterManager::StartGettingReports));
+    rv = MinimizeMemoryUsage(NS_NewRunnableMethod(
+      this, &nsMemoryReporterManager::StartGettingReports));
   } else {
     rv = StartGettingReports();
   }
@@ -1116,13 +1396,15 @@ nsMemoryReporterManager::StartGettingReports()
   GetReportsState* s = mGetReportsState;
 
   // Get reports for this process.
-  FILE *parentDMDFile = nullptr;
+  FILE* parentDMDFile = nullptr;
 #ifdef MOZ_DMD
-  nsresult rv = nsMemoryInfoDumper::OpenDMDFile(s->mDMDDumpIdent, getpid(),
-                                                &parentDMDFile);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    // Proceed with the memory report as if DMD were disabled.
-    parentDMDFile = nullptr;
+  if (!s->mDMDDumpIdent.IsEmpty()) {
+    nsresult rv = nsMemoryInfoDumper::OpenDMDFile(s->mDMDDumpIdent, getpid(),
+                                                  &parentDMDFile);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      // Proceed with the memory report as if DMD were disabled.
+      parentDMDFile = nullptr;
+    }
   }
 #endif
   GetReportsForThisProcessExtended(s->mHandleReport, s->mHandleReportData,
@@ -1130,9 +1412,8 @@ nsMemoryReporterManager::StartGettingReports()
   s->mParentDone = true;
 
   // If there are no remaining child processes, we can finish up immediately.
-  return (s->mNumChildProcessesCompleted >= s->mNumChildProcesses)
-    ? FinishReporting()
-    : NS_OK;
+  return (s->mNumChildProcessesCompleted >= s->mNumChildProcesses) ?
+    FinishReporting() : NS_OK;
 }
 
 typedef nsCOMArray<nsIMemoryReporter> MemoryReporterArray;
@@ -1415,6 +1696,15 @@ nsMemoryReporterManager::UnregisterStrongReporter(nsIMemoryReporter* aReporter)
     return NS_OK;
   }
 
+  // We don't register new reporters when the block is in place, but we do
+  // unregister existing reporters. This is so we don't keep holding strong
+  // references that these reporters aren't expecting (which can keep them
+  // alive longer than intended).
+  if (mSavedStrongReporters && mSavedStrongReporters->Contains(aReporter)) {
+    mSavedStrongReporters->RemoveEntry(aReporter);
+    return NS_OK;
+  }
+
   return NS_ERROR_FAILURE;
 }
 
@@ -1428,6 +1718,15 @@ nsMemoryReporterManager::UnregisterWeakReporter(nsIMemoryReporter* aReporter)
 
   if (mWeakReporters->Contains(aReporter)) {
     mWeakReporters->RemoveEntry(aReporter);
+    return NS_OK;
+  }
+
+  // We don't register new reporters when the block is in place, but we do
+  // unregister existing reporters. This is so we don't keep holding weak
+  // references that the old reporters aren't expecting (which can end up as
+  // dangling pointers that lead to use-after-frees).
+  if (mSavedWeakReporters && mSavedWeakReporters->Contains(aReporter)) {
+    mSavedWeakReporters->RemoveEntry(aReporter);
     return NS_OK;
   }
 
@@ -1478,7 +1777,7 @@ nsMemoryReporterManager::UnblockRegistrationAndRestoreOriginalReporters()
 
 // This is just a wrapper for int64_t that implements nsISupports, so it can be
 // passed to nsIMemoryReporter::CollectReports.
-class Int64Wrapper MOZ_FINAL : public nsISupports
+class Int64Wrapper final : public nsISupports
 {
   ~Int64Wrapper() {}
 
@@ -1492,7 +1791,7 @@ public:
 
 NS_IMPL_ISUPPORTS0(Int64Wrapper)
 
-class ExplicitCallback MOZ_FINAL : public nsIHandleReportCallback
+class ExplicitCallback final : public nsIHandleReportCallback
 {
   ~ExplicitCallback() {}
 
@@ -1502,7 +1801,7 @@ public:
   NS_IMETHOD Callback(const nsACString& aProcess, const nsACString& aPath,
                       int32_t aKind, int32_t aUnits, int64_t aAmount,
                       const nsACString& aDescription,
-                      nsISupports* aWrappedExplicit)
+                      nsISupports* aWrappedExplicit) override
   {
     // Using the "heap-allocated" reporter here instead of
     // nsMemoryReporterManager.heapAllocated goes against the usual
@@ -1604,6 +1903,30 @@ nsMemoryReporterManager::ResidentFast()
 #ifdef HAVE_VSIZE_AND_RESIDENT_REPORTERS
   int64_t amount;
   nsresult rv = ResidentFastDistinguishedAmount(&amount);
+  NS_ENSURE_SUCCESS(rv, 0);
+  return amount;
+#else
+  return 0;
+#endif
+}
+
+NS_IMETHODIMP
+nsMemoryReporterManager::GetResidentPeak(int64_t* aAmount)
+{
+#ifdef HAVE_RESIDENT_PEAK_REPORTER
+  return ResidentPeakDistinguishedAmount(aAmount);
+#else
+  *aAmount = 0;
+  return NS_ERROR_NOT_AVAILABLE;
+#endif
+}
+
+/*static*/ int64_t
+nsMemoryReporterManager::ResidentPeak()
+{
+#ifdef HAVE_RESIDENT_PEAK_REPORTER
+  int64_t amount = 0;
+  nsresult rv = ResidentPeakDistinguishedAmount(&amount);
   NS_ENSURE_SUCCESS(rv, 0);
   return amount;
 #else
@@ -1791,7 +2114,7 @@ namespace {
 class MinimizeMemoryUsageRunnable : public nsRunnable
 {
 public:
-  MinimizeMemoryUsageRunnable(nsIRunnable* aCallback)
+  explicit MinimizeMemoryUsageRunnable(nsIRunnable* aCallback)
     : mCallback(aCallback)
     , mRemainingIters(sNumIters)
   {
@@ -2003,7 +2326,7 @@ DEFINE_REGISTER_SIZE_OF_TAB(NonJS);
 namespace mozilla {
 namespace dmd {
 
-class DoNothingCallback MOZ_FINAL : public nsIHandleReportCallback
+class DoNothingCallback final : public nsIHandleReportCallback
 {
 public:
   NS_DECL_ISUPPORTS

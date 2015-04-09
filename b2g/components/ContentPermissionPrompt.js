@@ -35,9 +35,9 @@ var secMan = Cc["@mozilla.org/scriptsecuritymanager;1"].getService(Ci.nsIScriptS
 let permissionSpecificChecker = {};
 
 XPCOMUtils.defineLazyServiceGetter(this,
-                                   "AudioManager",
-                                   "@mozilla.org/telephony/audiomanager;1",
-                                   "nsIAudioManager");
+                                   "TelephonyService",
+                                   "@mozilla.org/telephony/telephonyservice;1",
+                                   "nsITelephonyService");
 
 XPCOMUtils.defineLazyModuleGetter(this, "SystemAppProxy",
                                   "resource://gre/modules/SystemAppProxy.jsm");
@@ -237,7 +237,6 @@ ContentPermissionPrompt.prototype = {
     return false;
   },
 
-  _id: 0,
   prompt: function(request) {
     // Initialize the typesInfo and set the default value.
     let typesInfo = [];
@@ -294,10 +293,9 @@ ContentPermissionPrompt.prototype = {
     });
 
     let frame = request.element;
-    let requestId = this._id++;
 
     if (!frame) {
-      this.delegatePrompt(request, requestId, typesInfo);
+      this.delegatePrompt(request, typesInfo);
       return;
     }
 
@@ -312,7 +310,7 @@ ContentPermissionPrompt.prototype = {
       if (evt.detail.visible === true)
         return;
 
-      self.cancelPrompt(request, requestId, typesInfo);
+      self.cancelPrompt(request, typesInfo);
       cancelRequest();
     }
 
@@ -329,7 +327,7 @@ ContentPermissionPrompt.prototype = {
       // away but the request is still here.
       frame.addEventListener("mozbrowservisibilitychange", onVisibilityChange);
 
-      self.delegatePrompt(request, requestId, typesInfo, function onCallback() {
+      self.delegatePrompt(request, typesInfo, function onCallback() {
         frame.removeEventListener("mozbrowservisibilitychange", onVisibilityChange);
       });
     };
@@ -340,14 +338,13 @@ ContentPermissionPrompt.prototype = {
     }
   },
 
-  cancelPrompt: function(request, requestId, typesInfo) {
-    this.sendToBrowserWindow("cancel-permission-prompt", request, requestId,
+  cancelPrompt: function(request, typesInfo) {
+    this.sendToBrowserWindow("cancel-permission-prompt", request,
                              typesInfo);
   },
 
-  delegatePrompt: function(request, requestId, typesInfo, callback) {
-
-    this.sendToBrowserWindow("permission-prompt", request, requestId, typesInfo,
+  delegatePrompt: function(request, typesInfo, callback) {
+    this.sendToBrowserWindow("permission-prompt", request, typesInfo,
                              function(type, remember, choices) {
       if (type == "permission-allow") {
         rememberPermission(typesInfo, request.principal, !remember);
@@ -371,16 +368,26 @@ ContentPermissionPrompt.prototype = {
                                           0);
         }
       }
-      typesInfo.forEach(addDenyPermission);
+      try {
+        // This will trow if we are canceling because the remote process died.
+        // Just eat the exception and call the callback that will cleanup the
+        // visibility event listener.
+        typesInfo.forEach(addDenyPermission);
+      } catch(e) { }
 
       if (callback) {
         callback();
       }
-      request.cancel();
+
+      try {
+        request.cancel();
+      } catch(e) { }
     });
   },
 
-  sendToBrowserWindow: function(type, request, requestId, typesInfo, callback) {
+  sendToBrowserWindow: function(type, request, typesInfo, callback) {
+    let requestId = Cc["@mozilla.org/uuid-generator;1"]
+                  .getService(Ci.nsIUUIDGenerator).generateUUID().toString();
     if (callback) {
       SystemAppProxy.addEventListener("mozContentEvent", function contentEvent(evt) {
         let detail = evt.detail;
@@ -448,12 +455,29 @@ ContentPermissionPrompt.prototype = {
 (function() {
   // Do not allow GetUserMedia while in call.
   permissionSpecificChecker["audio-capture"] = function(request) {
-    if (AudioManager.phoneState === Ci.nsIAudioManager.PHONE_STATE_IN_CALL) {
-      request.cancel();
-      return true;
-    } else {
+    let forbid = false;
+
+    try {
+      // nsITelephonyService.enumerateCalls is synchronous.
+      TelephonyService.enumerateCalls({
+        QueryInterface: XPCOMUtils.generateQI([Ci.nsITelephonyListener]),
+        enumerateCallStateComplete: function() {},
+        enumerateCallState: function(callInfo) {
+          if (callInfo.callState == Ci.nsITelephonyService.CALL_STATE_CONNECTED) {
+            forbid = true;
+          }
+        },
+      });
+    } catch (e) {
+      // No restriction if Telephony service doesn't exist.
       return false;
     }
+
+    if (forbid) {
+      request.cancel();
+    }
+
+    return forbid;
   };
 })();
 

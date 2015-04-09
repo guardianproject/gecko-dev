@@ -44,7 +44,6 @@ BluetoothClassOfDevice::BluetoothClassOfDevice(nsPIDOMWindow* aOwner)
   : mOwnerWindow(aOwner)
 {
   MOZ_ASSERT(aOwner);
-  SetIsDOMBinding();
 
   Reset();
 }
@@ -82,9 +81,6 @@ BluetoothClassOfDevice::Update(const uint32_t aValue)
   mMajorServiceClass = GET_MAJOR_SERVICE_CLASS(aValue);
   mMajorDeviceClass = GET_MAJOR_DEVICE_CLASS(aValue);
   mMinorDeviceClass = GET_MINOR_DEVICE_CLASS(aValue);
-
-  BT_API2_LOGR("aValue %x => majorService %x majorDevice %x minorDevice %x",
-  	aValue, mMajorServiceClass, mMajorDeviceClass, mMinorDeviceClass);
 }
 
 // static
@@ -99,7 +95,8 @@ BluetoothClassOfDevice::Create(nsPIDOMWindow* aOwner)
 }
 
 JSObject*
-BluetoothClassOfDevice::WrapObject(JSContext* aCx)
+BluetoothClassOfDevice::WrapObject(JSContext* aCx,
+                                   JS::Handle<JSObject*> aGivenProto)
 {
-  return BluetoothClassOfDeviceBinding::Wrap(aCx, this);
+  return BluetoothClassOfDeviceBinding::Wrap(aCx, this, aGivenProto);
 }

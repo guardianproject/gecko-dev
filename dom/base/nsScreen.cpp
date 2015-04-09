@@ -305,6 +305,19 @@ void
 nsScreen::MozUnlockOrientation()
 {
   hal::UnlockScreenOrientation();
+
+  if (!mEventListener) {
+    return;
+  }
+
+  // Remove event listener in case of fullscreen lock.
+  nsCOMPtr<EventTarget> target = do_QueryInterface(GetOwner()->GetDoc());
+  if (target) {
+    target->RemoveSystemEventListener(NS_LITERAL_STRING("mozfullscreenchange"),
+                                      mEventListener, /* useCapture */ true);
+  }
+
+  mEventListener = nullptr;
 }
 
 bool
@@ -322,9 +335,9 @@ nsScreen::IsDeviceSizePageSize()
 
 /* virtual */
 JSObject*
-nsScreen::WrapObject(JSContext* aCx)
+nsScreen::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return ScreenBinding::Wrap(aCx, this);
+  return ScreenBinding::Wrap(aCx, this, aGivenProto);
 }
 
 NS_IMPL_ISUPPORTS(nsScreen::FullScreenEventListener, nsIDOMEventListener)

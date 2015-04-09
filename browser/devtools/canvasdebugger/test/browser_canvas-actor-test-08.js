@@ -7,7 +7,7 @@
  */
 
 function ifTestingSupported() {
-  let [target, debuggee, front] = yield initCanavsDebuggerBackend(SIMPLE_BITMASKS_URL);
+  let { target, front } = yield initCanvasDebuggerBackend(SIMPLE_BITMASKS_URL);
 
   let navigated = once(target, "navigate");
 
@@ -18,9 +18,7 @@ function ifTestingSupported() {
   ok(true, "Target automatically navigated when the front was set up.");
 
   let snapshotActor = yield front.recordAnimationFrame();
-
   let animationOverview = yield snapshotActor.getOverview();
-
   let functionCalls = animationOverview.calls;
 
   is(functionCalls[0].name, "clearRect",

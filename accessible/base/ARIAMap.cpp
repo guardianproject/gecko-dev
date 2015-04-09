@@ -15,6 +15,8 @@
 #include "nsAttrName.h"
 #include "nsWhitespaceTokenizer.h"
 
+#include "mozilla/BinarySearch.h"
+
 using namespace mozilla;
 using namespace mozilla::a11y;
 using namespace mozilla::a11y::aria;
@@ -28,12 +30,8 @@ static const uint32_t kGenericAccType = 0;
  *
  *  Definition of nsRoleMapEntry contains comments explaining this table.
  *
- *  When no nsIAccessibleRole enum mapping exists for an ARIA role, the
- *  role will be exposed via the object attribute "xml-roles".
- *  In addition, in MSAA, the unmapped role will also be exposed as a BSTR string role.
- *
- *  There are no nsIAccessibleRole enums for the following landmark roles:
- *    banner, contentinfo, main, navigation, note, search, secondary, seealso, breadcrumbs
+ *  When no Role enum mapping exists for an ARIA role, the role will be exposed
+ *  via the object attribute "xml-roles".
  */
 
 static nsRoleMapEntry sWAIRoleMaps[] =
@@ -65,7 +63,7 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoValue,
     eNoAction,
     eNoLiveAttr,
-    kGenericAccType,
+    eLandmark,
     kNoReqStates
   },
   { // article
@@ -78,6 +76,16 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     kGenericAccType,
     kNoReqStates,
     eReadonlyUntilEditable
+  },
+  { // banner
+    &nsGkAtoms::banner,
+    roles::NOTHING,
+    kUseNativeRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    eLandmark,
+    kNoReqStates
   },
   { // button
     &nsGkAtoms::button,
@@ -122,9 +130,30 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eOpenCloseAction,
     eNoLiveAttr,
     kGenericAccType,
-    states::COLLAPSED | states::HASPOPUP,
+    states::COLLAPSED | states::HASPOPUP | states::VERTICAL,
     eARIAAutoComplete,
-    eARIAReadonly
+    eARIAReadonly,
+    eARIAOrientation
+  },
+  { // complementary
+    &nsGkAtoms::complementary,
+    roles::NOTHING,
+    kUseNativeRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    eLandmark,
+    kNoReqStates
+  },
+  { // contentinfo
+    &nsGkAtoms::contentinfo,
+    roles::NOTHING,
+    kUseNativeRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    eLandmark,
+    kNoReqStates
   },
   { // dialog
     &nsGkAtoms::dialog,
@@ -164,7 +193,7 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoValue,
     eNoAction,
     eNoLiveAttr,
-    kGenericAccType,
+    eLandmark,
     kNoReqStates
   },
   { // grid
@@ -261,10 +290,11 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     eNoLiveAttr,
     eListControl | eSelect,
-    kNoReqStates,
+    states::VERTICAL,
     eARIAMultiSelectable,
     eARIAReadonly,
-    eFocusableUntilDisabled
+    eFocusableUntilDisabled,
+    eARIAOrientation
   },
   { // listitem
     &nsGkAtoms::listitem,
@@ -284,6 +314,16 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     ePoliteLiveAttr,
     kGenericAccType,
+    kNoReqStates
+  },
+  { // main
+    &nsGkAtoms::main,
+    roles::NOTHING,
+    kUseNativeRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    eLandmark,
     kNoReqStates
   },
   { // marquee
@@ -315,7 +355,8 @@ static nsRoleMapEntry sWAIRoleMaps[] =
                // any action, but menu can be open or close.
     eNoLiveAttr,
     kGenericAccType,
-    kNoReqStates
+    states::VERTICAL,
+    eARIAOrientation
   },
   { // menubar
     &nsGkAtoms::menubar,
@@ -325,7 +366,8 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     eNoLiveAttr,
     kGenericAccType,
-    kNoReqStates
+    states::HORIZONTAL,
+    eARIAOrientation
   },
   { // menuitem
     &nsGkAtoms::menuitem,
@@ -359,6 +401,26 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     kGenericAccType,
     kNoReqStates,
     eARIACheckableBool
+  },
+  { // navigation
+    &nsGkAtoms::navigation,
+    roles::NOTHING,
+    kUseNativeRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    eLandmark,
+    kNoReqStates
+  },
+  { // none
+    &nsGkAtoms::none,
+    roles::NOTHING,
+    kUseMapRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    kGenericAccType,
+    kNoReqStates
   },
   { // note
     &nsGkAtoms::note_,
@@ -416,13 +478,14 @@ static nsRoleMapEntry sWAIRoleMaps[] =
   },
   { // radiogroup
     &nsGkAtoms::radiogroup,
-    roles::GROUPING,
+    roles::RADIO_GROUP,
     kUseMapRole,
     eNoValue,
     eNoAction,
     eNoLiveAttr,
     kGenericAccType,
-    kNoReqStates
+    kNoReqStates,
+    eARIAOrientation
   },
   { // region
     &nsGkAtoms::region,
@@ -475,9 +538,32 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     eNoLiveAttr,
     kGenericAccType,
-    kNoReqStates,
+    states::VERTICAL,
     eARIAOrientation,
     eARIAReadonly
+  },
+  { // search
+    &nsGkAtoms::search,
+    roles::NOTHING,
+    kUseNativeRole,
+    eNoValue,
+    eNoAction,
+    eNoLiveAttr,
+    eLandmark,
+    kNoReqStates
+  },
+  { // searchbox
+    &nsGkAtoms::searchbox,
+    roles::ENTRY,
+    kUseMapRole,
+    eNoValue,
+    eActivateAction,
+    eNoLiveAttr,
+    kGenericAccType,
+    kNoReqStates,
+    eARIAAutoComplete,
+    eARIAMultiline,
+    eARIAReadonlyOrEditable
   },
   { // separator
     &nsGkAtoms::separator_,
@@ -487,7 +573,7 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     eNoLiveAttr,
     kGenericAccType,
-    kNoReqStates,
+    states::HORIZONTAL,
     eARIAOrientation
   },
   { // slider
@@ -498,7 +584,7 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     eNoLiveAttr,
     kGenericAccType,
-    kNoReqStates,
+    states::HORIZONTAL,
     eARIAOrientation,
     eARIAReadonly
   },
@@ -523,6 +609,17 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     kGenericAccType,
     kNoReqStates
   },
+  { // switch
+    &nsGkAtoms::_switch,
+    roles::SWITCH,
+    kUseMapRole,
+    eNoValue,
+    eCheckUncheckAction,
+    eNoLiveAttr,
+    kGenericAccType,
+    kNoReqStates,
+    eARIACheckableBool
+  },
   { // tab
     &nsGkAtoms::tab,
     roles::PAGETAB,
@@ -542,7 +639,8 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     eNoLiveAttr,
     eSelect,
-    kNoReqStates
+    states::HORIZONTAL,
+    eARIAOrientation
   },
   { // tabpanel
     &nsGkAtoms::tabpanel,
@@ -584,7 +682,8 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     eNoLiveAttr,
     kGenericAccType,
-    kNoReqStates
+    states::HORIZONTAL,
+    eARIAOrientation
   },
   { // tooltip
     &nsGkAtoms::tooltip,
@@ -604,10 +703,11 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     eNoLiveAttr,
     eSelect,
-    kNoReqStates,
+    states::VERTICAL,
     eARIAReadonly,
     eARIAMultiSelectable,
-    eFocusableUntilDisabled
+    eFocusableUntilDisabled,
+    eARIAOrientation
   },
   { // treegrid
     &nsGkAtoms::treegrid,
@@ -617,10 +717,11 @@ static nsRoleMapEntry sWAIRoleMaps[] =
     eNoAction,
     eNoLiveAttr,
     eSelect | eTable,
-    kNoReqStates,
+    states::VERTICAL,
     eARIAReadonlyOrEditable,
     eARIAMultiSelectable,
-    eFocusableUntilDisabled
+    eFocusableUntilDisabled,
+    eARIAOrientation
   },
   { // treeitem
     &nsGkAtoms::treeitem,
@@ -670,6 +771,7 @@ static const EStateRule sWAIUnivStateMap[] = {
   eARIAExpanded,  // Currently under spec review but precedent exists
   eARIAHasPopup,  // Note this is technically a "property"
   eARIAInvalid,
+  eARIAModal,
   eARIARequired,  // XXX not global, Bug 553117
   eARIANone
 };
@@ -699,12 +801,13 @@ static const AttrCharacteristics gWAIUnivAttrMap[] = {
   {&nsGkAtoms::aria_flowto,            ATTR_BYPASSOBJ                 | ATTR_GLOBAL },
   {&nsGkAtoms::aria_grabbed,                            ATTR_VALTOKEN | ATTR_GLOBAL },
   {&nsGkAtoms::aria_haspopup,          ATTR_BYPASSOBJ | ATTR_VALTOKEN | ATTR_GLOBAL },
-  {&nsGkAtoms::aria_hidden,   ATTR_BYPASSOBJ_IF_FALSE | ATTR_VALTOKEN | ATTR_GLOBAL },
+  {&nsGkAtoms::aria_hidden,            ATTR_BYPASSOBJ | ATTR_VALTOKEN | ATTR_GLOBAL }, /* handled special way */
   {&nsGkAtoms::aria_invalid,           ATTR_BYPASSOBJ | ATTR_VALTOKEN | ATTR_GLOBAL },
   {&nsGkAtoms::aria_label,             ATTR_BYPASSOBJ                 | ATTR_GLOBAL },
   {&nsGkAtoms::aria_labelledby,        ATTR_BYPASSOBJ                 | ATTR_GLOBAL },
   {&nsGkAtoms::aria_level,             ATTR_BYPASSOBJ                               }, /* handled via groupPosition */
   {&nsGkAtoms::aria_live,                               ATTR_VALTOKEN | ATTR_GLOBAL },
+  {&nsGkAtoms::aria_modal,             ATTR_BYPASSOBJ | ATTR_VALTOKEN | ATTR_GLOBAL },
   {&nsGkAtoms::aria_multiline,         ATTR_BYPASSOBJ | ATTR_VALTOKEN               },
   {&nsGkAtoms::aria_multiselectable,   ATTR_BYPASSOBJ | ATTR_VALTOKEN               },
   {&nsGkAtoms::aria_owns,              ATTR_BYPASSOBJ                 | ATTR_GLOBAL },
@@ -723,6 +826,19 @@ static const AttrCharacteristics gWAIUnivAttrMap[] = {
   {&nsGkAtoms::aria_valuetext,         ATTR_BYPASSOBJ                               }
 };
 
+namespace {
+
+struct RoleComparator
+{
+  const nsDependentSubstring& mRole;
+  explicit RoleComparator(const nsDependentSubstring& aRole) : mRole(aRole) {}
+  int operator()(const nsRoleMapEntry& aEntry) const {
+    return Compare(mRole, aEntry.ARIARoleString());
+  }
+};
+
+}
+
 nsRoleMapEntry*
 aria::GetRoleMap(nsINode* aNode)
 {
@@ -739,18 +855,10 @@ aria::GetRoleMap(nsINode* aNode)
   while (tokenizer.hasMoreTokens()) {
     // Do a binary search through table for the next role in role list
     const nsDependentSubstring role = tokenizer.nextToken();
-    uint32_t low = 0;
-    uint32_t high = ArrayLength(sWAIRoleMaps);
-    while (low < high) {
-      uint32_t idx = (low + high) / 2;
-      int32_t compare = Compare(role, sWAIRoleMaps[idx].ARIARoleString());
-      if (compare == 0)
-        return sWAIRoleMaps + idx;
-
-      if (compare < 0)
-        high = idx;
-      else
-        low = idx + 1;
+    size_t idx;
+    if (BinarySearchIf(sWAIRoleMaps, 0, ArrayLength(sWAIRoleMaps),
+                       RoleComparator(role), &idx)) {
+      return sWAIRoleMaps + idx;
     }
   }
 
@@ -778,6 +886,15 @@ aria::AttrCharacteristicsFor(nsIAtom* aAtom)
       return gWAIUnivAttrMap[i].characteristics;
 
   return 0;
+}
+
+bool
+aria::HasDefinedARIAHidden(nsIContent* aContent)
+{
+  return aContent &&
+    nsAccUtils::HasDefinedARIAToken(aContent, nsGkAtoms::aria_hidden) &&
+    !aContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::aria_hidden,
+                           nsGkAtoms::_false, eCaseMatters);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

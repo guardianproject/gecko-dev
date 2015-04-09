@@ -23,6 +23,8 @@ namespace a11y {
 class HTMLTableAccessibleWrap : public HTMLTableAccessible,
                                 public ia2AccessibleTable
 {
+  ~HTMLTableAccessibleWrap() {}
+
 public:
   HTMLTableAccessibleWrap(nsIContent* aContent, DocAccessible* aDoc) :
     HTMLTableAccessible(aContent, aDoc), ia2AccessibleTable(this)  {}
@@ -33,7 +35,7 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual void Shutdown() MOZ_OVERRIDE;
+  virtual void Shutdown() override;
 };
 
 
@@ -44,6 +46,8 @@ public:
 class HTMLTableCellAccessibleWrap : public HTMLTableCellAccessible,
                                     public ia2AccessibleTableCell
 {
+  ~HTMLTableCellAccessibleWrap() {}
+
 public:
   HTMLTableCellAccessibleWrap(nsIContent* aContent, DocAccessible* aDoc) :
     HTMLTableCellAccessible(aContent, aDoc), ia2AccessibleTableCell(this) {}
@@ -54,7 +58,7 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual void Shutdown() MOZ_OVERRIDE;
+  virtual void Shutdown() override;
 };
 
 
@@ -65,6 +69,8 @@ public:
 class HTMLTableHeaderCellAccessibleWrap : public HTMLTableHeaderCellAccessible,
                                           public ia2AccessibleTableCell
 {
+  ~HTMLTableHeaderCellAccessibleWrap() {}
+
 public:
   HTMLTableHeaderCellAccessibleWrap(nsIContent* aContent,
                                     DocAccessible* aDoc) :
@@ -77,7 +83,7 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual void Shutdown() MOZ_OVERRIDE;
+  virtual void Shutdown() override;
 };
 
 } // namespace a11y

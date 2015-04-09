@@ -23,8 +23,9 @@ NS_IMPL_ADDREF_INHERITED(PerformanceResourceTiming, PerformanceEntry)
 NS_IMPL_RELEASE_INHERITED(PerformanceResourceTiming, PerformanceEntry)
 
 PerformanceResourceTiming::PerformanceResourceTiming(nsPerformanceTiming* aPerformanceTiming,
-                                                     nsPerformance* aPerformance)
-: PerformanceEntry(aPerformance),
+                                                     nsPerformance* aPerformance,
+                                                     const nsAString& aName)
+: PerformanceEntry(aPerformance, aName, NS_LITERAL_STRING("resource")),
   mTiming(aPerformanceTiming)
 {
   MOZ_ASSERT(aPerformance, "Parent performance object should be provided");
@@ -42,7 +43,7 @@ PerformanceResourceTiming::StartTime() const
 }
 
 JSObject*
-PerformanceResourceTiming::WrapObject(JSContext* aCx)
+PerformanceResourceTiming::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return PerformanceResourceTimingBinding::Wrap(aCx, this);
+  return PerformanceResourceTimingBinding::Wrap(aCx, this, aGivenProto);
 }

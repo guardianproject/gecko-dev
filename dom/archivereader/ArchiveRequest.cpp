@@ -23,12 +23,13 @@ class ArchiveRequestEvent : public nsRunnable
 public:
   NS_DECL_NSIRUNNABLE
 
-  ArchiveRequestEvent(ArchiveRequest* request)
-  : mRequest(request)
+  explicit ArchiveRequestEvent(ArchiveRequest* aRequest)
+  : mRequest(aRequest)
   {
     MOZ_COUNT_CTOR(ArchiveRequestEvent);
   }
 
+protected:
   ~ArchiveRequestEvent()
   {
     MOZ_COUNT_DTOR(ArchiveRequestEvent);
@@ -41,7 +42,7 @@ private: //data
 NS_IMETHODIMP
 ArchiveRequestEvent::Run()
 {
-  NS_ABORT_IF_FALSE(mRequest, "the request is not longer valid");
+  MOZ_ASSERT(mRequest, "the request is not longer valid");
   mRequest->Run();
   return NS_OK;
 }
@@ -76,9 +77,9 @@ ArchiveRequest::PreHandleEvent(EventChainPreVisitor& aVisitor)
 }
 
 /* virtual */ JSObject*
-ArchiveRequest::WrapObject(JSContext* aCx)
+ArchiveRequest::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return ArchiveRequestBinding::Wrap(aCx, this);
+  return ArchiveRequestBinding::Wrap(aCx, this, aGivenProto);
 }
 
 ArchiveReader*

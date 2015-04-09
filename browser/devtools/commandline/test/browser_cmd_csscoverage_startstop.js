@@ -14,7 +14,7 @@ const SHEET_B = TEST_BASE_HTTPS + "browser_cmd_csscoverage_sheetB.css";
 const SHEET_C = TEST_BASE_HTTPS + "browser_cmd_csscoverage_sheetC.css";
 const SHEET_D = TEST_BASE_HTTPS + "browser_cmd_csscoverage_sheetD.css";
 
-let test = asyncTest(function*() {
+add_task(function*() {
   let options = yield helpers.openTab("about:blank");
   yield helpers.openToolbar(options);
 
@@ -55,8 +55,8 @@ function* navigate(usage, options) {
  * Check the expected pages have been visited
  */
 function* checkPages(usage) {
-  // 'load' event order. '' is for the initial location
-  let expectedVisited = [ '', PAGE_2, PAGE_1, PAGE_3 ];
+  // 'load' event order. 'null' is for the initial location
+  let expectedVisited = [ 'null', PAGE_2, PAGE_1, PAGE_3 ];
   let actualVisited = yield usage._testOnly_visitedPages();
   isEqualJson(actualVisited, expectedVisited, 'Visited');
 }

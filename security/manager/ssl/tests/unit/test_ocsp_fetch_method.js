@@ -13,7 +13,7 @@ do_get_profile(); // must be called before getting nsIX509CertDB
 const certdb = Cc["@mozilla.org/security/x509certdb;1"]
                  .getService(Ci.nsIX509CertDB);
 
-const SERVER_PORT = 8080;
+const SERVER_PORT = 8888;
 
 function start_ocsp_responder(expectedCertNames, expectedPaths,
                               expectedMethods) {
@@ -42,7 +42,7 @@ function run_test() {
     clearOCSPCache();
     Services.prefs.setBoolPref("security.OCSP.GET.enabled", false);
     let ocspResponder = start_ocsp_responder(["a"], [], ["POST"]);
-    check_cert_err("a", 0);
+    check_cert_err("a", PRErrorCodeSuccess);
     ocspResponder.stop(run_next_test);
   });
 
@@ -50,7 +50,7 @@ function run_test() {
     clearOCSPCache();
     Services.prefs.setBoolPref("security.OCSP.GET.enabled", true);
     let ocspResponder = start_ocsp_responder(["a"], [], ["GET"]);
-    check_cert_err("a", 0);
+    check_cert_err("a", PRErrorCodeSuccess);
     ocspResponder.stop(run_next_test);
   });
 
@@ -60,7 +60,7 @@ function run_test() {
     Services.prefs.setBoolPref("security.OCSP.GET.enabled", true);
     // Bug 1016681 mozilla::pkix does not support fallback yet.
     // let ocspResponder = start_ocsp_responder(["b", "a"], [], ["GET", "POST"]);
-    // check_cert_err("a", 0);
+    // check_cert_err("a", PRErrorCodeSuccess);
     // ocspResponder.stop(run_next_test);
     run_next_test();
   });

@@ -36,7 +36,6 @@
 
 class nsOfflineCacheUpdate;
 
-class nsICacheEntryDescriptor;
 class nsIUTF8StringEnumerator;
 class nsILoadContext;
 
@@ -77,7 +76,7 @@ public:
     nsresult GetStatus(uint16_t *aStatus);
 
 private:
-    enum LoadStatus MOZ_ENUM_TYPE(uint16_t) {
+    enum LoadStatus : uint16_t {
       UNINITIALIZED = 0U,
       REQUESTED = 1U,
       RECEIVING = 2U,
@@ -194,10 +193,10 @@ public:
     virtual nsresult UpdateFinished(nsOfflineCacheUpdate *aUpdate) = 0;
 };
 
-class nsOfflineCacheUpdate MOZ_FINAL : public nsIOfflineCacheUpdate
-                                     , public nsIOfflineCacheUpdateObserver
-                                     , public nsIRunnable
-                                     , public nsOfflineCacheUpdateOwner
+class nsOfflineCacheUpdate final : public nsIOfflineCacheUpdate
+                                 , public nsIOfflineCacheUpdateObserver
+                                 , public nsIRunnable
+                                 , public nsOfflineCacheUpdateOwner
 {
 public:
     MOZ_DECLARE_REFCOUNTED_TYPENAME(nsOfflineCacheUpdate)
@@ -222,8 +221,9 @@ public:
     void SetOwner(nsOfflineCacheUpdateOwner *aOwner);
 
     bool IsForGroupID(const nsCSubstring &groupID);
+    bool IsForProfile(nsIFile* aCustomProfileDir);
 
-    virtual nsresult UpdateFinished(nsOfflineCacheUpdate *aUpdate);
+    virtual nsresult UpdateFinished(nsOfflineCacheUpdate *aUpdate) override;
 
 protected:
     ~nsOfflineCacheUpdate();
@@ -319,10 +319,10 @@ private:
     uint64_t                       mByteProgress;
 };
 
-class nsOfflineCacheUpdateService MOZ_FINAL : public nsIOfflineCacheUpdateService
-                                            , public nsIObserver
-                                            , public nsOfflineCacheUpdateOwner
-                                            , public nsSupportsWeakReference
+class nsOfflineCacheUpdateService final : public nsIOfflineCacheUpdateService
+                                        , public nsIObserver
+                                        , public nsOfflineCacheUpdateOwner
+                                        , public nsSupportsWeakReference
 {
 public:
     NS_DECL_ISUPPORTS
@@ -337,6 +337,7 @@ public:
     nsresult FindUpdate(nsIURI *aManifestURI,
                         uint32_t aAppID,
                         bool aInBrowser,
+                        nsIFile *aCustomProfileDir,
                         nsOfflineCacheUpdate **aUpdate);
 
     nsresult Schedule(nsIURI *aManifestURI,
@@ -348,7 +349,7 @@ public:
                       bool aInBrowser,
                       nsIOfflineCacheUpdate **aUpdate);
 
-    virtual nsresult UpdateFinished(nsOfflineCacheUpdate *aUpdate);
+    virtual nsresult UpdateFinished(nsOfflineCacheUpdate *aUpdate) override;
 
     /**
      * Returns the singleton nsOfflineCacheUpdateService without an addref, or

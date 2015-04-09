@@ -16,6 +16,7 @@
 #include "nsHTMLReflowState.h"
 #include "nsPresContext.h"
 #include "nsCSSFrameConstructor.h"
+#include "nsGridContainerFrame.h"
 
 #ifdef DEBUG
 #include "nsBlockFrame.h"
@@ -33,6 +34,8 @@ static void PrettyUC(nscoord aSize, char* aBuf)
   }
 }
 #endif
+
+using namespace mozilla;
 
 void
 nsAbsoluteContainingBlock::SetInitialChildList(nsIFrame*       aDelegatingFrame,
@@ -117,6 +120,14 @@ nsAbsoluteContainingBlock::Reflow(nsContainerFrame*        aDelegatingFrame,
 
   bool reflowAll = aReflowState.ShouldReflowAllKids();
 
+  // The 'width' check below is an optimization to avoid the virtual GetType()
+  // call in most cases.  'aContainingBlock' isn't used for grid items,
+  // each item has its own CB on a frame property instead.
+  // @see nsGridContainerFrame::ReflowChildren
+  const bool isGrid =
+    aContainingBlock.width == nsGridContainerFrame::VERY_LIKELY_A_GRID_CONTAINER &&
+    aDelegatingFrame->GetType() == nsGkAtoms::gridContainerFrame;
+
   nsIFrame* kidFrame;
   nsOverflowContinuationTracker tracker(aDelegatingFrame, true);
   for (kidFrame = mAbsoluteFrames.FirstChild(); kidFrame; kidFrame = kidFrame->GetNextSibling()) {
@@ -125,12 +136,14 @@ nsAbsoluteContainingBlock::Reflow(nsContainerFrame*        aDelegatingFrame,
     if (kidNeedsReflow && !aPresContext->HasPendingInterrupt()) {
       // Reflow the frame
       nsReflowStatus  kidStatus = NS_FRAME_COMPLETE;
-      ReflowAbsoluteFrame(aDelegatingFrame, aPresContext, aReflowState,
-                          aContainingBlock,
+      const nsRect& cb = isGrid ? nsGridContainerFrame::GridItemCB(kidFrame)
+                                : aContainingBlock;
+      ReflowAbsoluteFrame(aDelegatingFrame, aPresContext, aReflowState, cb,
                           aConstrainHeight, kidFrame, kidStatus,
                           aOverflowAreas);
       nsIFrame* nextFrame = kidFrame->GetNextInFlow();
-      if (!NS_FRAME_IS_FULLY_COMPLETE(kidStatus)) {
+      if (!NS_FRAME_IS_FULLY_COMPLETE(kidStatus) &&
+          aDelegatingFrame->IsFrameOfType(nsIFrame::eCanContainOverflowContainers)) {
         // Need a continuation
         if (!nextFrame) {
           nextFrame =
@@ -367,22 +380,22 @@ nsAbsoluteContainingBlock::ReflowAbsoluteFrame(nsIFrame*                aDelegat
   AutoNoisyIndenter indent(nsBlockFrame::gNoisy);
 #endif // DEBUG
 
-  nscoord availWidth = aContainingBlock.width;
-  if (availWidth == -1) {
-    NS_ASSERTION(aReflowState.ComputedWidth() != NS_UNCONSTRAINEDSIZE,
-                 "Must have a useful width _somewhere_");
-    availWidth =
-      aReflowState.ComputedWidth() + aReflowState.ComputedPhysicalPadding().LeftRight();
+  WritingMode wm = aKidFrame->GetWritingMode();
+  nscoord availISize = LogicalSize(wm, aContainingBlock.Size()).ISize(wm);
+  if (availISize == -1) {
+    NS_ASSERTION(aReflowState.ComputedSize(wm).ISize(wm) !=
+                   NS_UNCONSTRAINEDSIZE,
+                 "Must have a useful inline-size _somewhere_");
+    availISize =
+      aReflowState.ComputedSizeWithPadding(wm).ISize(wm);
   }
 
   nsHTMLReflowMetrics kidDesiredSize(aReflowState);
   nsHTMLReflowState kidReflowState(aPresContext, aReflowState, aKidFrame,
-                                   nsSize(availWidth, NS_UNCONSTRAINEDSIZE),
+                                   LogicalSize(wm, availISize,
+                                               NS_UNCONSTRAINEDSIZE),
                                    aContainingBlock.width,
                                    aContainingBlock.height);
-
-  // Send the WillReflow() notification and position the frame
-  aKidFrame->WillReflow(aPresContext);
 
   // Get the border values
   const nsMargin& border = aReflowState.mStyleBorder->GetComputedBorder();

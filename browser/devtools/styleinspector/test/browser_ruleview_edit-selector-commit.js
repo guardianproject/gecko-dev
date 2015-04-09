@@ -47,8 +47,8 @@ const TEST_DATA = [
   }
 ];
 
-let test = asyncTest(function*() {
-  yield addTab("data:text/html,test escaping selector change reverts back to original value");
+add_task(function*() {
+  yield addTab("data:text/html;charset=utf-8,test escaping selector change reverts back to original value");
 
   info("Creating the test document");
   content.document.body.innerHTML = PAGE_CONTENT;
@@ -88,7 +88,7 @@ function* runTestData(inspector, view, data) {
         "Value is as expected: " + expected);
     is(idRuleEditor.isEditing, false, "Selector is not being edited.")
   } else {
-    yield once(view.element, "CssRuleViewRefreshed");
+    yield once(view, "ruleview-refreshed");
     ok(getRuleViewRule(view, expected),
         "Rule with " + name + " selector exists.");
   }

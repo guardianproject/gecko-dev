@@ -18,12 +18,12 @@
 
 // a class that's nsISupports-specific, so that we can contain the
 // work of this class in the XPCOM dll
-class NS_COM_GLUE nsCOMArray_base
+class nsCOMArray_base
 {
   friend class nsArrayBase;
 protected:
   nsCOMArray_base() {}
-  nsCOMArray_base(int32_t aCount) : mArray(aCount) {}
+  explicit nsCOMArray_base(int32_t aCount) : mArray(aCount) {}
   nsCOMArray_base(const nsCOMArray_base& aOther);
   ~nsCOMArray_base();
 
@@ -179,7 +179,7 @@ private:
   nsTArray<nsISupports*> mArray;
 
   // don't implement these, defaults will muck with refcounts!
-  nsCOMArray_base& operator=(const nsCOMArray_base& aOther) MOZ_DELETE;
+  nsCOMArray_base& operator=(const nsCOMArray_base& aOther) = delete;
 };
 
 inline void
@@ -450,7 +450,7 @@ public:
 private:
 
   // don't implement these!
-  nsCOMArray<T>& operator=(const nsCOMArray<T>& aOther) MOZ_DELETE;
+  nsCOMArray<T>& operator=(const nsCOMArray<T>& aOther) = delete;
 };
 
 template<typename T>

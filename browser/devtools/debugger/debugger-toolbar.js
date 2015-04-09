@@ -57,6 +57,7 @@ ToolbarView.prototype = {
     this._stepOverButton.setAttribute("tooltiptext", this._stepOverTooltip);
     this._stepInButton.setAttribute("tooltiptext", this._stepInTooltip);
     this._stepOutButton.setAttribute("tooltiptext", this._stepOutTooltip);
+    this._addCommands();
   },
 
   /**
@@ -70,6 +71,18 @@ ToolbarView.prototype = {
     this._stepOverButton.removeEventListener("mousedown", this._onStepOverPressed, false);
     this._stepInButton.removeEventListener("mousedown", this._onStepInPressed, false);
     this._stepOutButton.removeEventListener("mousedown", this._onStepOutPressed, false);
+  },
+
+  /**
+   * Add commands that XUL can fire.
+   */
+  _addCommands: function() {
+    utils.addCommands(document.getElementById('debuggerCommands'), {
+      resumeCommand: () => this._onResumePressed(),
+      stepOverCommand: () => this._onStepOverPressed(),
+      stepInCommand: () => this._onStepInPressed(),
+      stepOutCommand: () => this._onStepOutPressed()
+    });
   },
 
   /**
@@ -225,8 +238,9 @@ OptionsView.prototype = {
     this._showVariablesFilterBoxItem.setAttribute("checked", Prefs.variablesSearchboxVisible);
     this._showOriginalSourceItem.setAttribute("checked", Prefs.sourceMapsEnabled);
     this._autoBlackBoxItem.setAttribute("checked", Prefs.autoBlackBox);
-  },
 
+    this._addCommands();
+  },
 
   /**
    * Destruction function, called when the debugger is closed.
@@ -234,6 +248,22 @@ OptionsView.prototype = {
   destroy: function() {
     dumpn("Destroying the OptionsView");
     // Nothing to do here yet.
+  },
+
+  /**
+   * Add commands that XUL can fire.
+   */
+  _addCommands: function() {
+    utils.addCommands(document.getElementById('debuggerCommands'), {
+      toggleAutoPrettyPrint: () => this._toggleAutoPrettyPrint(),
+      togglePauseOnExceptions: () => this._togglePauseOnExceptions(),
+      toggleIgnoreCaughtExceptions: () => this._toggleIgnoreCaughtExceptions(),
+      toggleShowPanesOnStartup: () => this._toggleShowPanesOnStartup(),
+      toggleShowOnlyEnum: () => this._toggleShowVariablesOnlyEnum(),
+      toggleShowVariablesFilterBox: () => this._toggleShowVariablesFilterBox(),
+      toggleShowOriginalSource: () => this._toggleShowOriginalSource(),
+      toggleAutoBlackBox: () =>  this._toggleAutoBlackBox()
+    });
   },
 
   /**
@@ -784,6 +814,8 @@ FilterView.prototype = {
       L10N.getFormatStr("searchPanelGoToLine", this._lineSearchKey));
     this._variableOperatorLabel.setAttribute("value",
       L10N.getFormatStr("searchPanelVariable", this._variableSearchKey));
+
+    this._addCommands();
   },
 
   /**
@@ -797,6 +829,21 @@ FilterView.prototype = {
     this._searchbox.removeEventListener("input", this._onInput, false);
     this._searchbox.removeEventListener("keypress", this._onKeyPress, false);
     this._searchbox.removeEventListener("blur", this._onBlur, false);
+  },
+
+  /**
+   * Add commands that XUL can fire.
+   */
+  _addCommands: function() {
+    utils.addCommands(document.getElementById('debuggerCommands'), {
+      fileSearchCommand: () => this._doFileSearch(),
+      globalSearchCommand: () => this._doGlobalSearch(),
+      functionSearchCommand: () => this._doFunctionSearch(),
+      tokenSearchCommand: () => this._doTokenSearch(),
+      lineSearchCommand: () => this._doLineSearch(),
+      variableSearchCommand: () => this._doVariableSearch(),
+      variablesFocusCommand: () => this._doVariablesFocus()
+    });
   },
 
   /**
@@ -936,7 +983,7 @@ FilterView.prototype = {
         DebuggerView.GlobalSearch.scheduleSearch(this.searchArguments[0]);
         break;
       case SEARCH_FUNCTION_FLAG:
-        // Schedule a function search for when the user stops typing.
+      // Schedule a function search for when the user stops typing.
         DebuggerView.FilteredFunctions.scheduleSearch(this.searchArguments[0]);
         break;
       case SEARCH_VARIABLE_FLAG:
@@ -1117,7 +1164,7 @@ FilterView.prototype = {
     if (SEARCH_AUTOFILL.indexOf(aOperator) != -1) {
       let cursor = DebuggerView.editor.getCursor();
       let content = DebuggerView.editor.getText();
-      let location = DebuggerView.Sources.selectedValue;
+      let location = DebuggerView.Sources.selectedItem.attachment.source.url;
       let source = DebuggerController.Parser.get(content, location);
       let identifier = source.getIdentifierAt({ line: cursor.line+1, column: cursor.ch });
 
@@ -1306,19 +1353,23 @@ FilteredSourcesView.prototype = Heritage.extend(ResultsPanelContainer.prototype,
     }
 
     for (let item of aSearchResults) {
-      // Create the element node for the location item.
-      let itemView = this._createItemView(
-        SourceUtils.trimUrlLength(item.attachment.label),
-        SourceUtils.trimUrlLength(item.value, 0, "start")
-      );
+      let url = item.attachment.source.url;
 
-      // Append a location item to this container for each match.
-      this.push([itemView], {
-        index: -1, /* specifies on which position should the item be appended */
-        attachment: {
-          url: item.value
-        }
-      });
+      if (url) {
+        // Create the element node for the location item.
+        let itemView = this._createItemView(
+          SourceUtils.trimUrlLength(item.attachment.label),
+          SourceUtils.trimUrlLength(url, 0, "start")
+        );
+
+        // Append a location item to this container for each match.
+        this.push([itemView], {
+          index: -1, /* specifies on which position should the item be appended */
+          attachment: {
+            url: url
+          }
+        });
+      }
     }
 
     // There's at least one item displayed in this container. Don't select it
@@ -1351,7 +1402,8 @@ FilteredSourcesView.prototype = Heritage.extend(ResultsPanelContainer.prototype,
    */
   _onSelect: function({ detail: locationItem }) {
     if (locationItem) {
-      DebuggerView.setEditorLocation(locationItem.attachment.url, undefined, {
+      let actor = DebuggerView.Sources.getActorForLocation({ url: locationItem.attachment.url });
+      DebuggerView.setEditorLocation(actor, undefined, {
         noCaret: true,
         noDebug: true
       });
@@ -1408,8 +1460,8 @@ FilteredFunctionsView.prototype = Heritage.extend(ResultsPanelContainer.prototyp
     // Allow requests to settle down first.
     setNamedTimeout("function-search", delay, () => {
       // Start fetching as many sources as possible, then perform the search.
-      let urls = DebuggerView.Sources.values;
-      let sourcesFetched = DebuggerController.SourceScripts.getTextForSources(urls);
+      let actors = DebuggerView.Sources.values;
+      let sourcesFetched = DebuggerController.SourceScripts.getTextForSources(actors);
       sourcesFetched.then(aSources => this._doSearch(aToken, aSources));
     });
   },
@@ -1429,8 +1481,8 @@ FilteredFunctionsView.prototype = Heritage.extend(ResultsPanelContainer.prototyp
 
     // Make sure the currently displayed source is parsed first. Once the
     // maximum allowed number of results are found, parsing will be halted.
-    let currentUrl = DebuggerView.Sources.selectedValue;
-    let currentSource = aSources.filter(([sourceUrl]) => sourceUrl == currentUrl)[0];
+    let currentActor = DebuggerView.Sources.selectedValue;
+    let currentSource = aSources.filter(([actor]) => actor == currentActor)[0];
     aSources.splice(aSources.indexOf(currentSource), 1);
     aSources.unshift(currentSource);
 
@@ -1440,8 +1492,14 @@ FilteredFunctionsView.prototype = Heritage.extend(ResultsPanelContainer.prototyp
       aSources.splice(1);
     }
 
-    for (let [location, contents] of aSources) {
-      let parsedSource = DebuggerController.Parser.get(contents, location);
+    for (let [actor, contents] of aSources) {
+      let item = DebuggerView.Sources.getItemByValue(actor);
+      let url = item.attachment.source.url;
+      if (!url) {
+        continue;
+      }
+
+      let parsedSource = DebuggerController.Parser.get(contents, url);
       let sourceResults = parsedSource.getNamedFunctionDefinitions(aToken);
 
       for (let scriptResult of sourceResults) {
@@ -1553,10 +1611,11 @@ FilteredFunctionsView.prototype = Heritage.extend(ResultsPanelContainer.prototyp
   _onSelect: function({ detail: functionItem }) {
     if (functionItem) {
       let sourceUrl = functionItem.attachment.sourceUrl;
+      let actor = DebuggerView.Sources.getActorForLocation({ url: sourceUrl });
       let scriptOffset = functionItem.attachment.scriptOffset;
       let actualLocation = functionItem.attachment.actualLocation;
 
-      DebuggerView.setEditorLocation(sourceUrl, actualLocation.start.line, {
+      DebuggerView.setEditorLocation(actor, actualLocation.start.line, {
         charOffset: scriptOffset,
         columnOffset: actualLocation.start.column,
         align: "center",

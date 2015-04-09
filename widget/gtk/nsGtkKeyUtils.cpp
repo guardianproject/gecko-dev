@@ -175,7 +175,8 @@ KeymapWrapper::KeymapWrapper() :
     g_object_weak_ref(G_OBJECT(mGdkKeymap),
                       (GWeakNotify)OnDestroyKeymap, this);
 
-    InitXKBExtension();
+    if (GDK_IS_X11_DISPLAY(gdk_display_get_default()))
+        InitXKBExtension();
 
     Init();
 }
@@ -195,7 +196,8 @@ KeymapWrapper::Init()
     mModifierKeys.Clear();
     memset(mModifierMasks, 0, sizeof(mModifierMasks));
 
-    InitBySystemSettings();
+    if (GDK_IS_X11_DISPLAY(gdk_display_get_default()))
+        InitBySystemSettings();
 
     gdk_window_add_filter(nullptr, FilterEvents, this);
 
@@ -646,12 +648,12 @@ KeymapWrapper::InitInputEvent(WidgetInputEvent& aInputEvent,
          GetBoolName(aInputEvent.modifiers & MODIFIER_NUMLOCK),
          GetBoolName(aInputEvent.modifiers & MODIFIER_SCROLLLOCK)));
 
-    switch(aInputEvent.eventStructType) {
-        case NS_MOUSE_EVENT:
-        case NS_MOUSE_SCROLL_EVENT:
-        case NS_WHEEL_EVENT:
-        case NS_DRAG_EVENT:
-        case NS_SIMPLE_GESTURE_EVENT:
+    switch(aInputEvent.mClass) {
+        case eMouseEventClass:
+        case eMouseScrollEventClass:
+        case eWheelEventClass:
+        case eDragEventClass:
+        case eSimpleGestureEventClass:
             break;
         default:
             return;
@@ -897,9 +899,10 @@ KeymapWrapper::InitKeyEvent(WidgetKeyboardEvent& aKeyEvent,
     // state.  It means if there're some pending modifier key press or
     // key release events, the result isn't what we want.
     guint modifierState = aGdkKeyEvent->state;
-    if (aGdkKeyEvent->is_modifier) {
+    GdkDisplay* gdkDisplay = gdk_display_get_default();
+    if (aGdkKeyEvent->is_modifier && GDK_IS_X11_DISPLAY(gdkDisplay)) {
         Display* display =
-            gdk_x11_display_get_xdisplay(gdk_display_get_default());
+            gdk_x11_display_get_xdisplay(gdkDisplay);
         if (XEventsQueued(display, QueuedAfterReading)) {
             XEvent nextEvent;
             XPeekEvent(display, &nextEvent);
@@ -1005,7 +1008,7 @@ KeymapWrapper::InitKeyEvent(WidgetKeyboardEvent& aKeyEvent,
     // so link to the GdkEvent (which will vanish soon after return from the
     // event callback) to give plugins access to hardware_keycode and state.
     // (An XEvent would be nice but the GdkEvent is good enough.)
-    aKeyEvent.pluginEvent = (void *)aGdkKeyEvent;
+    aKeyEvent.mPluginEvent.Copy(*aGdkKeyEvent);
     aKeyEvent.time = aGdkKeyEvent->time;
     aKeyEvent.mNativeKeyEvent = static_cast<void*>(aGdkKeyEvent);
     aKeyEvent.mIsRepeat = sRepeatState == REPEATING &&

@@ -295,9 +295,9 @@ nsTableColGroupFrame::RemoveFrame(ChildListID     aListID,
       nsTableColFrame* nextCol;
       while (col && col->GetColType() == eColAnonymousCol) {
 #ifdef DEBUG
-        nsIFrame* providerFrame = colFrame->GetParentStyleContextFrame();
-        if (colFrame->StyleContext()->GetParent() ==
-            providerFrame->StyleContext()) {
+        nsIFrame* providerFrame;
+        nsStyleContext* psc = colFrame->GetParentStyleContext(&providerFrame);
+        if (colFrame->StyleContext()->GetParent() == psc) {
           NS_ASSERTION(col->StyleContext() == colFrame->StyleContext() &&
                        col->GetContent() == colFrame->GetContent(),
                        "How did that happen??");
@@ -350,10 +350,11 @@ nsTableColGroupFrame::GetLogicalSkipSides(const nsHTMLReflowState* aReflowState)
 
 void
 nsTableColGroupFrame::Reflow(nsPresContext*          aPresContext,
-                                       nsHTMLReflowMetrics&     aDesiredSize,
-                                       const nsHTMLReflowState& aReflowState,
-                                       nsReflowStatus&          aStatus)
+                             nsHTMLReflowMetrics&     aDesiredSize,
+                             const nsHTMLReflowState& aReflowState,
+                             nsReflowStatus&          aStatus)
 {
+  MarkInReflow();
   DO_GLOBAL_REFLOW_COUNT("nsTableColGroupFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aDesiredSize, aStatus);
   NS_ASSERTION(nullptr!=mContent, "bad state -- null content for frame");
@@ -372,15 +373,14 @@ nsTableColGroupFrame::Reflow(nsPresContext*          aPresContext,
     // Give the child frame a chance to reflow, even though we know it'll have 0 size
     nsHTMLReflowMetrics kidSize(aReflowState);
     nsHTMLReflowState kidReflowState(aPresContext, aReflowState, kidFrame,
-                                     nsSize(0,0));
+                                     LogicalSize(kidFrame->GetWritingMode()));
 
     nsReflowStatus status;
     ReflowChild(kidFrame, aPresContext, kidSize, kidReflowState, 0, 0, 0, status);
     FinishReflowChild(kidFrame, aPresContext, kidSize, nullptr, 0, 0, 0);
   }
 
-  aDesiredSize.Width() = 0;
-  aDesiredSize.Height() = 0;
+  aDesiredSize.ClearSize();
   aStatus = NS_FRAME_COMPLETE;
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aDesiredSize);
 }
@@ -522,3 +522,4 @@ void nsTableColGroupFrame::Dump(int32_t aIndent)
   delete [] indent;
 }
 #endif
+

@@ -9,6 +9,7 @@
 
 #include "Compatibility.h"
 #include "DocAccessible.h"
+#include "nsAccessibilityService.h"
 #include "nsCoreUtils.h"
 
 #include "mozilla/Preferences.h"
@@ -16,6 +17,7 @@
 #include "nsIArray.h"
 #include "nsIDocument.h"
 #include "nsIDocShellTreeItem.h"
+#include "nsIDOMElement.h"
 #include "nsXULAppAPI.h"
 
 using namespace mozilla;
@@ -57,11 +59,14 @@ nsWinUtils::MaybeStartWindowEmulation()
 {
   // Register window class that'll be used for document accessibles associated
   // with tabs.
+  if (IPCAccessibilityActive())
+    return false;
+
   if (Compatibility::IsJAWS() || Compatibility::IsWE() ||
       Compatibility::IsDolphin() ||
       XRE_GetProcessType() == GeckoProcessType_Content) {
     RegisterNativeWindow(kClassNameTabContent);
-    sHWNDCache = new nsRefPtrHashtable<nsPtrHashKey<void>, DocAccessible>(4);
+    sHWNDCache = new nsRefPtrHashtable<nsPtrHashKey<void>, DocAccessible>(2);
     return true;
   }
 

@@ -1,7 +1,13 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 package org.mozilla.gecko.tests;
+
 import org.mozilla.gecko.Actions;
 import org.mozilla.gecko.R;
 
+import com.jayway.android.robotium.solo.Condition;
 import android.view.View;
 
 /**
@@ -26,18 +32,19 @@ public class testClearPrivateData extends PixelTest {
     private void clearHistory() {
 
         // Loading a page and adding a second one as bookmark to have user made bookmarks and history
-        String blank1 = getAbsoluteUrl(StringHelper.ROBOCOP_BLANK_PAGE_01_URL);
-        String blank2 = getAbsoluteUrl(StringHelper.ROBOCOP_BLANK_PAGE_02_URL);
-        String title = StringHelper.ROBOCOP_BLANK_PAGE_01_TITLE;
-        inputAndLoadUrl(blank1);
-        verifyPageTitle(title);
-        mDatabaseHelper.addOrUpdateMobileBookmark(StringHelper.ROBOCOP_BLANK_PAGE_02_TITLE, blank2);
+        String blank1 = getAbsoluteUrl(mStringHelper.ROBOCOP_BLANK_PAGE_01_URL);
+        String blank2 = getAbsoluteUrl(mStringHelper.ROBOCOP_BLANK_PAGE_02_URL);
+        String title = mStringHelper.ROBOCOP_BLANK_PAGE_01_TITLE;
+
+        loadUrl(blank1);
+        verifyUrlBarTitle(blank1);
+        mDatabaseHelper.addOrUpdateMobileBookmark(mStringHelper.ROBOCOP_BLANK_PAGE_02_TITLE, blank2);
 
         // Checking that the history list is not empty
         verifyHistoryCount(1);
 
         //clear and check for device
-        checkDevice(title);
+        checkDevice(title, blank1);
 
         // Checking that history list is empty
         verifyHistoryCount(0);
@@ -47,9 +54,10 @@ public class testClearPrivateData extends PixelTest {
     }
 
     private void verifyHistoryCount(final int expectedCount) {
-        boolean match = waitForTest( new BooleanTest() {
-            public boolean test() {
-                return (mDatabaseHelper.getBrowserDBUrls(DatabaseHelper.BrowserDataType.HISTORY).size() == expectedCount);
+        boolean match = waitForCondition(new Condition() {
+            @Override
+            public boolean isSatisfied() {
+                return mDatabaseHelper.getBrowserDBUrls(DatabaseHelper.BrowserDataType.HISTORY).size() == expectedCount;
             }
         }, TEST_WAIT_MS);
         mAsserter.ok(match, "Checking that the number of history items is correct", String.valueOf(expectedCount) + " history items present in the database");
@@ -57,44 +65,41 @@ public class testClearPrivateData extends PixelTest {
 
     public void clearSiteSettings() {
         String shareStrings[] = {"Share your location with", "Share", "Don't share", "There are no settings to clear"};
-        String titleGeolocation = StringHelper.ROBOCOP_GEOLOCATION_TITLE;
-        String url = getAbsoluteUrl(StringHelper.ROBOCOP_GEOLOCATION_URL);
+        String titleGeolocation = mStringHelper.ROBOCOP_GEOLOCATION_TITLE;
+        String url = getAbsoluteUrl(mStringHelper.ROBOCOP_GEOLOCATION_URL);
         loadCheckDismiss(shareStrings[1], url, shareStrings[0]);
         checkOption(shareStrings[1], "Clear");
         checkOption(shareStrings[3], "Cancel");
         loadCheckDismiss(shareStrings[2], url, shareStrings[0]);
         checkOption(shareStrings[2], "Cancel");
-        checkDevice(titleGeolocation);
+        checkDevice(titleGeolocation, url);
     }
 
     public void clearPassword(){
-        String passwordStrings[] = {"Save password", "Save", "Don't save"};
-        String title = StringHelper.ROBOCOP_BLANK_PAGE_01_TITLE;
-        String loginUrl = getAbsoluteUrl(StringHelper.ROBOCOP_LOGIN_URL);
+        String passwordStrings[] = { mStringHelper.LOGIN_MESSAGE, mStringHelper.LOGIN_ALLOW, mStringHelper.LOGIN_DENY };
+        String title = mStringHelper.ROBOCOP_BLANK_PAGE_01_TITLE;
+        String loginUrl = getAbsoluteUrl(mStringHelper.ROBOCOP_LOGIN_01_URL);
+
         loadCheckDismiss(passwordStrings[1], loginUrl, passwordStrings[0]);
-        checkOption(passwordStrings[1], "Clear");
+        checkOption(mStringHelper.CONTEXT_MENU_SITE_SETTINGS_SAVE_PASSWORD, "Clear");
         loadCheckDismiss(passwordStrings[2], loginUrl, passwordStrings[0]);
-        checkDevice(title);
+        checkDevice(title, getAbsoluteUrl(mStringHelper.ROBOCOP_BLANK_PAGE_01_URL));
     }
 
     // clear private data and verify the device type because for phone there is an extra back action to exit the settings menu
-    public void checkDevice(String title) {
+    public void checkDevice(final String title, final String url) {
         clearPrivateData();
         if (mDevice.type.equals("phone")) {
             mActions.sendSpecialKey(Actions.SpecialKey.BACK);
-            mAsserter.ok(waitForText(StringHelper.PRIVACY_SECTION_LABEL), "waiting to perform one back", "one back");
-            mActions.sendSpecialKey(Actions.SpecialKey.BACK);
-            verifyPageTitle(title);
+            mAsserter.ok(waitForText(mStringHelper.PRIVACY_SECTION_LABEL), "waiting to perform one back", "one back");
         }
-        else {
-            mActions.sendSpecialKey(Actions.SpecialKey.BACK);
-            verifyPageTitle(title);
-        }
+        mActions.sendSpecialKey(Actions.SpecialKey.BACK);
+        verifyUrlBarTitle(url);
     }
-   
+
     // Load a URL, verify that the doorhanger appears and dismiss it
     public void loadCheckDismiss(String option, String url, String message) {
-        inputAndLoadUrl(url);
+        loadUrlAndWait(url);
         waitForText(message);
         mAsserter.is(mSolo.searchText(message), true, "Doorhanger:" + message + " has been displayed");
         mSolo.clickOnButton(option);
@@ -107,13 +112,14 @@ public class testClearPrivateData extends PixelTest {
             // Use the context menu in pre-11
             final View toolbarView = mSolo.getView(R.id.browser_toolbar);
             mSolo.clickLongOnView(toolbarView);
-            mAsserter.ok(waitForText(StringHelper.CONTEXT_MENU_ITEMS_IN_URL_BAR[2]), "Waiting for the pop-up to open", "Pop up was opened");
+            mAsserter.ok(waitForText(mStringHelper.CONTEXT_MENU_ITEMS_IN_URL_BAR[2]), "Waiting for the pop-up to open", "Pop up was opened");
         } else {
             // Use the Page menu in 11+
-            selectMenuItem(StringHelper.PAGE_LABEL);
-            mAsserter.ok(waitForText(StringHelper.CONTEXT_MENU_ITEMS_IN_URL_BAR[2]), "Waiting for the submenu to open", "Submenu was opened");
+            selectMenuItem(mStringHelper.PAGE_LABEL);
+            mAsserter.ok(waitForText(mStringHelper.CONTEXT_MENU_ITEMS_IN_URL_BAR[2]), "Waiting for the submenu to open", "Submenu was opened");
         }
-        mSolo.clickOnText(StringHelper.CONTEXT_MENU_ITEMS_IN_URL_BAR[2]);
+
+	mSolo.clickOnText(mStringHelper.CONTEXT_MENU_ITEMS_IN_URL_BAR[2]);
         mAsserter.ok(waitForText(option), "Verify that the option: " + option + " is in the list", "The option is in the list. There are settings to clear");
         mSolo.clickOnButton(button);
     }

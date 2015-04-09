@@ -6,9 +6,6 @@
 #ifndef nsExternalHelperAppService_h__
 #define nsExternalHelperAppService_h__
 
-#ifdef MOZ_LOGGING
-#define FORCE_PR_LOG
-#endif
 #include "prlog.h"
 #include "prtime.h"
 
@@ -186,6 +183,14 @@ protected:
    * added during the private browsing mode)
    */
   nsCOMArray<nsIFile> mTemporaryPrivateFilesList;
+
+private:
+  nsresult DoContentContentProcessHelper(const nsACString& aMimeContentType,
+                                         nsIRequest *aRequest,
+                                         nsIInterfaceRequestor *aContentContext,
+                                         bool aForceSave,
+                                         nsIInterfaceRequestor *aWindowContext,
+                                         nsIStreamListener ** aStreamListener);
 };
 
 /**
@@ -196,10 +201,10 @@ protected:
  * stored the data into.  We create a handler every time we have to process
  * data using a helper app.
  */
-class nsExternalAppHandler MOZ_FINAL : public nsIStreamListener,
-                                       public nsIHelperAppLauncher,
-                                       public nsITimerCallback,
-                                       public nsIBackgroundFileSaverObserver
+class nsExternalAppHandler final : public nsIStreamListener,
+                                   public nsIHelperAppLauncher,
+                                   public nsITimerCallback,
+                                   public nsIBackgroundFileSaverObserver
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -211,17 +216,22 @@ public:
   NS_DECL_NSIBACKGROUNDFILESAVEROBSERVER
 
   /**
-   * @param aMIMEInfo      MIMEInfo object, representing the type of the
-   *                       content that should be handled
-   * @param aFileExtension The extension we need to append to our temp file,
-   *                       INCLUDING the ".". e.g. .mp3
-   * @param aWindowContext Window context, as passed to DoContent
-   * @param mExtProtSvc    nsExternalHelperAppService on creation
-   * @param aFileName      The filename to use
-   * @param aReason        A constant from nsIHelperAppLauncherDialog indicating
-   *                       why the request is handled by a helper app.
+   * @param aMIMEInfo       MIMEInfo object, representing the type of the
+   *                        content that should be handled
+   * @param aFileExtension  The extension we need to append to our temp file,
+   *                        INCLUDING the ".". e.g. .mp3
+   * @param aContentContext dom Window context, as passed to DoContent.
+   * @param aWindowContext  Top level window context used in dialog parenting,
+   *                        as passed to DoContent. This parameter may be null,
+   *                        in which case dialogs will be parented to
+   *                        aContentContext.
+   * @param mExtProtSvc     nsExternalHelperAppService on creation
+   * @param aFileName       The filename to use
+   * @param aReason         A constant from nsIHelperAppLauncherDialog indicating
+   *                        why the request is handled by a helper app.
    */
   nsExternalAppHandler(nsIMIMEInfo * aMIMEInfo, const nsCSubstring& aFileExtension,
+                       nsIInterfaceRequestor * aContentContext,
                        nsIInterfaceRequestor * aWindowContext,
                        nsExternalHelperAppService * aExtProtSvc,
                        const nsAString& aFilename,
@@ -232,8 +242,17 @@ public:
    */
   void DidDivertRequest(nsIRequest *request);
 
+  /**
+   * Apply content conversions if needed.
+   */
+  void MaybeApplyDecodingForExtension(nsIRequest *request);
+
 protected:
   ~nsExternalAppHandler();
+
+  nsIInterfaceRequestor* GetDialogParent() {
+    return mWindowContext ? mWindowContext : mContentContext;
+  }
 
   nsCOMPtr<nsIFile> mTempFile;
   nsCOMPtr<nsIURI> mSourceUrl;
@@ -244,6 +263,16 @@ protected:
    * The MIME Info for this load. Will never be null.
    */
   nsCOMPtr<nsIMIMEInfo> mMimeInfo;
+
+  /**
+   * The dom window associated with this request to handle content.
+   */
+  nsCOMPtr<nsIInterfaceRequestor> mContentContext;
+
+  /**
+   * If set, the parent window helper app dialogs and file pickers
+   * should use in parenting. If null, we use mContentContext.
+   */
   nsCOMPtr<nsIInterfaceRequestor> mWindowContext;
 
   /**

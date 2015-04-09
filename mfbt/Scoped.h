@@ -4,12 +4,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* A number of structures to simplify scope-based RAII management. */
+/* DEPRECATED: Use UniquePtr.h instead. */
 
 #ifndef mozilla_Scoped_h
 #define mozilla_Scoped_h
 
 /*
+ * DEPRECATED: Use UniquePtr.h instead.
+ *
  * Resource Acquisition Is Initialization is a programming idiom used
  * to write robust code that is able to deallocate resources properly,
  * even in presence of execution errors or exceptions that need to be
@@ -23,8 +25,8 @@
  *   |free()| at the end of the scope;
  * - |ScopedDeletePtr| - a container for a pointer, that automatically calls
  *   |delete| at the end of the scope;
- * - |ScopedDeleteArray| - a container for a pointer to an array, that
- *   automatically calls |delete[]| at the end of the scope.
+ *
+ * |ScopedDeleteArray| is removed in favor of |UniquePtr<T[]>|.
  *
  * The general scenario for each of the RAII classes is the following:
  *
@@ -56,7 +58,6 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/GuardObjects.h"
 #include "mozilla/Move.h"
-#include "mozilla/NullPtr.h"
 
 namespace mozilla {
 
@@ -168,8 +169,8 @@ public:
   }
 
 private:
-  explicit Scoped(const Scoped& aValue) MOZ_DELETE;
-  Scoped& operator=(const Scoped& aValue) MOZ_DELETE;
+  explicit Scoped(const Scoped& aValue) = delete;
+  Scoped& operator=(const Scoped& aValue) = delete;
 
 private:
   Resource mValue;
@@ -214,8 +215,8 @@ struct name : public mozilla::Scoped<Traits<Type> >                           \
             MOZ_GUARD_OBJECT_NOTIFIER_PARAM_TO_PARENT)                        \
   {}                                                                          \
 private:                                                                      \
-  explicit name(name&) MOZ_DELETE;                                            \
-  name& operator=(name&) MOZ_DELETE;                                          \
+  explicit name(name&) = delete;                                              \
+  name& operator=(name&) = delete;                                            \
 };
 
 /*
@@ -246,19 +247,6 @@ struct ScopedDeletePtrTraits : public ScopedFreePtrTraits<T>
   static void release(T* aPtr) { delete aPtr; }
 };
 SCOPED_TEMPLATE(ScopedDeletePtr, ScopedDeletePtrTraits)
-
-/*
- * ScopedDeleteArray is a RAII wrapper for pointers that need to be delete[]ed.
- *
- *   struct S { ... };
- *   ScopedDeleteArray<S> foo = new S[42];
- */
-template<typename T>
-struct ScopedDeleteArrayTraits : public ScopedFreePtrTraits<T>
-{
-  static void release(T* aPtr) { delete [] aPtr; }
-};
-SCOPED_TEMPLATE(ScopedDeleteArray, ScopedDeleteArrayTraits)
 
 /*
  * MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE makes it easy to create scoped

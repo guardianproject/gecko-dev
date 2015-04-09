@@ -7,22 +7,33 @@
 #ifndef jit_JitFrameIterator_inl_h
 #define jit_JitFrameIterator_inl_h
 
-#ifdef JS_ION
-
 #include "jit/JitFrameIterator.h"
 
 #include "jit/Bailouts.h"
 #include "jit/BaselineFrame.h"
-#include "jit/IonFrames.h"
+#include "jit/JitFrames.h"
 
 namespace js {
 namespace jit {
 
-inline BaselineFrame *
+inline JitFrameLayout*
+JitProfilingFrameIterator::framePtr()
+{
+    MOZ_ASSERT(!done());
+    return (JitFrameLayout*) fp_;
+}
+
+inline JSScript*
+JitProfilingFrameIterator::frameScript()
+{
+    return ScriptFromCalleeToken(framePtr()->calleeToken());
+}
+
+inline BaselineFrame*
 JitFrameIterator::baselineFrame() const
 {
-    JS_ASSERT(isBaselineJS());
-    return (BaselineFrame *)(fp() - BaselineFrame::FramePointerOffset - BaselineFrame::Size());
+    MOZ_ASSERT(isBaselineJS());
+    return (BaselineFrame*)(fp() - BaselineFrame::FramePointerOffset - BaselineFrame::Size());
 }
 
 template <typename T>
@@ -36,7 +47,5 @@ JitFrameIterator::isExitFrameLayout() const
 
 } // namespace jit
 } // namespace js
-
-#endif // JS_ION
 
 #endif /* jit_JitFrameIterator_inl_h */

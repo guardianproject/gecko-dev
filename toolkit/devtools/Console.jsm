@@ -163,7 +163,7 @@ function stringify(aThing, aAllowNewLines) {
 function debugElement(aElement) {
   return "<" + aElement.tagName +
       (aElement.id ? "#" + aElement.id : "") +
-      (aElement.className ?
+      (aElement.className && aElement.className.split ?
           "." + aElement.className.split(" ").join(" .") :
           "") +
       ">";
@@ -559,10 +559,11 @@ function sendConsoleAPIMessage(aConsole, aLevel, aFrame, aArgs, aOptions = {})
       break;
   }
 
-  Services.obs.notifyObservers(consoleEvent, "console-api-log-event", null);
   let ConsoleAPIStorage = Cc["@mozilla.org/consoleAPI-storage;1"]
                             .getService(Ci.nsIConsoleAPIStorage);
-  ConsoleAPIStorage.recordEvent("jsm", consoleEvent);
+  if (ConsoleAPIStorage) {
+    ConsoleAPIStorage.recordEvent("jsm", null, consoleEvent);
+  }
 }
 
 /**

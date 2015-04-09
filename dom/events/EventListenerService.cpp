@@ -10,7 +10,6 @@
 #include "mozilla/JSEventHandler.h"
 #include "mozilla/Maybe.h"
 #include "nsCOMArray.h"
-#include "nsCxPusher.h"
 #include "nsDOMClassInfoID.h"
 #include "nsIXPConnect.h"
 #include "nsJSUtils.h"
@@ -90,7 +89,7 @@ EventListenerInfo::GetJSVal(JSContext* aCx,
     if (!object) {
       return false;
     }
-    aAc.construct(aCx, object);
+    aAc.emplace(aCx, object);
     aJSVal.setObject(*object);
     return true;
   }
@@ -100,7 +99,7 @@ EventListenerInfo::GetJSVal(JSContext* aCx,
     JS::Handle<JSObject*> handler =
       jsHandler->GetTypedEventHandler().Ptr()->Callable();
     if (handler) {
-      aAc.construct(aCx, handler);
+      aAc.emplace(aCx, handler);
       aJSVal.setObject(*handler);
       return true;
     }
@@ -153,7 +152,7 @@ EventListenerService::GetListenerInfoFor(nsIDOMEventTarget* aEventTarget,
 
   *aOutArray =
     static_cast<nsIEventListenerInfo**>(
-      nsMemory::Alloc(sizeof(nsIEventListenerInfo*) * count));
+      moz_xmalloc(sizeof(nsIEventListenerInfo*) * count));
   NS_ENSURE_TRUE(*aOutArray, NS_ERROR_OUT_OF_MEMORY);
 
   for (int32_t i = 0; i < count; ++i) {
@@ -172,18 +171,18 @@ EventListenerService::GetEventTargetChainFor(nsIDOMEventTarget* aEventTarget,
   *aOutArray = nullptr;
   NS_ENSURE_ARG(aEventTarget);
   WidgetEvent event(true, NS_EVENT_NULL);
-  nsCOMArray<EventTarget> targets;
+  nsTArray<EventTarget*> targets;
   nsresult rv = EventDispatcher::Dispatch(aEventTarget, nullptr, &event,
                                           nullptr, nullptr, nullptr, &targets);
   NS_ENSURE_SUCCESS(rv, rv);
-  int32_t count = targets.Count();
+  int32_t count = targets.Length();
   if (count == 0) {
     return NS_OK;
   }
 
   *aOutArray =
     static_cast<nsIDOMEventTarget**>(
-      nsMemory::Alloc(sizeof(nsIDOMEventTarget*) * count));
+      moz_xmalloc(sizeof(nsIDOMEventTarget*) * count));
   NS_ENSURE_TRUE(*aOutArray, NS_ERROR_OUT_OF_MEMORY);
 
   for (int32_t i = 0; i < count; ++i) {

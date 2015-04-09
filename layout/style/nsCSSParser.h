@@ -41,15 +41,16 @@ class StyleRule;
 
 class MOZ_STACK_CLASS nsCSSParser {
 public:
-  nsCSSParser(mozilla::css::Loader* aLoader = nullptr,
-              mozilla::CSSStyleSheet* aSheet = nullptr);
+  explicit nsCSSParser(mozilla::css::Loader* aLoader = nullptr,
+                       mozilla::CSSStyleSheet* aSheet = nullptr);
   ~nsCSSParser();
 
+  static void Startup();
   static void Shutdown();
 
 private:
-  nsCSSParser(nsCSSParser const&) MOZ_DELETE;
-  nsCSSParser& operator=(nsCSSParser const&) MOZ_DELETE;
+  nsCSSParser(nsCSSParser const&) = delete;
+  nsCSSParser& operator=(nsCSSParser const&) = delete;
 
 public:
   // Set a style sheet for the parser to fill in. The style sheet must
@@ -121,25 +122,25 @@ public:
   // particular, units may be omitted from <length>.  The 'aIsSVGMode'
   // argument controls this quirk.  Note that this *only* applies to
   // mapped attributes, not inline styles or full style sheets in SVG.
-  nsresult ParseProperty(const nsCSSProperty aPropID,
-                         const nsAString&    aPropValue,
-                         nsIURI*             aSheetURL,
-                         nsIURI*             aBaseURL,
-                         nsIPrincipal*       aSheetPrincipal,
-                         mozilla::css::Declaration* aDeclaration,
-                         bool*               aChanged,
-                         bool                aIsImportant,
-                         bool                aIsSVGMode = false);
+  void ParseProperty(const nsCSSProperty aPropID,
+                     const nsAString&    aPropValue,
+                     nsIURI*             aSheetURL,
+                     nsIURI*             aBaseURL,
+                     nsIPrincipal*       aSheetPrincipal,
+                     mozilla::css::Declaration* aDeclaration,
+                     bool*               aChanged,
+                     bool                aIsImportant,
+                     bool                aIsSVGMode = false);
 
   // The same as ParseProperty but for a variable.
-  nsresult ParseVariable(const nsAString&    aVariableName,
-                         const nsAString&    aPropValue,
-                         nsIURI*             aSheetURL,
-                         nsIURI*             aBaseURL,
-                         nsIPrincipal*       aSheetPrincipal,
-                         mozilla::css::Declaration* aDeclaration,
-                         bool*               aChanged,
-                         bool                aIsImportant);
+  void ParseVariable(const nsAString&    aVariableName,
+                     const nsAString&    aPropValue,
+                     nsIURI*             aSheetURL,
+                     nsIURI*             aBaseURL,
+                     nsIPrincipal*       aSheetPrincipal,
+                     mozilla::css::Declaration* aDeclaration,
+                     bool*               aChanged,
+                     bool                aIsImportant);
   /**
    * Parse aBuffer into a media list |aMediaList|, which must be
    * non-null, replacing its current contents.  If aHTMLMode is true,
@@ -191,7 +192,8 @@ public:
   bool ParseColorString(const nsSubstring& aBuffer,
                         nsIURI*            aURL,
                         uint32_t           aLineNumber,
-                        nsCSSValue&        aValue);
+                        nsCSSValue&        aValue,
+                        bool               aSuppressErrors = false);
 
   /**
    * Parse aBuffer into a selector list.  On success, caller must
@@ -295,6 +297,17 @@ public:
                               nsIURI* aBaseURL,
                               nsIPrincipal* aSheetPrincipal,
                               nsCSSValue& aValue);
+
+  bool ParseFontFaceDescriptor(nsCSSFontDesc aDescID,
+                               const nsAString& aBuffer,
+                               nsIURI* aSheetURL,
+                               nsIURI* aBaseURL,
+                               nsIPrincipal* aSheetPrincipal,
+                               nsCSSValue& aValue);
+
+  // Check whether a given value can be applied to a property.
+  bool IsValueValidForProperty(const nsCSSProperty aPropID,
+                               const nsAString&    aPropValue);
 
 protected:
   // This is a CSSParserImpl*, but if we expose that type name in this

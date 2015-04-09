@@ -54,6 +54,7 @@ const RX_PSEUDO = /\s*:?:([\w-]+)(\(?\)?)\s*/g;
 // on the worker thread, where Cu is not available.
 if (Cu) {
   Cu.importGlobalProperties(['CSS']);
+  Cu.import("resource://gre/modules/devtools/LayoutHelpers.jsm");
 }
 
 function CssLogic()
@@ -129,6 +130,9 @@ CssLogic.prototype = {
   _matchedRules: null,
   _matchedSelectors: null,
 
+  // Cached keyframes rules in all stylesheets
+  _keyframesRules: null,
+
   /**
    * Reset various properties
    */
@@ -141,6 +145,7 @@ CssLogic.prototype = {
     this._sheetsCached = false;
     this._matchedRules = null;
     this._matchedSelectors = null;
+    this._keyframesRules = [];
   },
 
   /**
@@ -156,6 +161,10 @@ CssLogic.prototype = {
       this.viewedDocument = null;
       this._computedStyle = null;
       this.reset();
+      return;
+    }
+
+    if (aViewedElement === this.viewedElement) {
       return;
     }
 
@@ -175,8 +184,16 @@ CssLogic.prototype = {
 
     this._matchedRules = null;
     this._matchedSelectors = null;
-    let win = this.viewedDocument.defaultView;
-    this._computedStyle = win.getComputedStyle(this.viewedElement, "");
+    this._computedStyle = CssLogic.getComputedStyle(this.viewedElement);
+  },
+
+  /**
+   * Get the values of all the computed CSS properties for the highlighted
+   * element.
+   * @returns {object} The computed CSS properties for a selected element
+   */
+  get computedStyle() {
+    return this._computedStyle;
   },
 
   /**
@@ -270,7 +287,7 @@ CssLogic.prototype = {
    * Cache a stylesheet if it falls within the requirements: if it's enabled,
    * and if the @media is allowed. This method also walks through the stylesheet
    * cssRules to find @imported rules, to cache the stylesheets of those rules
-   * as well.
+   * as well. In addition, the @keyframes rules in the stylesheet are cached.
    *
    * @private
    * @param {CSSStyleSheet} aDomSheet the CSSStyleSheet object to cache.
@@ -291,13 +308,15 @@ CssLogic.prototype = {
     if (cssSheet._passId != this._passId) {
       cssSheet._passId = this._passId;
 
-      // Find import rules.
-      Array.prototype.forEach.call(aDomSheet.cssRules, function(aDomRule) {
+      // Find import and keyframes rules.
+      for (let aDomRule of aDomSheet.cssRules) {
         if (aDomRule.type == Ci.nsIDOMCSSRule.IMPORT_RULE && aDomRule.styleSheet &&
             this.mediaMatches(aDomRule)) {
           this._cacheSheet(aDomRule.styleSheet);
+        } else if (aDomRule.type == Ci.nsIDOMCSSRule.KEYFRAMES_RULE) {
+          this._keyframesRules.push(aDomRule);
         }
-      }, this);
+      }
     }
   },
 
@@ -320,6 +339,19 @@ CssLogic.prototype = {
     }, this);
 
     return sheets;
+  },
+
+  /**
+   * Retrieve the list of keyframes rules in the document.
+   *
+   * @ return {array} the list of keyframes rules in the document.
+   */
+  get keyframesRules()
+  {
+    if (!this._sheetsCached) {
+      this._cacheSheets();
+    }
+    return this._keyframesRules;
   },
 
   /**
@@ -587,14 +619,19 @@ CssLogic.prototype = {
                    CssLogic.STATUS.MATCHED : CssLogic.STATUS.PARENT_MATCH;
 
       try {
-        domRules = domUtils.getCSSStyleRules(element);
+        // Handle finding rules on pseudo by reading style rules
+        // on the parent node with proper pseudo arg to getCSSStyleRules.
+        let {bindingElement, pseudo} = CssLogic.getBindingElementAndPseudo(element);
+        domRules = domUtils.getCSSStyleRules(bindingElement, pseudo);
       } catch (ex) {
         Services.console.
           logStringMessage("CL__buildMatchedRules error: " + ex);
         continue;
       }
 
-      for (let i = 0, n = domRules.Count(); i < n; i++) {
+      // getCSSStyleRules can return null with a shadow DOM element.
+      let numDomRules = domRules ? domRules.Count() : 0;
+      for (let i = 0; i < numDomRules; i++) {
         let domRule = domRules.GetElementAt(i);
         if (domRule.type !== Ci.nsIDOMCSSRule.STYLE_RULE) {
           continue;
@@ -620,7 +657,6 @@ CssLogic.prototype = {
         this._matchedRules.push([rule, status]);
       }
 
-
       // Add element.style information.
       if (element.style && element.style.length > 0) {
         let rule = new CssRule(null, { style: element.style }, element);
@@ -644,7 +680,7 @@ CssLogic.prototype = {
     let mediaText = aDomObject.media.mediaText;
     return !mediaText || this.viewedDocument.defaultView.
                          matchMedia(mediaText).matches;
-   },
+  },
 };
 
 /**
@@ -726,6 +762,56 @@ CssLogic.getSelectors = function CssLogic_getSelectors(aDOMRule)
   }
   return selectors;
 }
+
+/**
+ * Given a node, check to see if it is a ::before or ::after element.
+ * If so, return the node that is accessible from within the document
+ * (the parent of the anonymous node), along with which pseudo element
+ * it was.  Otherwise, return the node itself.
+ *
+ * @returns {Object}
+ *            - {DOMNode} node The non-anonymous node
+ *            - {string} pseudo One of ':before', ':after', or null.
+ */
+CssLogic.getBindingElementAndPseudo = function(node)
+{
+  let bindingElement = node;
+  let pseudo = null;
+  if (node.nodeName == "_moz_generated_content_before") {
+    bindingElement = node.parentNode;
+    pseudo = ":before";
+  } else if (node.nodeName == "_moz_generated_content_after") {
+    bindingElement = node.parentNode;
+    pseudo = ":after";
+  }
+  return {
+    bindingElement: bindingElement,
+    pseudo: pseudo
+  };
+};
+
+
+/**
+ * Get the computed style on a node.  Automatically handles reading
+ * computed styles on a ::before/::after element by reading on the
+ * parent node with the proper pseudo argument.
+ *
+ * @param {Node}
+ * @returns {CSSStyleDeclaration}
+ */
+CssLogic.getComputedStyle = function(node)
+{
+  if (!node ||
+      Cu.isDeadWrapper(node) ||
+      node.nodeType !== Ci.nsIDOMNode.ELEMENT_NODE ||
+      !node.ownerDocument ||
+      !node.ownerDocument.defaultView) {
+    return null;
+  }
+
+  let {bindingElement, pseudo} = CssLogic.getBindingElementAndPseudo(node);
+  return node.ownerDocument.defaultView.getComputedStyle(bindingElement, pseudo);
+};
 
 /**
  * Memonized lookup of a l10n string from a string bundle.
@@ -833,8 +919,9 @@ function positionInNodeList(element, nodeList) {
  * and ele.ownerDocument.querySelectorAll(reply).length === 1
  */
 CssLogic.findCssSelector = function CssLogic_findCssSelector(ele) {
+  ele = LayoutHelpers.getRootBindingParent(ele);
   var document = ele.ownerDocument;
-  if (!document.contains(ele)) {
+  if (!document || !document.contains(ele)) {
     throw new Error('findCssSelector received element not inside document');
   }
 
@@ -1479,6 +1566,14 @@ CssSelector.prototype = {
    */
   get specificity()
   {
+    if (this.elementStyle) {
+      // We can't ask specificity from DOMUtils as element styles don't provide
+      // CSSStyleRule interface DOMUtils expect. However, specificity of element
+      // style is constant, 1,0,0,0 or 0x01000000, just return the constant
+      // directly. @see http://www.w3.org/TR/CSS2/cascade.html#specificity
+      return 0x01000000;
+    }
+
     if (this._specificity) {
       return this._specificity;
     }
@@ -1535,9 +1630,9 @@ CssPropertyInfo.prototype = {
    */
   get value()
   {
-    if (!this._value && this._cssLogic._computedStyle) {
+    if (!this._value && this._cssLogic.computedStyle) {
       try {
-        this._value = this._cssLogic._computedStyle.getPropertyValue(this.property);
+        this._value = this._cssLogic.computedStyle.getPropertyValue(this.property);
       } catch (ex) {
         Services.console.logStringMessage('Error reading computed style for ' +
           this.property);

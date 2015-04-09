@@ -10,20 +10,18 @@ import os
 import shutil
 import sys
 import which
+import subprocess
 
-from distutils.version import StrictVersion
+from distutils.version import LooseVersion
 
 from configobj import ConfigObjError
 from StringIO import StringIO
 
 from mozversioncontrol import get_hg_version
-from mozversioncontrol.repoupdate import (
-    update_mercurial_repo,
-    update_git_repo,
-)
 
+from .update import MercurialUpdater
 from .config import (
-    HOST_FINGERPRINTS,
+    HgIncludeException,
     MercurialConfig,
 )
 
@@ -42,7 +40,7 @@ are up to date and you won't have to do anything.
 To begin, press the enter/return key.
 '''.strip()
 
-OLDEST_NON_LEGACY_VERSION = StrictVersion('3.0')
+OLDEST_NON_LEGACY_VERSION = LooseVersion('3.0')
 LEGACY_MERCURIAL = '''
 You are running an out of date Mercurial client (%s).
 
@@ -108,7 +106,7 @@ Your Mercurial should now be properly configured and recommended extensions
 should be up to date!
 '''.strip()
 
-REVIEWBOARD_MINIMUM_VERSION = StrictVersion('3.0.1')
+REVIEWBOARD_MINIMUM_VERSION = LooseVersion('3.0.1')
 
 REVIEWBOARD_INCOMPATIBLE = '''
 Your Mercurial is too old to use the reviewboard extension, which is necessary
@@ -128,6 +126,39 @@ functionality will not be enabled or you will be prompted for your
 Bugzilla credentials when they are needed.
 '''.lstrip()
 
+BZPOST_MINIMUM_VERSION = LooseVersion('3.0')
+
+BZPOST_INFO = '''
+The bzpost extension automatically records the URLs of pushed commits to
+referenced Bugzilla bugs after push.
+
+Would you like to activate bzpost
+'''.strip()
+
+FIREFOXTREE_MINIMUM_VERSION = LooseVersion('3.0')
+
+FIREFOXTREE_INFO = '''
+The firefoxtree extension makes interacting with the multiple Firefox
+repositories easier:
+
+* Aliases for common trees are pre-defined. e.g. `hg pull central`
+* Pulling from known Firefox trees will create "remote refs" appearing as
+  tags. e.g. pulling from fx-team will produce a "fx-team" tag.
+* The `hg fxheads` command will list the heads of all pulled Firefox repos
+  for easy reference.
+* `hg push` will limit itself to pushing a single head when pushing to
+  Firefox repos.
+* A pre-push hook will prevent you from pushing multiple heads to known
+  Firefox repos. This acts quicker than a server-side hook.
+
+The firefoxtree extension is *strongly* recommended if you:
+
+a) aggregate multiple Firefox repositories into a single local repo
+b) perform head/bookmark-based development (as opposed to mq)
+
+Would you like to activate firefoxtree
+'''.strip()
+
 class MercurialSetupWizard(object):
     """Command-line wizard to help users configure Mercurial."""
 
@@ -138,6 +169,7 @@ class MercurialSetupWizard(object):
         self.ext_dir = os.path.join(self.state_dir, 'mercurial', 'extensions')
         self.vcs_tools_dir = os.path.join(self.state_dir, 'version-control-tools')
         self.update_vcs_tools = False
+        self.updater = MercurialUpdater(state_dir)
 
     def run(self, config_paths):
         try:
@@ -157,9 +189,14 @@ class MercurialSetupWizard(object):
         try:
             c = MercurialConfig(config_paths)
         except ConfigObjError as e:
-            print('Error importing existing Mercurial config!\n'
-                  '%s\n'
-                  'If using quotes, they must wrap the entire string.' % e)
+            print('Error importing existing Mercurial config!\n')
+            for error in e.errors:
+                print(error.message)
+
+            return 1
+        except HgIncludeException as e:
+            print(e.message)
+
             return 1
 
         print(INITIAL_MESSAGE)
@@ -232,12 +269,18 @@ class MercurialSetupWizard(object):
                     'projects',
                     path=p)
 
+        if hg_version >= BZPOST_MINIMUM_VERSION:
+            self.prompt_external_extension(c, 'bzpost', BZPOST_INFO)
+
+        if hg_version >= FIREFOXTREE_MINIMUM_VERSION:
+            self.prompt_external_extension(c, 'firefoxtree', FIREFOXTREE_INFO)
+
         if 'mq' in c.extensions:
             self.prompt_external_extension(c, 'mqext', MQEXT_INFO,
                                            os.path.join(self.ext_dir, 'mqext'))
 
             if 'mqext' in c.extensions:
-                self.update_mercurial_repo(
+                self.updater.update_mercurial_repo(
                     hg,
                     'https://bitbucket.org/sfink/mqext',
                     os.path.join(self.ext_dir, 'mqext'),
@@ -260,7 +303,7 @@ class MercurialSetupWizard(object):
                     print('Configured qnew to set patch author by default.')
                     print('')
 
-        if 'reviewboard' in c.extensions:
+        if 'reviewboard' in c.extensions or 'bzpost' in c.extensions:
             bzuser, bzpass = c.get_bugzilla_credentials()
 
             if not bzuser or not bzpass:
@@ -278,7 +321,7 @@ class MercurialSetupWizard(object):
                 c.set_bugzilla_credentials(bzuser, bzpass)
 
         if self.update_vcs_tools:
-            self.update_mercurial_repo(
+            self.updater.update_mercurial_repo(
                 hg,
                 'https://hg.mozilla.org/hgcustom/version-control-tools',
                 self.vcs_tools_dir,
@@ -339,13 +382,29 @@ class MercurialSetupWizard(object):
             c.activate_extension(name)
             print('Activated %s extension.\n' % name)
 
+    def can_use_extension(self, c, name, path=None):
+        # Load extension to hg and search stdout for printed exceptions
+        if not path:
+            path = os.path.join(self.vcs_tools_dir, 'hgext', name)
+        result = subprocess.check_output(['hg',
+             '--config', 'extensions.testmodule=%s' % path,
+             '--config', 'ui.traceback=true'],
+            stderr=subprocess.STDOUT)
+        return b"Traceback" not in result
+
     def prompt_external_extension(self, c, name, prompt_text, path=None):
         # Ask the user if the specified extension should be enabled. Defaults
         # to treating the extension as one in version-control-tools/hgext/
         # in a directory with the same name as the extension and thus also
         # flagging the version-control-tools repo as needing an update.
         if name not in c.extensions:
+            if not self.can_use_extension(c, name, path):
+                return
+            print(name)
+            print('=' * len(name))
+            print('')
             if not self._prompt_yn(prompt_text):
+                print('')
                 return
             print('Activated %s extension.\n' % name)
         if not path:
@@ -353,30 +412,11 @@ class MercurialSetupWizard(object):
             self.update_vcs_tools = True
         c.activate_extension(name, path)
 
-    def update_mercurial_repo(self, hg, url, dest, branch, msg):
-        # We always pass the host fingerprints that we "know" to be canonical
-        # because the existing config may have outdated fingerprints and this
-        # may cause Mercurial to abort.
-        return self._update_repo(hg, url, dest, branch, msg,
-            update_mercurial_repo, hostfingerprints=HOST_FINGERPRINTS)
-
-    def update_git_repo(self, git, url, dest, ref, msg):
-        return self._update_repo(git, url, dest, ref, msg, update_git_repo)
-
-    def _update_repo(self, binary, url, dest, branch, msg, fn, *args, **kwargs):
-        print('=' * 80)
-        print(msg)
-        try:
-            fn(binary, url, dest, branch, *args, **kwargs)
-        finally:
-            print('=' * 80)
-            print('')
-
     def _prompt(self, msg, allow_empty=False):
         print(msg)
 
         while True:
-            response = raw_input()
+            response = raw_input().decode('utf-8')
 
             if response:
                 return response

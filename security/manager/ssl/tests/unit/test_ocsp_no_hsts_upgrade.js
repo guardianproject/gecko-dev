@@ -26,7 +26,7 @@ function run_test() {
     response.setHeader("Content-Type", "application/ocsp-response");
     response.write(goodOCSPResponse);
   });
-  ocspResponder.start(8080);
+  ocspResponder.start(8888);
 
   // ocsp-stapling-none.example.com does not staple an OCSP response in the
   // handshake, so the revocation checking code will attempt to fetch one.
@@ -34,7 +34,7 @@ function run_test() {
   // (as added in the setup of this test, below), a buggy implementation would
   // upgrade the OCSP request to HTTPS. We specifically prevent this. This
   // test demonstrates that our implementation is correct in this regard.
-  add_connection_test("ocsp-stapling-none.example.com", Cr.NS_OK);
+  add_connection_test("ocsp-stapling-none.example.com", PRErrorCodeSuccess);
   add_test(function () { run_next_test(); });
 
   add_test(function () { ocspResponder.stop(run_next_test); });
@@ -42,8 +42,9 @@ function run_test() {
   let SSService = Cc["@mozilla.org/ssservice;1"]
                     .getService(Ci.nsISiteSecurityService);
   let uri = Services.io.newURI("http://localhost", null, null);
+  let sslStatus = new FakeSSLStatus();
   SSService.processHeader(Ci.nsISiteSecurityService.HEADER_HSTS, uri,
-                          "max-age=10000", 0);
+                          "max-age=10000", sslStatus, 0);
   do_check_true(SSService.isSecureHost(Ci.nsISiteSecurityService.HEADER_HSTS,
                                        "localhost", 0));
 

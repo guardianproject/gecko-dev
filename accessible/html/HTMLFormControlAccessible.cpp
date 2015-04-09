@@ -15,7 +15,6 @@
 
 #include "nsContentList.h"
 #include "mozilla/dom/HTMLInputElement.h"
-#include "nsIAccessibleRelation.h"
 #include "nsIDOMNSEditableElement.h"
 #include "nsIDOMHTMLTextAreaElement.h"
 #include "nsIEditor.h"
@@ -51,33 +50,28 @@ HTMLCheckboxAccessible::ActionCount()
   return 1;
 }
 
-NS_IMETHODIMP
-HTMLCheckboxAccessible::GetActionName(uint8_t aIndex, nsAString& aName)
+void
+HTMLCheckboxAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 {
   if (aIndex == eAction_Click) {    // 0 is the magic value for default action
-    // cycle, check or uncheck
     uint64_t state = NativeState();
-
     if (state & states::CHECKED)
-      aName.AssignLiteral("uncheck"); 
+      aName.AssignLiteral("uncheck");
     else if (state & states::MIXED)
-      aName.AssignLiteral("cycle"); 
+      aName.AssignLiteral("cycle");
     else
-      aName.AssignLiteral("check"); 
-
-    return NS_OK;
+      aName.AssignLiteral("check");
   }
-  return NS_ERROR_INVALID_ARG;
 }
 
-NS_IMETHODIMP
+bool
 HTMLCheckboxAccessible::DoAction(uint8_t aIndex)
 {
   if (aIndex != 0)
-    return NS_ERROR_INVALID_ARG;
+    return false;
 
   DoCommand();
-  return NS_OK;
+  return true;
 }
 
 uint64_t
@@ -95,7 +89,7 @@ HTMLCheckboxAccessible::NativeState()
 
   if (input->Checked())
     return state | states::CHECKED;
-           
+ 
   return state;
 }
 
@@ -189,24 +183,21 @@ HTMLButtonAccessible::ActionCount()
   return 1;
 }
 
-NS_IMETHODIMP
-HTMLButtonAccessible::GetActionName(uint8_t aIndex, nsAString& aName)
+void
+HTMLButtonAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 {
-  if (aIndex == eAction_Click) {
-    aName.AssignLiteral("press"); 
-    return NS_OK;
-  }
-  return NS_ERROR_INVALID_ARG;
+  if (aIndex == eAction_Click)
+    aName.AssignLiteral("press");
 }
 
-NS_IMETHODIMP
+bool
 HTMLButtonAccessible::DoAction(uint8_t aIndex)
 {
   if (aIndex != eAction_Click)
-    return NS_ERROR_INVALID_ARG;
+    return false;
 
   DoCommand();
-  return NS_OK;
+  return true;
 }
 
 uint64_t
@@ -259,7 +250,7 @@ HTMLButtonAccessible::NativeName(nsString& aName)
   // type="submit"/"reset"/"image" elements.
 
   ENameValueFlag nameFlag = Accessible::NativeName(aName);
-  if (!aName.IsEmpty() || mContent->Tag() != nsGkAtoms::input ||
+  if (!aName.IsEmpty() || !mContent->IsHTMLElement(nsGkAtoms::input) ||
       !mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
                              nsGkAtoms::image, eCaseMatters))
     return nameFlag;
@@ -292,10 +283,8 @@ HTMLTextFieldAccessible::
   mType = eHTMLTextFieldType;
 }
 
-NS_IMPL_ISUPPORTS_INHERITED(HTMLTextFieldAccessible,
-                            Accessible,                            
-                            nsIAccessibleText,
-                            nsIAccessibleEditableText)
+NS_IMPL_ISUPPORTS_INHERITED0(HTMLTextFieldAccessible,
+                             HyperTextAccessible)
 
 role
 HTMLTextFieldAccessible::NativeRole()
@@ -317,8 +306,13 @@ HTMLTextFieldAccessible::NativeAttributes()
   // Expose type for text input elements as it gives some useful context,
   // especially for mobile.
   nsAutoString type;
-  if (mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::type, type))
+  if (mContent->GetAttr(kNameSpaceID_None, nsGkAtoms::type, type)) {
     nsAccUtils::SetAccAttr(attributes, nsGkAtoms::textInputType, type);
+    if (!mRoleMapEntry && type.EqualsLiteral("search")) {
+      nsAccUtils::SetAccAttr(attributes, nsGkAtoms::xmlroles,
+                             NS_LITERAL_STRING("searchbox"));
+    }
+  }
 
   return attributes.forget();
 }
@@ -445,23 +439,21 @@ HTMLTextFieldAccessible::ActionCount()
   return 1;
 }
 
-NS_IMETHODIMP
-HTMLTextFieldAccessible::GetActionName(uint8_t aIndex, nsAString& aName)
+void
+HTMLTextFieldAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 {
-  if (aIndex == eAction_Click) {
+  if (aIndex == eAction_Click)
     aName.AssignLiteral("activate");
-    return NS_OK;
-  }
-  return NS_ERROR_INVALID_ARG;
 }
 
-NS_IMETHODIMP
+bool
 HTMLTextFieldAccessible::DoAction(uint8_t aIndex)
 {
-  if (aIndex == 0)
-    return TakeFocus();
+  if (aIndex != 0)
+    return false;
 
-  return NS_ERROR_INVALID_ARG;
+  TakeFocus();
+  return true;
 }
 
 already_AddRefed<nsIEditor>
@@ -707,7 +699,7 @@ HTMLGroupboxAccessible::NativeRole()
 }
 
 nsIContent*
-HTMLGroupboxAccessible::GetLegend()
+HTMLGroupboxAccessible::GetLegend() const
 {
   for (nsIContent* legendContent = mContent->GetFirstChild(); legendContent;
        legendContent = legendContent->GetNextSibling()) {
@@ -770,12 +762,6 @@ HTMLLegendAccessible::RelationByType(RelationType aType)
   return rel;
 }
 
-role
-HTMLLegendAccessible::NativeRole()
-{
-  return roles::LABEL;
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 // HTMLFigureAccessible
 ////////////////////////////////////////////////////////////////////////////////
@@ -784,24 +770,6 @@ HTMLFigureAccessible::
   HTMLFigureAccessible(nsIContent* aContent, DocAccessible* aDoc) :
   HyperTextAccessibleWrap(aContent, aDoc)
 {
-}
-
-already_AddRefed<nsIPersistentProperties>
-HTMLFigureAccessible::NativeAttributes()
-{
-  nsCOMPtr<nsIPersistentProperties> attributes =
-    HyperTextAccessibleWrap::NativeAttributes();
-
-  // Expose figure xml-role.
-  nsAccUtils::SetAccAttr(attributes, nsGkAtoms::xmlroles,
-                         NS_LITERAL_STRING("figure"));
-  return attributes.forget();
-}
-
-role
-HTMLFigureAccessible::NativeRole()
-{
-  return roles::FIGURE;
 }
 
 ENameValueFlag
@@ -850,12 +818,6 @@ HTMLFigcaptionAccessible::
   HTMLFigcaptionAccessible(nsIContent* aContent, DocAccessible* aDoc) :
   HyperTextAccessibleWrap(aContent, aDoc)
 {
-}
-
-role
-HTMLFigcaptionAccessible::NativeRole()
-{
-  return roles::CAPTION;
 }
 
 Relation

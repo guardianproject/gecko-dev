@@ -18,7 +18,7 @@ namespace mozilla {
  * This class is intended for use by the component manager and the generic
  * module.
  */
-class GenericFactory MOZ_FINAL : public nsIFactory
+class GenericFactory final : public nsIFactory
 {
   ~GenericFactory() {}
 
@@ -28,7 +28,7 @@ public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIFACTORY
 
-  GenericFactory(ConstructorProcPtr aCtor)
+  explicit GenericFactory(ConstructorProcPtr aCtor)
     : mCtor(aCtor)
   {
     NS_ASSERTION(mCtor, "GenericFactory with no constructor");

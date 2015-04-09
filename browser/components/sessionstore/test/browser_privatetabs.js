@@ -30,8 +30,8 @@ add_task(function() {
     yield promiseBrowserLoaded(tab2.linkedBrowser);
 
     info("Flush to make sure chrome received all data.");
-    SyncHandlers.get(tab1.linkedBrowser).flush();
-    SyncHandlers.get(tab2.linkedBrowser).flush();
+    TabState.flush(tab1.linkedBrowser);
+    TabState.flush(tab2.linkedBrowser);
 
     info("Checking out state");
     let state = yield promiseRecoveryFileContents();
@@ -65,12 +65,10 @@ add_task(function() {
 
 add_task(function () {
   const FRAME_SCRIPT = "data:," +
-    "docShell.QueryInterface%28Ci.nsILoadContext%29.usePrivateBrowsing%3Dtrue";
+    "docShell.QueryInterface%28Components.interfaces.nsILoadContext%29.usePrivateBrowsing%3Dtrue";
 
   // Clear the list of closed windows.
-  while (ss.getClosedWindowCount()) {
-    ss.forgetClosedWindow(0);
-  }
+  forgetClosedWindows();
 
   // Create a new window to attach our frame script to.
   let win = yield promiseNewWindowLoaded();
@@ -81,7 +79,7 @@ add_task(function () {
   let tab = win.gBrowser.addTab("about:mozilla");
   let browser = tab.linkedBrowser;
   yield promiseBrowserLoaded(browser);
-  SyncHandlers.get(browser).flush();
+  TabState.flush(browser);
 
   // Check that we consider the tab as private.
   let state = JSON.parse(ss.getTabState(tab));
@@ -92,13 +90,13 @@ add_task(function () {
   is(ss.getClosedTabCount(win), 0, "no tabs to restore");
 
   // Create a new tab in the new window that will load the frame script.
-  let tab = win.gBrowser.addTab("about:mozilla");
-  let browser = tab.linkedBrowser;
+  tab = win.gBrowser.addTab("about:mozilla");
+  browser = tab.linkedBrowser;
   yield promiseBrowserLoaded(browser);
-  SyncHandlers.get(browser).flush();
+  TabState.flush(browser);
 
   // Check that we consider the tab as private.
-  let state = JSON.parse(ss.getTabState(tab));
+  state = JSON.parse(ss.getTabState(tab));
   ok(state.isPrivate, "tab considered private");
 
   // Check that all private tabs are removed when the non-private
@@ -109,9 +107,7 @@ add_task(function () {
 
 add_task(function () {
   // Clear the list of closed windows.
-  while (ss.getClosedWindowCount()) {
-    ss.forgetClosedWindow(0);
-  }
+  forgetClosedWindows();
 
   // Create a new window to attach our frame script to.
   let win = yield promiseNewWindowLoaded({private: true});
@@ -120,7 +116,7 @@ add_task(function () {
   let tab = win.gBrowser.addTab("about:mozilla");
   let browser = tab.linkedBrowser;
   yield promiseBrowserLoaded(browser);
-  SyncHandlers.get(browser).flush();
+  TabState.flush(browser);
 
   // Check that we consider the tab as private.
   let state = JSON.parse(ss.getTabState(tab));

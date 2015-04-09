@@ -58,11 +58,7 @@ var stopOnError;
 var findAndRunTests;
 
 // Combined information from all test runs.
-var results = {
-  passed: 0,
-  failed: 0,
-  testRuns: []
-};
+var results;
 
 // A list of the compartments and windows loaded after startup
 var startLeaks;
@@ -164,8 +160,8 @@ function reportMemoryUsage() {
     mgr.getReportsForThisProcess(logReporter, null, /* anonymize = */ false);
 
     var weakrefs = [info.weakref.get()
-                    for each (info in memory.getObjects())];
-    weakrefs = [weakref for each (weakref in weakrefs) if (weakref)];
+                    for (info of memory.getObjects())];
+    weakrefs = [weakref for (weakref of weakrefs) if (weakref)];
     print("Tracked memory objects in testing sandbox: " + weakrefs.length + "\n");
   }));
 }
@@ -227,7 +223,7 @@ function cleanup() {
 
     if (profileMemory) {
       gWeakrefInfo = [{ weakref: info.weakref, bin: info.bin }
-                      for each (info in memory.getObjects())];
+                      for (info of memory.getObjects())];
     }
 
     loader.unload();
@@ -253,6 +249,8 @@ function cleanup() {
     consoleListener.errorsLogged = 0;
     loader = null;
 
+    consoleListener.unregister();
+
     memory.gc();
   }
   catch (e) {
@@ -261,7 +259,7 @@ function cleanup() {
     console.exception(e);
   };
 
-  setTimeout(require('@test/options').checkMemory ? checkMemory : showResults, 1);
+  setTimeout(require("./options").checkMemory ? checkMemory : showResults, 1);
 
   // dump the coverobject
   if (Object.keys(coverObject).length){
@@ -283,7 +281,7 @@ function getPotentialLeaks() {
   memory.gc();
 
   // Things we can assume are part of the platform and so aren't leaks
-  let WHITELIST_BASE_URLS = [
+  let GOOD_BASE_URLS = [
     "chrome://",
     "resource:///",
     "resource://app/",
@@ -304,7 +302,7 @@ function getPotentialLeaks() {
   uri = chromeReg.convertChromeURL(uri);
   let spec = uri.spec;
   let pos = spec.indexOf("!/");
-  WHITELIST_BASE_URLS.push(spec.substring(0, pos + 2));
+  GOOD_BASE_URLS.push(spec.substring(0, pos + 2));
 
   let zoneRegExp = new RegExp("^explicit/js-non-window/zones/zone[^/]+/compartment\\((.+)\\)");
   let compartmentRegexp = new RegExp("^explicit/js-non-window/compartments/non-window-global/compartment\\((.+)\\)/");
@@ -316,9 +314,10 @@ function getPotentialLeaks() {
     if (!item.location)
       return false;
 
-    for (let whitelist of WHITELIST_BASE_URLS) {
-      if (item.location.substring(0, whitelist.length) == whitelist)
+    for (let url of GOOD_BASE_URLS) {
+      if (item.location.substring(0, url.length) == url) {
         return false;
+      }
     }
 
     return true;
@@ -342,7 +341,7 @@ function getPotentialLeaks() {
       let item = {
         path: matches[1],
         principal: details[1],
-        location: details[2] ? details[2].replace("\\", "/", "g") : undefined,
+        location: details[2] ? details[2].replace(/\\/g, "/") : undefined,
         source: details[3] ? details[3].split(" -> ").reverse() : undefined,
         toString: function() this.location
       };
@@ -354,7 +353,7 @@ function getPotentialLeaks() {
       return;
     }
 
-    if (matches = windowRegexp.exec(path)) {
+    if ((matches = windowRegexp.exec(path))) {
       if (matches[1] in windows)
         return;
 
@@ -366,8 +365,8 @@ function getPotentialLeaks() {
 
       let item = {
         path: matches[1],
-        location: details[1].replace("\\", "/", "g"),
-        source: [details[1].replace("\\", "/", "g")],
+        location: details[1].replace(/\\/g, "/"),
+        source: [details[1].replace(/\\/g, "/")],
         toString: function() this.location
       };
 
@@ -392,7 +391,7 @@ function nextIteration(tests) {
 
     reportMemoryUsage().then(_ => {
       let testRun = [];
-      for each (let test in tests.testRunSummary) {
+      for (let test of tests.testRunSummary) {
         let testCopy = {};
         for (let info in test) {
           testCopy[info] = test[info];
@@ -436,17 +435,35 @@ var POINTLESS_ERRORS = [
   'file: "chrome://browser/content/',
   'file: "chrome://global/content/',
   '[JavaScript Warning: "The character encoding of a framed document was ' +
-    'not declared.'
+    'not declared.',
+  'file: "chrome://browser/skin/'
 ];
 
 var consoleListener = {
+  registered: false,
+
+  register: function() {
+    if (this.registered)
+      return;
+    cService.registerListener(this);
+    this.registered = true;
+  },
+
+  unregister: function() {
+    if (!this.registered)
+      return;
+    cService.unregisterListener(this);
+    this.registered = false;
+  },
+
   errorsLogged: 0,
+
   observe: function(object) {
     if (!(object instanceof Ci.nsIScriptError))
       return;
     this.errorsLogged++;
     var message = object.QueryInterface(Ci.nsIConsoleMessage).message;
-    var pointless = [err for each (err in POINTLESS_ERRORS)
+    var pointless = [err for (err of POINTLESS_ERRORS)
                          if (message.indexOf(err) >= 0)];
     if (pointless.length == 0 && message)
       testConsole.log(message);
@@ -571,8 +588,14 @@ var runTests = exports.runTests = function runTests(options) {
   print = options.print;
   findAndRunTests = options.findAndRunTests;
 
+  results = {
+    passed: 0,
+    failed: 0,
+    testRuns: []
+  };
+
   try {
-    cService.registerListener(consoleListener);
+    consoleListener.register();
     print("Running tests on " + system.name + " " + system.version +
           "/Gecko " + system.platformVersion + " (" +
           system.id + ") under " +
@@ -592,7 +615,8 @@ var runTests = exports.runTests = function runTests(options) {
     // memory when we check later
     require("../deprecated/unit-test");
     require("../deprecated/unit-test-finder");
-    startLeaks = getPotentialLeaks();
+    if (profileMemory)
+      startLeaks = getPotentialLeaks();
 
     nextIteration();
   } catch (e) {
@@ -621,4 +645,4 @@ var runTests = exports.runTests = function runTests(options) {
   }
 };
 
-unload(_ => cService.unregisterListener(consoleListener));
+unload(_ => consoleListener.unregister());

@@ -64,8 +64,6 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
     static final String VIEW_HISTORY_WITH_FAVICONS = History.VIEW_WITH_FAVICONS;
     static final String VIEW_COMBINED_WITH_FAVICONS = Combined.VIEW_WITH_FAVICONS;
 
-    static final String VIEW_FLAGS = "flags";
-
     // Bookmark matches
     static final int BOOKMARKS = 100;
     static final int BOOKMARKS_ID = 101;
@@ -98,8 +96,6 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
     static final int THUMBNAILS = 800;
     static final int THUMBNAIL_ID = 801;
 
-    static final int FLAGS = 900;
-
     static final String DEFAULT_BOOKMARKS_SORT_ORDER = Bookmarks.TYPE
             + " ASC, " + Bookmarks.POSITION + " ASC, " + Bookmarks._ID
             + " ASC";
@@ -115,8 +111,13 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
     static final Map<String, String> SEARCH_SUGGEST_PROJECTION_MAP;
     static final Map<String, String> FAVICONS_PROJECTION_MAP;
     static final Map<String, String> THUMBNAILS_PROJECTION_MAP;
+    static final Table[] sTables;
 
     static {
+        sTables = new Table[] {
+            // See awful shortcut assumption hack in getURLMetadataTable.
+            new URLMetadataTable()
+        };
         // We will reuse this.
         HashMap<String, String> map;
 
@@ -218,8 +219,6 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
         // Search Suggest
         URI_MATCHER.addURI(BrowserContract.AUTHORITY, SearchManager.SUGGEST_URI_PATH_QUERY + "/*", SEARCH_SUGGEST);
 
-        URI_MATCHER.addURI(BrowserContract.AUTHORITY, "flags", FLAGS);
-
         map = new HashMap<String, String>();
         map.put(SearchManager.SUGGEST_COLUMN_TEXT_1,
                 Combined.TITLE + " AS " + SearchManager.SUGGEST_COLUMN_TEXT_1);
@@ -228,6 +227,18 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
         map.put(SearchManager.SUGGEST_COLUMN_INTENT_DATA,
                 Combined.URL + " AS " + SearchManager.SUGGEST_COLUMN_INTENT_DATA);
         SEARCH_SUGGEST_PROJECTION_MAP = Collections.unmodifiableMap(map);
+
+        for (Table table : sTables) {
+            for (Table.ContentProviderInfo type : table.getContentProviderInfo()) {
+                URI_MATCHER.addURI(BrowserContract.AUTHORITY, type.name, type.id);
+            }
+        }
+    }
+
+    // Convenience accessor.
+    // Assumes structure of sTables!
+    private URLMetadataTable getURLMetadataTable() {
+        return (URLMetadataTable) sTables[0];
     }
 
     private static boolean hasFaviconsInProjection(String[] projection) {
@@ -243,8 +254,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
 
     // Calculate these once, at initialization. isLoggable is too expensive to
     // have in-line in each log call.
-    private static boolean logDebug   = Log.isLoggable(LOGTAG, Log.DEBUG);
-    private static boolean logVerbose = Log.isLoggable(LOGTAG, Log.VERBOSE);
+    private static final boolean logDebug   = Log.isLoggable(LOGTAG, Log.DEBUG);
+    private static final boolean logVerbose = Log.isLoggable(LOGTAG, Log.VERBOSE);
     protected static void trace(String message) {
         if (logVerbose) {
             Log.v(LOGTAG, message);
@@ -348,14 +359,16 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             case SEARCH_SUGGEST:
                 trace("URI is SEARCH_SUGGEST: " + uri);
                 return SearchManager.SUGGEST_MIME_TYPE;
-            case FLAGS:
-                trace("URI is FLAGS.");
-                return Bookmarks.CONTENT_ITEM_TYPE;
+            default:
+                String type = getContentItemType(match);
+                if (type != null) {
+                    trace("URI is " + type);
+                    return type;
+                }
+
+                debug("URI has unrecognized type: " + uri);
+                return null;
         }
-
-        debug("URI has unrecognized type: " + uri);
-
-        return null;
     }
 
     @SuppressWarnings("fallthrough")
@@ -440,8 +453,15 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                 break;
             }
 
-            default:
-                throw new UnsupportedOperationException("Unknown delete URI " + uri);
+            default: {
+                Table table = findTableFor(match);
+                if (table == null) {
+                    throw new UnsupportedOperationException("Unknown delete URI " + uri);
+                }
+                trace("Deleting TABLE: " + uri);
+                beginWrite(db);
+                deleted = table.delete(db, uri, match, selection, selectionArgs);
+            }
         }
 
         debug("Deleted " + deleted + " rows for URI: " + uri);
@@ -481,8 +501,17 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                 break;
             }
 
-            default:
-                throw new UnsupportedOperationException("Unknown insert URI " + uri);
+            default: {
+                Table table = findTableFor(match);
+                if (table == null) {
+                    throw new UnsupportedOperationException("Unknown insert URI " + uri);
+                }
+
+                trace("Insert on TABLE: " + uri);
+                final SQLiteDatabase db = getWritableDatabase(uri);
+                beginWrite(db);
+                id = table.insert(db, uri, match, values);
+            }
         }
 
         debug("Inserted ID in database: " + id);
@@ -600,8 +629,21 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                 break;
             }
 
-            default:
-                throw new UnsupportedOperationException("Unknown update URI " + uri);
+            default: {
+                Table table = findTableFor(match);
+                if (table == null) {
+                    throw new UnsupportedOperationException("Unknown update URI " + uri);
+                }
+                trace("Update TABLE: " + uri);
+
+                beginWrite(db);
+                updated = table.update(db, uri, match, values, selection, selectionArgs);
+                if (shouldUpdateOrInsert(uri) && updated == 0) {
+                    trace("No update, inserting for URL: " + uri);
+                    table.insert(db, uri, match, values);
+                    updated = 1;
+                }
+            }
         }
 
         debug("Updated " + updated + " rows for URI: " + uri);
@@ -613,44 +655,6 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             String[] selectionArgs, String sortOrder) {
         SQLiteDatabase db = getReadableDatabase(uri);
         final int match = URI_MATCHER.match(uri);
-
-        // The first selectionArgs value is the URI for which to query.
-        if (match == FLAGS) {
-            // We don't need the QB below for this.
-            //
-            // There are three possible kinds of bookmarks:
-            // * Regular bookmarks
-            // * Bookmarks whose parent is FIXED_READING_LIST_ID (reading list items)
-            // * Bookmarks whose parent is FIXED_PINNED_LIST_ID (pinned items).
-            //
-            // Although SQLite doesn't have an aggregate operator for bitwise-OR, we're
-            // using disjoint flags, so we can simply use SUM and DISTINCT to get the
-            // flags we need.
-            // We turn parents into flags according to the three kinds, above.
-            //
-            // When this query is extended to support queries across multiple tables, simply
-            // extend it to look like
-            //
-            // SELECT COALESCE((SELECT ...), 0) | COALESCE(...) | ...
-
-            final boolean includeDeleted = shouldShowDeleted(uri);
-            final String query = "SELECT COALESCE(SUM(flag), 0) AS flags " +
-                "FROM ( SELECT DISTINCT CASE" +
-                " WHEN " + Bookmarks.PARENT + " = " + Bookmarks.FIXED_READING_LIST_ID +
-                " THEN " + Bookmarks.FLAG_READING +
-
-                " WHEN " + Bookmarks.PARENT + " = " + Bookmarks.FIXED_PINNED_LIST_ID +
-                " THEN " + Bookmarks.FLAG_PINNED +
-
-                " ELSE " + Bookmarks.FLAG_BOOKMARK +
-                " END flag " +
-                "FROM " + TABLE_BOOKMARKS + " WHERE " +
-                Bookmarks.URL + " = ? " +
-                (includeDeleted ? "" : ("AND " + Bookmarks.IS_DELETED + " = 0")) +
-                ")";
-
-            return db.rawQuery(query, selectionArgs);
-        }
 
         SQLiteQueryBuilder qb = new SQLiteQueryBuilder();
         String limit = uri.getQueryParameter(BrowserContract.PARAM_LIMIT);
@@ -793,8 +797,14 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                 break;
             }
 
-            default:
-                throw new UnsupportedOperationException("Unknown query URI " + uri);
+            default: {
+                Table table = findTableFor(match);
+                if (table == null) {
+                    throw new UnsupportedOperationException("Unknown query URI " + uri);
+                }
+                trace("Update TABLE: " + uri);
+                return table.query(db, uri, match, projection, selection, selectionArgs, sortOrder, groupBy, limit);
+            }
         }
 
         trace("Running built query.");
@@ -886,13 +896,7 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             b.append(" WHEN ? THEN " + i);
         }
 
-        // TODO: use computeSQLInClause
-        b.append(" END WHERE " + Bookmarks.GUID + " IN (");
-        i = 1;
-        while (i++ < processCount) {
-            b.append("?, ");
-        }
-        b.append("?)");
+        b.append(" END WHERE " + DBUtils.computeSQLInClause(processCount, Bookmarks.GUID));
         db.execSQL(b.toString(), args);
 
         // We can't easily get a modified count without calling something like changes().
@@ -932,6 +936,12 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
             debug("Inserting bookmark with no position for URI");
             values.put(Bookmarks.POSITION,
                        Long.toString(BrowserContract.Bookmarks.DEFAULT_POSITION));
+        }
+
+        if (!values.containsKey(Bookmarks.TITLE)) {
+            // Desktop Places barfs on insertion of a bookmark with no title,
+            // so we don't store them that way.
+            values.put(Bookmarks.TITLE, "");
         }
 
         String url = values.getAsString(Bookmarks.URL);
@@ -982,7 +992,7 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
         // Now that we're done reading, open a transaction.
         final String inClause;
         try {
-            inClause = computeSQLInClauseFromLongs(cursor, Bookmarks._ID);
+            inClause = DBUtils.computeSQLInClauseFromLongs(cursor, Bookmarks._ID);
         } finally {
             cursor.close();
         }
@@ -1062,7 +1072,7 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                     Long additional = values.getAsLong(History.VISITS);
 
                     // Increment visit count by a specified amount, or default to increment by 1
-                    values.put(History.VISITS, existing + ((additional != null) ? additional.longValue() : 1));
+                    values.put(History.VISITS, existing + ((additional != null) ? additional : 1));
                 }
 
                 updated += db.update(TABLE_HISTORY, values, "_id = ?",
@@ -1356,7 +1366,8 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
                 + " AND " + Bookmarks.URL + " IS NOT NULL)";
 
         return deleteFavicons(uri, faviconSelection, null) +
-               deleteThumbnails(uri, thumbnailSelection, null);
+               deleteThumbnails(uri, thumbnailSelection, null) +
+               getURLMetadataTable().deleteUnused(getWritableDatabase(uri));
     }
 
     @Override
@@ -1434,5 +1445,31 @@ public class BrowserProvider extends SharedBrowserDatabaseProvider {
         }
 
         return results;
+    }
+
+    private static Table findTableFor(int id) {
+        for (Table table : sTables) {
+            for (Table.ContentProviderInfo type : table.getContentProviderInfo()) {
+                if (type.id == id) {
+                    return table;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static void addTablesToMatcher(Table[] tables, final UriMatcher matcher) {
+    }
+
+    private static String getContentItemType(final int match) {
+        for (Table table : sTables) {
+            for (Table.ContentProviderInfo type : table.getContentProviderInfo()) {
+                if (type.id == match) {
+                    return "vnd.android.cursor.item/" + type.name;
+                }
+            }
+        }
+
+        return null;
     }
 }

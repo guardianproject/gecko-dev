@@ -50,13 +50,10 @@ ArenaStrdup(const nsAFlatCString& aString, PLArenaPool* aArena)
 }
 
 static const struct PLDHashTableOps property_HashTableOps = {
-  PL_DHashAllocTable,
-  PL_DHashFreeTable,
   PL_DHashStringKey,
   PL_DHashMatchStringKey,
   PL_DHashMoveEntryStub,
   PL_DHashClearEntryStub,
-  PL_DHashFinalizeStub,
   nullptr,
 };
 
@@ -79,10 +76,10 @@ enum EParserSpecial
   eParserSpecial_Unicode        // parsing a \Uxxx value
 };
 
-class nsPropertiesParser
+class MOZ_STACK_CLASS nsPropertiesParser
 {
 public:
-  nsPropertiesParser(nsIPersistentProperties* aProps)
+  explicit nsPropertiesParser(nsIPersistentProperties* aProps)
     : mHaveMultiLine(false)
     , mState(eParserState_AwaitingKey)
     , mProps(aProps)
@@ -180,7 +177,7 @@ private:
   EParserState mState;
   // if we see a '\' then we enter this special state
   EParserSpecial mSpecialState;
-  nsIPersistentProperties* mProps;
+  nsCOMPtr<nsIPersistentProperties> mProps;
 };
 
 inline bool
@@ -463,10 +460,8 @@ nsPropertiesParser::ParseBuffer(const char16_t* aBuffer,
 nsPersistentProperties::nsPersistentProperties()
   : mIn(nullptr)
 {
-  mSubclass = static_cast<nsIPersistentProperties*>(this);
-
-  PL_DHashTableInit(&mTable, &property_HashTableOps, nullptr,
-                    sizeof(PropertyTableEntry), 20);
+  PL_DHashTableInit(&mTable, &property_HashTableOps,
+                    sizeof(PropertyTableEntry), 16);
 
   PL_INIT_ARENA_POOL(&mArena, "PersistentPropertyArena", 2048);
 }
@@ -474,7 +469,7 @@ nsPersistentProperties::nsPersistentProperties()
 nsPersistentProperties::~nsPersistentProperties()
 {
   PL_FinishArenaPool(&mArena);
-  if (mTable.ops) {
+  if (mTable.IsInitialized()) {
     PL_DHashTableFinish(&mTable);
   }
 }
@@ -503,7 +498,7 @@ nsPersistentProperties::Load(nsIInputStream* aIn)
     return NS_ERROR_FAILURE;
   }
 
-  nsPropertiesParser parser(mSubclass);
+  nsPropertiesParser parser(this);
 
   uint32_t nProcessed;
   // If this 4096 is changed to some other value, make sure to adjust
@@ -533,7 +528,7 @@ nsPersistentProperties::SetStringProperty(const nsACString& aKey,
 {
   const nsAFlatCString&  flatKey = PromiseFlatCString(aKey);
   PropertyTableEntry* entry = static_cast<PropertyTableEntry*>(
-    PL_DHashTableOperate(&mTable, flatKey.get(), PL_DHASH_ADD));
+    PL_DHashTableAdd(&mTable, flatKey.get(), mozilla::fallible));
 
   if (entry->mKey) {
     aOldValue = entry->mValue;
@@ -556,25 +551,15 @@ nsPersistentProperties::Save(nsIOutputStream* aOut, const nsACString& aHeader)
 }
 
 NS_IMETHODIMP
-nsPersistentProperties::Subclass(nsIPersistentProperties* aSubclass)
-{
-  if (aSubclass) {
-    mSubclass = aSubclass;
-  }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsPersistentProperties::GetStringProperty(const nsACString& aKey,
                                           nsAString& aValue)
 {
   const nsAFlatCString&  flatKey = PromiseFlatCString(aKey);
 
   PropertyTableEntry* entry = static_cast<PropertyTableEntry*>(
-    PL_DHashTableOperate(&mTable, flatKey.get(), PL_DHASH_LOOKUP));
+    PL_DHashTableSearch(&mTable, flatKey.get()));
 
-  if (PL_DHASH_ENTRY_IS_FREE(entry)) {
+  if (!entry) {
     return NS_ERROR_FAILURE;
   }
 
@@ -607,11 +592,11 @@ nsPersistentProperties::Enumerate(nsISimpleEnumerator** aResult)
   nsCOMArray<nsIPropertyElement> props;
 
   // We know the necessary size; we can avoid growing it while adding elements
-  props.SetCapacity(mTable.entryCount);
+  props.SetCapacity(mTable.EntryCount());
 
   // Step through hash entries populating a transient array
   uint32_t n = PL_DHashTableEnumerate(&mTable, AddElemToArray, (void*)&props);
-  if (n < mTable.entryCount) {
+  if (n < mTable.EntryCount()) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -643,9 +628,7 @@ nsPersistentProperties::Undefine(const char* aProp)
 NS_IMETHODIMP
 nsPersistentProperties::Has(const char* aProp, bool* aResult)
 {
-  PropertyTableEntry* entry = static_cast<PropertyTableEntry*>(
-    PL_DHashTableOperate(&mTable, aProp, PL_DHASH_LOOKUP));
-  *aResult = (entry && PL_DHASH_ENTRY_IS_BUSY(entry));
+  *aResult = !!PL_DHashTableSearch(&mTable, aProp);
   return NS_OK;
 }
 

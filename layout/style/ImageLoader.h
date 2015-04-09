@@ -28,12 +28,13 @@ namespace css {
 
 struct ImageValue;
 
-class ImageLoader MOZ_FINAL : public imgINotificationObserver,
-                              public imgIOnloadBlocker {
+class ImageLoader final : public imgINotificationObserver,
+                          public imgIOnloadBlocker
+{
 public:
   typedef mozilla::css::ImageValue Image;
 
-  ImageLoader(nsIDocument* aDocument)
+  explicit ImageLoader(nsIDocument* aDocument)
   : mDocument(aDocument),
     mInClone(false)
   {
@@ -59,7 +60,10 @@ public:
 
   void SetAnimationMode(uint16_t aMode);
 
-  void ClearFrames();
+  // The prescontext for this ImageLoader's document. We need it to be passed
+  // in because this can be called during presentation destruction after the
+  // presshell pointer on the document has been cleared.
+  void ClearFrames(nsPresContext* aPresContext);
 
   void LoadImage(nsIURI* aURI, nsIPrincipal* aPrincipal, nsIURI* aReferrer,
                  Image* aCSSValue);
@@ -87,19 +91,20 @@ private:
 
   nsPresContext* GetPresContext();
 
-  void DoRedraw(FrameSet* aFrameSet);
+  void DoRedraw(FrameSet* aFrameSet, bool aForcePaint);
 
   static PLDHashOperator
   SetAnimationModeEnumerator(nsISupports* aKey, FrameSet* aValue,
                              void* aClosure);
 
-  nsresult OnStartContainer(imgIRequest *aRequest, imgIContainer* aImage);
-  nsresult OnStopFrame(imgIRequest *aRequest);
-  nsresult OnImageIsAnimated(imgIRequest *aRequest);
-  nsresult FrameChanged(imgIRequest* aRequest);
-  // Do not override OnDataAvailable since background images are not
-  // displayed incrementally; they are displayed after the entire image
-  // has been loaded.
+  static PLDHashOperator
+  DeregisterRequestEnumerator(nsISupports* aKey, FrameSet* aValue,
+                              void* aClosure);
+
+  nsresult OnSizeAvailable(imgIRequest* aRequest, imgIContainer* aImage);
+  nsresult OnFrameComplete(imgIRequest* aRequest);
+  nsresult OnImageIsAnimated(imgIRequest* aRequest);
+  nsresult OnFrameUpdate(imgIRequest* aRequest);
 
   // A map of imgIRequests to the nsIFrames that are using them.
   RequestToFrameMap mRequestToFrameMap;

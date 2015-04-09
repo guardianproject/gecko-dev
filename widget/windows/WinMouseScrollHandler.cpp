@@ -6,9 +6,6 @@
 
 #include "mozilla/DebugOnly.h"
 
-#ifdef MOZ_LOGGING
-#define FORCE_PR_LOG /* Allow logging in the release build */
-#endif // MOZ_LOGGING
 #include "prlog.h"
 
 #include "WinMouseScrollHandler.h"
@@ -252,7 +249,7 @@ MouseScrollHandler::ProcessMessage(nsWindowBase* aWidget, UINT msg,
 /* static */
 nsresult
 MouseScrollHandler::SynthesizeNativeMouseScrollEvent(nsWindowBase* aWidget,
-                                                     const nsIntPoint& aPoint,
+                                                     const LayoutDeviceIntPoint& aPoint,
                                                      uint32_t aNativeMessage,
                                                      int32_t aDelta,
                                                      uint32_t aModifierFlags,
@@ -322,15 +319,6 @@ MouseScrollHandler::SynthesizeNativeMouseScrollEvent(nsWindowBase* aWidget,
   pts.y = static_cast<SHORT>(pt.y);
   return sInstance->mSynthesizingEvent->
            Synthesize(pts, target, aNativeMessage, wParam, lParam, kbdState);
-}
-
-/* static */
-bool
-MouseScrollHandler::DispatchEvent(nsWindowBase* aWidget,
-                                  WidgetGUIEvent& aEvent)
-{
-  // note, in metrofx, this will always return false for now
-  return aWidget->DispatchScrollEvent(&aEvent);
 }
 
 /* static */
@@ -465,7 +453,7 @@ MouseScrollHandler::ProcessNativeMouseWheelMessage(nsWindowBase* aWidget,
     // message on its parent window.  However, note that the DOM event may
     // cause accessing the plugin.  Therefore, we should unlock the plugin
     // process by using PostMessage().
-    if (destWindow->WindowType() == eWindowType_plugin) {
+    if (destWindow->IsPlugin()) {
       destWindow = destWindow->GetParentWindowBase(false);
       if (!destWindow) {
         PR_LOG(gMouseScrollLog, PR_LOG_ALWAYS,
@@ -504,7 +492,7 @@ MouseScrollHandler::ProcessNativeMouseWheelMessage(nsWindowBase* aWidget,
   // it on parent window.  However, note that the DOM event may cause accessing
   // the plugin.  Therefore, we should unlock the plugin process by using
   // PostMessage().
-  if (aWidget->WindowType() == eWindowType_plugin &&
+  if (aWidget->IsPlugin() &&
       aWidget->GetWindowHandle() == pluginWnd) {
     nsWindowBase* destWindow = aWidget->GetParentWindowBase(false);
     if (!destWindow) {
@@ -600,7 +588,7 @@ MouseScrollHandler::ProcessNativeScrollMessage(nsWindowBase* aWidget,
   }
   // XXX If this is a plugin window, we should dispatch the event from
   //     parent window.
-  DispatchEvent(aWidget, commandEvent);
+  aWidget->DispatchContentCommandEvent(&commandEvent);
   return true;
 }
 
@@ -610,7 +598,7 @@ MouseScrollHandler::HandleMouseWheelMessage(nsWindowBase* aWidget,
                                             WPARAM aWParam,
                                             LPARAM aLParam)
 {
-  NS_ABORT_IF_FALSE(
+  MOZ_ASSERT(
     (aMessage == MOZ_WM_MOUSEVWHEEL || aMessage == MOZ_WM_MOUSEHWHEEL),
     "HandleMouseWheelMessage must be called with "
     "MOZ_WM_MOUSEVWHEEL or MOZ_WM_MOUSEHWHEEL");
@@ -651,7 +639,7 @@ MouseScrollHandler::HandleMouseWheelMessage(nsWindowBase* aWidget,
     PR_LOG(gMouseScrollLog, PR_LOG_ALWAYS,
       ("MouseScroll::HandleMouseWheelMessage: dispatching "
        "NS_WHEEL_WHEEL event"));
-    DispatchEvent(aWidget, wheelEvent);
+    aWidget->DispatchWheelEvent(&wheelEvent);
     if (aWidget->Destroyed()) {
       PR_LOG(gMouseScrollLog, PR_LOG_ALWAYS,
         ("MouseScroll::HandleMouseWheelMessage: The window was destroyed "
@@ -675,7 +663,7 @@ MouseScrollHandler::HandleScrollMessageAsMouseWheelMessage(nsWindowBase* aWidget
                                                            WPARAM aWParam,
                                                            LPARAM aLParam)
 {
-  NS_ABORT_IF_FALSE(
+  MOZ_ASSERT(
     (aMessage == MOZ_WM_VSCROLL || aMessage == MOZ_WM_HSCROLL),
     "HandleScrollMessageAsMouseWheelMessage must be called with "
     "MOZ_WM_VSCROLL or MOZ_WM_HSCROLL");
@@ -733,7 +721,7 @@ MouseScrollHandler::HandleScrollMessageAsMouseWheelMessage(nsWindowBase* aWidget
      GetBoolName(wheelEvent.IsAlt()),
      GetBoolName(wheelEvent.IsMeta())));
 
-  DispatchEvent(aWidget, wheelEvent);
+  aWidget->DispatchWheelEvent(&wheelEvent);
 }
 
 /******************************************************************************
@@ -746,7 +734,7 @@ MouseScrollHandler::EventInfo::EventInfo(nsWindowBase* aWidget,
                                          UINT aMessage,
                                          WPARAM aWParam, LPARAM aLParam)
 {
-  NS_ABORT_IF_FALSE(aMessage == WM_MOUSEWHEEL || aMessage == WM_MOUSEHWHEEL,
+  MOZ_ASSERT(aMessage == WM_MOUSEWHEEL || aMessage == WM_MOUSEHWHEEL,
     "EventInfo must be initialized with WM_MOUSEWHEEL or WM_MOUSEHWHEEL");
 
   MouseScrollHandler::GetInstance()->mSystemSettings.Init();
@@ -1244,7 +1232,7 @@ MouseScrollHandler::Device::Elantech::HandleKeyMessage(nsWindowBase* aWidget,
       WidgetCommandEvent commandEvent(true, nsGkAtoms::onAppCommand,
         (aWParam == VK_NEXT) ? nsGkAtoms::Forward : nsGkAtoms::Back, aWidget);
       InitEvent(aWidget, commandEvent);
-      MouseScrollHandler::DispatchEvent(aWidget, commandEvent);
+      aWidget->DispatchWindowEvent(&commandEvent);
     }
 #ifdef PR_LOGGING
     else {
@@ -1535,7 +1523,7 @@ MouseScrollHandler::SynthesizingEvent::NativeMessageReceived(nsWindowBase* aWidg
     }
     // If the target window is not ours and received window is our plugin
     // window, it comes from child window of the plugin.
-    if (aWidget && aWidget->WindowType() == eWindowType_plugin &&
+    if (aWidget && aWidget->IsPlugin() &&
         !WinUtils::GetNSWindowBasePtr(mWnd)) {
       return;
     }

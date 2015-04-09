@@ -44,6 +44,8 @@
 
 SimpleTest.waitForExplicitFinish();
 
+const isOSXYosemite = navigator.userAgent.indexOf("Mac OS X 10.10") != -1;
+
 var expectedAnchor = null;
 var expectedSide = "", expectedAnchorEdge = "", expectedPack = "", expectedAlignment = "";
 var zoomFactor = 1;
@@ -217,7 +219,7 @@ function setScale(win, scale)
   var wn = win.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
               .getInterface(Components.interfaces.nsIWebNavigation);
   var shell = wn.QueryInterface(Components.interfaces.nsIDocShell);
-  var docViewer = shell.contentViewer.QueryInterface(Components.interfaces.nsIMarkupDocumentViewer);
+  var docViewer = shell.contentViewer;
   docViewer.fullZoom = scale;
   zoomFactor = scale;
 }
@@ -292,7 +294,8 @@ function checkPanelPosition(panel)
       adj = hwinpos + parseInt(getComputedStyle(panel, "").marginRight);
       if (iscentered)
         adj += Math.round(anchorRect.width) / 2;
-      isWithinHalfPixel(panelRect.right, anchorRect.right * zoomFactor - adj, "anchored on right");
+      if (!isOSXYosemite)
+        isWithinHalfPixel(panelRect.right, anchorRect.right * zoomFactor - adj, "anchored on right");
       break;
   }
 

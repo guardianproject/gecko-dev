@@ -5,26 +5,22 @@
 
 package org.mozilla.gecko;
 
-import org.mozilla.gecko.util.GeckoEventListener;
-import org.mozilla.gecko.util.ThreadUtils;
-import org.mozilla.gecko.widget.ArrowPopup;
-import org.mozilla.gecko.widget.DoorHanger;
-import org.mozilla.gecko.prompts.PromptInput;
+import java.util.HashSet;
 
-import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.mozilla.gecko.AppConstants.Versions;
+import org.mozilla.gecko.util.GeckoEventListener;
+import org.mozilla.gecko.util.ThreadUtils;
+import org.mozilla.gecko.widget.AnchoredPopup;
+import org.mozilla.gecko.widget.DoorHanger;
 
 import android.content.Context;
-import android.os.Build;
 import android.util.Log;
 import android.view.View;
-import android.widget.CheckBox;
+import org.mozilla.gecko.widget.DoorhangerConfig;
 
-import java.util.HashSet;
-import java.util.List;
-
-public class DoorHangerPopup extends ArrowPopup
+public class DoorHangerPopup extends AnchoredPopup
                              implements GeckoEventListener,
                                         Tabs.OnTabsChangedListener,
                                         DoorHanger.OnButtonClickListener {
@@ -32,7 +28,7 @@ public class DoorHangerPopup extends ArrowPopup
 
     // Stores a set of all active DoorHanger notifications. A DoorHanger is
     // uniquely identified by its tabId and value.
-    private HashSet<DoorHanger> mDoorHangers;
+    private final HashSet<DoorHanger> mDoorHangers;
 
     // Whether or not the doorhanger popup is disabled.
     private boolean mDisabled;
@@ -77,16 +73,12 @@ public class DoorHangerPopup extends ArrowPopup
     public void handleMessage(String event, JSONObject geckoObject) {
         try {
             if (event.equals("Doorhanger:Add")) {
-                final int tabId = geckoObject.getInt("tabID");
-                final String value = geckoObject.getString("value");
-                final String message = geckoObject.getString("message");
-                final JSONArray buttons = geckoObject.getJSONArray("buttons");
-                final JSONObject options = geckoObject.getJSONObject("options");
+                final DoorhangerConfig config = makeConfigFromJSON(geckoObject);
 
                 ThreadUtils.postToUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        addDoorHanger(tabId, value, message, buttons, options);
+                        addDoorHanger(config);
                     }
                 });
             } else if (event.equals("Doorhanger:Remove")) {
@@ -108,6 +100,23 @@ public class DoorHangerPopup extends ArrowPopup
         } catch (Exception e) {
             Log.e(LOGTAG, "Exception handling message \"" + event + "\":", e);
         }
+    }
+
+    private DoorhangerConfig makeConfigFromJSON(JSONObject json) throws JSONException {
+        final int tabId = json.getInt("tabID");
+        final String id = json.getString("value");
+
+        final String typeString = json.optString("category");
+        final boolean isLogin = DoorHanger.Type.LOGIN.toString().equals(typeString);
+        final DoorHanger.Type doorhangerType = isLogin ? DoorHanger.Type.LOGIN : DoorHanger.Type.DEFAULT;
+
+        final DoorhangerConfig config = new DoorhangerConfig(tabId, id, doorhangerType, this);
+
+        config.setMessage(json.getString("message"));
+        config.appendButtonsFromJSON(json.getJSONArray("buttons"));
+        config.setOptions(json.getJSONObject("options"));
+
+        return config;
     }
 
     // This callback is automatically executed on the UI thread.
@@ -150,15 +159,15 @@ public class DoorHangerPopup extends ArrowPopup
      *
      * This method must be called on the UI thread.
      */
-    void addDoorHanger(final int tabId, final String value, final String message,
-                       final JSONArray buttons, final JSONObject options) {
+    void addDoorHanger(DoorhangerConfig config) {
+        final int tabId = config.getTabId();
         // Don't add a doorhanger for a tab that doesn't exist
         if (Tabs.getInstance().getTab(tabId) == null) {
             return;
         }
 
         // Replace the doorhanger if it already exists
-        DoorHanger oldDoorHanger = getDoorHanger(tabId, value);
+        DoorHanger oldDoorHanger = getDoorHanger(tabId, config.getId());
         if (oldDoorHanger != null) {
             removeDoorHanger(oldDoorHanger);
         }
@@ -167,25 +176,12 @@ public class DoorHangerPopup extends ArrowPopup
             init();
         }
 
-        final DoorHanger newDoorHanger = new DoorHanger(mContext, tabId, value);
-        newDoorHanger.setMessage(message);
-        newDoorHanger.setOptions(options);
-
-        for (int i = 0; i < buttons.length(); i++) {
-            try {
-                JSONObject buttonObject = buttons.getJSONObject(i);
-                String label = buttonObject.getString("label");
-                String tag = String.valueOf(buttonObject.getInt("callback"));
-                newDoorHanger.addButton(label, tag, this);
-            } catch (JSONException e) {
-                Log.e(LOGTAG, "Error creating doorhanger button", e);
-            }
-        }
+        final DoorHanger newDoorHanger = DoorHanger.Get(mContext, config);
 
         mDoorHangers.add(newDoorHanger);
         mContent.addView(newDoorHanger);
 
-        // Only update the popup if we're adding a notifcation to the selected tab
+        // Only update the popup if we're adding a notification to the selected tab
         if (tabId == Tabs.getInstance().getSelectedTab().getId())
             updatePopup();
     }
@@ -195,32 +191,10 @@ public class DoorHangerPopup extends ArrowPopup
      * DoorHanger.OnButtonClickListener implementation
      */
     @Override
-    public void onButtonClick(DoorHanger dh, String tag) {
-        JSONObject response = new JSONObject();
-        try {
-            response.put("callback", tag);
-
-            CheckBox checkBox = dh.getCheckBox();
-            // If the checkbox is being used, pass its value
-            if (checkBox != null) {
-                response.put("checked", checkBox.isChecked());
-            }
-
-            List<PromptInput> doorHangerInputs = dh.getInputs();
-            if (doorHangerInputs != null) {
-                JSONObject inputs = new JSONObject();
-                for (PromptInput input : doorHangerInputs) {
-                    inputs.put(input.getId(), input.getValue());
-                }
-                response.put("inputs", inputs);
-            }
-        } catch (JSONException e) {
-            Log.e(LOGTAG, "Error creating onClick response", e);
-        }
-
+    public void onButtonClick(JSONObject response, DoorHanger doorhanger) {
         GeckoEvent e = GeckoEvent.createBroadcastEvent("Doorhanger:Reply", response.toString());
         GeckoAppShell.sendEventToGecko(e);
-        removeDoorHanger(dh);
+        removeDoorHanger(doorhanger);
         updatePopup();
     }
 
@@ -231,7 +205,7 @@ public class DoorHangerPopup extends ArrowPopup
      */
     DoorHanger getDoorHanger(int tabId, String value) {
         for (DoorHanger dh : mDoorHangers) {
-            if (dh.getTabId() == tabId && dh.getValue().equals(value))
+            if (dh.getTabId() == tabId && dh.getIdentifier().equals(value))
                 return dh;
         }
 
@@ -311,13 +285,13 @@ public class DoorHangerPopup extends ArrowPopup
         // Make the popup focusable for accessibility. This gets done here
         // so the node can be accessibility focused, but on pre-ICS devices this
         // causes crashes, so it is done after the popup is shown.
-        if (Build.VERSION.SDK_INT >= 14) {
+        if (Versions.feature14Plus) {
             setFocusable(true);
         }
 
         show();
 
-        if (Build.VERSION.SDK_INT < 14) {
+        if (Versions.preICS) {
             // Make the popup focusable for keyboard accessibility.
             setFocusable(true);
         }

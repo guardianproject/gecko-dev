@@ -10,26 +10,15 @@
  * this document.
  */
 
-// The Pref controls exposure in general, the Func restricts it to inside the
-// ServiceWorkerGlobalScope (itself).
-[Global, Func="mozilla::dom::workers::ServiceWorkerGlobalScope::Visible",
- Pref="dom.serviceWorkers.enabled"]
+[Global=(Worker,ServiceWorker),
+ Exposed=ServiceWorker]
 interface ServiceWorkerGlobalScope : WorkerGlobalScope {
-  // FIXME(nsm): Bug 982725
-  // readonly attribute CacheList caches;
-
-  // FIXME(nsm): Bug 982726
-  // A container for a list of window objects, identifiable by ID, that
-  // correspond to windows (or workers) that are "controlled" by this SW
-  // readonly attribute ServiceWorkerClients clients;
-
-  [Unforgeable] readonly attribute DOMString scope;
-
-  // FIXME(nsm): Bug 995484
-  // ResponsePromise<any> fetch((Request or [EnsureUTF16] DOMString) request);
+  readonly attribute Clients clients;
 
   void update();
-  void unregister();
+
+  [Throws]
+  Promise<boolean> unregister();
 
   attribute EventHandler oninstall;
   attribute EventHandler onactivate;
@@ -39,10 +28,6 @@ interface ServiceWorkerGlobalScope : WorkerGlobalScope {
 
   // The event.source of these MessageEvents are instances of Client
   attribute EventHandler onmessage;
-
-  // close() method inherited from WorkerGlobalScope is not exposed.
-  // FIXME(nsm): For now, overridden so it can be a no-op.
-  void close();
 };
 
 

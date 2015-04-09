@@ -25,7 +25,6 @@
 
 #include "mozilla/dom/Element.h"
 
-#include "nsIAccessibleRelation.h"
 #include "nsIDocShellTreeItem.h"
 #include "nsIDocShellTreeOwner.h"
 #include "mozilla/dom/Event.h"
@@ -53,7 +52,7 @@ using namespace mozilla::dom;
 ////////////////////////////////////////////////////////////////////////////////
 // nsISupports
 
-NS_IMPL_ISUPPORTS_INHERITED(RootAccessible, DocAccessible, nsIAccessibleDocument)
+NS_IMPL_ISUPPORTS_INHERITED0(RootAccessible, DocAccessible)
 
 ////////////////////////////////////////////////////////////////////////////////
 // Constructor/destructor
@@ -93,8 +92,8 @@ RootAccessible::NativeRole()
 {
   // If it's a <dialog> or <wizard>, use roles::DIALOG instead
   dom::Element* rootElm = mDocumentNode->GetRootElement();
-  if (rootElm && (rootElm->Tag() == nsGkAtoms::dialog ||
-                  rootElm->Tag() == nsGkAtoms::wizard))
+  if (rootElm && rootElm->IsAnyOfXULElements(nsGkAtoms::dialog,
+                                             nsGkAtoms::wizard))
     return roles::DIALOG;
 
   return DocAccessibleWrap::NativeRole();
@@ -477,7 +476,6 @@ RootAccessible::Shutdown()
   DocAccessibleWrap::Shutdown();
 }
 
-// nsIAccessible method
 Relation
 RootAccessible::RelationByType(RelationType aType)
 {

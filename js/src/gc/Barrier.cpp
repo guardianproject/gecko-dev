@@ -16,9 +16,9 @@
 namespace js {
 
 void
-ValueReadBarrier(const Value &value)
+ValueReadBarrier(const Value& value)
 {
-    JS_ASSERT(!CurrentThreadIsIonCompiling());
+    MOZ_ASSERT(!CurrentThreadIsIonCompiling());
     if (value.isObject())
         JSObject::readBarrier(&value.toObject());
     else if (value.isString())
@@ -26,37 +26,37 @@ ValueReadBarrier(const Value &value)
     else if (value.isSymbol())
         JS::Symbol::readBarrier(value.toSymbol());
     else
-        JS_ASSERT(!value.isMarkable());
+        MOZ_ASSERT(!value.isMarkable());
 }
 
 #ifdef DEBUG
 bool
-HeapSlot::preconditionForSet(JSObject *owner, Kind kind, uint32_t slot)
+HeapSlot::preconditionForSet(NativeObject* owner, Kind kind, uint32_t slot)
 {
     return kind == Slot
          ? &owner->getSlotRef(slot) == this
-         : &owner->getDenseElement(slot) == (const Value *)this;
+         : &owner->getDenseElement(slot) == (const Value*)this;
 }
 
 bool
-HeapSlot::preconditionForSet(Zone *zone, JSObject *owner, Kind kind, uint32_t slot)
+HeapSlot::preconditionForSet(Zone* zone, NativeObject* owner, Kind kind, uint32_t slot)
 {
     bool ok = kind == Slot
             ? &owner->getSlotRef(slot) == this
-            : &owner->getDenseElement(slot) == (const Value *)this;
+            : &owner->getDenseElement(slot) == (const Value*)this;
     return ok && owner->zone() == zone;
 }
 
 bool
-HeapSlot::preconditionForWriteBarrierPost(JSObject *obj, Kind kind, uint32_t slot, Value target) const
+HeapSlot::preconditionForWriteBarrierPost(NativeObject* obj, Kind kind, uint32_t slot, Value target) const
 {
     return kind == Slot
          ? obj->getSlotAddressUnchecked(slot)->get() == target
-         : static_cast<HeapSlot *>(obj->getDenseElements() + slot)->get() == target;
+         : static_cast<HeapSlot*>(obj->getDenseElements() + slot)->get() == target;
 }
 
 bool
-RuntimeFromMainThreadIsHeapMajorCollecting(JS::shadow::Zone *shadowZone)
+RuntimeFromMainThreadIsHeapMajorCollecting(JS::shadow::Zone* shadowZone)
 {
     return shadowZone->runtimeFromMainThread()->isHeapMajorCollecting();
 }
@@ -66,10 +66,60 @@ CurrentThreadIsIonCompiling()
 {
     return TlsPerThreadData.get()->ionCompiling;
 }
+
+static bool
+GCIsSweepingOnMainThread(JSRuntime* rt, Zone* zone)
+{
+    return rt->isHeapMajorCollecting() && rt->gc.state() == SWEEP &&
+        (zone->isGCSweeping() || rt->isAtomsZone(zone));
+}
+
+static bool
+GCIsSweepingOnBackgroundThread(JSRuntime* rt, Zone* zone)
+{
+    return rt->gc.isBackgroundSweeping() &&
+        (zone->isGCBackgroundSweeping() || rt->isAtomsZone(zone));
+}
+
+static bool
+ThingMayHaveDifferentRuntime(TenuredCell* cell)
+{
+    // Some GC things may be associated with another runtime.
+    AllocKind kind = cell->getAllocKind();
+    if (kind == AllocKind::STRING)
+        return static_cast<const JSString*>(cell)->isPermanentAtom();
+    else if (kind == AllocKind::SYMBOL)
+        return static_cast<const JS::Symbol*>(cell)->isWellKnownSymbol();
+
+    return false;
+}
+
+void
+CheckGCIsSweepingZone(gc::Cell* cell)
+{
+    MOZ_ASSERT(!IsInsideNursery(cell));
+    TenuredCell* tenured = &cell->asTenured();
+    if (ThingMayHaveDifferentRuntime(tenured))
+        return;
+
+    Zone* zone = tenured->zoneFromAnyThread();
+    JSRuntime* rt = zone->runtimeFromAnyThread();
+    if (CurrentThreadCanAccessRuntime(rt)) {
+        // We're on the main thread.
+        MOZ_ASSERT(GCIsSweepingOnMainThread(rt, zone));
+    } else {
+        // We're not on the main thread, so we're either on a helper thread run
+        // while the GC is active on the main thread or we are background
+        // sweeping.
+        MOZ_ASSERT(GCIsSweepingOnMainThread(rt, zone) ||
+                   GCIsSweepingOnBackgroundThread(rt, zone));
+    }
+}
+
 #endif // DEBUG
 
 bool
-StringIsPermanentAtom(JSString *str)
+StringIsPermanentAtom(JSString* str)
 {
     return str->isPermanentAtom();
 }

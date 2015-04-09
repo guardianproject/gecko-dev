@@ -79,8 +79,10 @@
 #define AUDIO_MP3                           "audio/mpeg"
 #define AUDIO_MP4                           "audio/mp4"
 #define AUDIO_AMR                           "audio/amr"
+#define AUDIO_FLAC                          "audio/flac"
 #define AUDIO_3GPP                          "audio/3gpp"
 #define AUDIO_MIDI                          "audio/x-midi"
+#define AUDIO_MATROSKA                      "audio/x-matroska"
 
 #define BINARY_OCTET_STREAM                 "binary/octet-stream"
 
@@ -148,6 +150,9 @@
 #define VIDEO_WEBM                          "video/webm"
 #define VIDEO_3GPP                          "video/3gpp"
 #define VIDEO_3GPP2                         "video/3gpp2"
+#define VIDEO_MPEG_TS                       "video/mp2t"
+#define VIDEO_AVI                           "video/avi"
+#define VIDEO_MATROSKA                      "video/x-matroska"
 #define APPLICATION_OGG                     "application/ogg"
 
 /* x-uuencode-apple-single. QuickMail made me do this. */

@@ -9,6 +9,8 @@ const Ci = Components.interfaces;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "Prefetcher",
+                                  "resource://gre/modules/Prefetcher.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "RemoteAddonsParent",
                                   "resource://gre/modules/RemoteAddonsParent.jsm");
 
@@ -61,6 +63,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "RemoteAddonsParent",
 
 function AddonInterpositionService()
 {
+  Prefetcher.init();
   RemoteAddonsParent.init();
 
   // These maps keep track of the interpositions for all different
@@ -77,21 +80,22 @@ AddonInterpositionService.prototype = {
   // determines the type of the target object.
   getObjectTag: function(target) {
     if (Cu.isCrossProcessWrapper(target)) {
-      if (target instanceof Ci.nsIDocShellTreeItem) {
-        return "ContentDocShellTreeItem";
-      }
-
-      if (target instanceof Ci.nsIDOMDocument) {
-        return "ContentDocument";
-      }
+      return Cu.getCrossProcessWrapperTag(target);
     }
 
     const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
-    if ((target instanceof Ci.nsIDOMXULElement) &&
-        target.localName == "browser" &&
-        target.namespaceURI == XUL_NS &&
-        target.getAttribute("remote") == "true") {
-      return "RemoteBrowserElement";
+    if (target instanceof Ci.nsIDOMXULElement) {
+      if (target.localName == "browser" && target.isRemoteBrowser) {
+        return "RemoteBrowserElement";
+      }
+
+      if (target.localName == "tabbrowser") {
+        return "TabBrowserElement";
+      }
+    }
+
+    if (target instanceof Ci.nsIDOMChromeWindow && target.gMultiProcessBrowser) {
+      return "ChromeWindow";
     }
 
     if (target instanceof Ci.nsIDOMEventTarget) {
@@ -106,34 +110,38 @@ AddonInterpositionService.prototype = {
     if (iid) {
       interp = this._interfaceInterpositions[iid];
     } else {
-      interp = this._taggedInterpositions[this.getObjectTag(target)];
+      try {
+        interp = this._taggedInterpositions[this.getObjectTag(target)];
+      }
+      catch (e) {
+        Cu.reportError(new Components.Exception("Failed to interpose object", e.result, Components.stack.caller));
+      }
     }
 
     if (!interp) {
-      return null;
+      return Prefetcher.lookupInCache(addon, target, prop);
     }
 
     let desc = { configurable: false, enumerable: true };
 
-    if ("methods" in interp && interp.methods.hasOwnProperty(prop)) {
+    if ("methods" in interp && prop in interp.methods) {
       desc.writable = false;
       desc.value = function(...args) {
         return interp.methods[prop](addon, target, ...args);
       }
 
       return desc;
-    } else if ("getters" in interp &&
-               interp.getters.hasOwnProperty(prop)) {
+    } else if ("getters" in interp && prop in interp.getters) {
       desc.get = function() { return interp.getters[prop](addon, target); };
 
-      if ("setters" in interp && interp.setters.hasOwnProperty(prop)) {
+      if ("setters" in interp && prop in interp.setters) {
         desc.set = function(v) { return interp.setters[prop](addon, target, v); };
       }
 
       return desc;
     }
 
-    return null;
+    return Prefetcher.lookupInCache(addon, target, prop);
   },
 };
 

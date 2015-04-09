@@ -14,6 +14,11 @@
 #include "nsCOMPtr.h"
 #include "nsDebug.h"
 #include "nsString.h"
+#include "nsTArray.h"
+
+#include "nsILoadContext.h"
+#include "nsIWeakReferenceUtils.h"
+#include "nsIInterfaceRequestor.h"
 
 #define BEGIN_WORKERS_NAMESPACE \
   namespace mozilla { namespace dom { namespace workers {
@@ -24,8 +29,32 @@
 
 #define WORKERS_SHUTDOWN_TOPIC "web-workers-shutdown"
 
+class nsIContentSecurityPolicy;
 class nsIScriptContext;
+class nsIGlobalObject;
 class nsPIDOMWindow;
+class nsIPrincipal;
+class nsILoadGroup;
+class nsITabChild;
+class nsIChannel;
+class nsIURI;
+
+namespace mozilla {
+namespace ipc {
+class PrincipalInfo;
+}
+
+namespace dom {
+// If you change this, the corresponding list in nsIWorkerDebugger.idl needs to
+// be updated too.
+enum WorkerType
+{
+  WorkerTypeDedicated,
+  WorkerTypeShared,
+  WorkerTypeService
+};
+}
+}
 
 BEGIN_WORKERS_NAMESPACE
 
@@ -95,12 +124,11 @@ struct JSSettings
   // Settings that change based on chrome/content context.
   struct JSContentChromeSettings
   {
-    JS::ContextOptions contextOptions;
     JS::CompartmentOptions compartmentOptions;
     int32_t maxScriptRuntime;
 
     JSContentChromeSettings()
-    : contextOptions(), compartmentOptions(), maxScriptRuntime(0)
+    : compartmentOptions(), maxScriptRuntime(0)
     { }
   };
 
@@ -166,25 +194,81 @@ struct JSSettings
 enum WorkerPreference
 {
   WORKERPREF_DUMP = 0, // browser.dom.window.dump.enabled
+  WORKERPREF_DOM_CACHES, // dom.caches.enabled
   WORKERPREF_COUNT
 };
 
-// All of these are implemented in RuntimeService.cpp
+// Implemented in WorkerPrivate.cpp
 
-// Resolves all of the worker classes onto |aObjp| if one of them matches |aId|
-// or if |aId| is JSID_VOID.
-bool
-ResolveWorkerClasses(JSContext* aCx, JS::Handle<JSObject*> aObj, JS::Handle<jsid> aId,
-                     JS::MutableHandle<JSObject*> aObjp);
+struct WorkerLoadInfo
+{
+  // All of these should be released in WorkerPrivateParent::ForgetMainThreadObjects.
+  nsCOMPtr<nsIURI> mBaseURI;
+  nsCOMPtr<nsIURI> mResolvedScriptURI;
+  nsCOMPtr<nsIPrincipal> mPrincipal;
+  nsCOMPtr<nsIScriptContext> mScriptContext;
+  nsCOMPtr<nsPIDOMWindow> mWindow;
+  nsCOMPtr<nsIContentSecurityPolicy> mCSP;
+  nsCOMPtr<nsIChannel> mChannel;
+  nsCOMPtr<nsILoadGroup> mLoadGroup;
+
+  class InterfaceRequestor final : public nsIInterfaceRequestor
+  {
+    NS_DECL_ISUPPORTS
+
+  public:
+    InterfaceRequestor(nsIPrincipal* aPrincipal, nsILoadGroup* aLoadGroup);
+    void MaybeAddTabChild(nsILoadGroup* aLoadGroup);
+    NS_IMETHOD GetInterface(const nsIID& aIID, void** aSink) override;
+
+  private:
+    ~InterfaceRequestor() { }
+
+    already_AddRefed<nsITabChild> GetAnyLiveTabChild();
+
+    nsCOMPtr<nsILoadContext> mLoadContext;
+    nsCOMPtr<nsIInterfaceRequestor> mOuterRequestor;
+
+    // Array of weak references to nsITabChild.  We do not want to keep TabChild
+    // actors alive for long after their ActorDestroy() methods are called.
+    nsTArray<nsWeakPtr> mTabChildList;
+  };
+
+  // Only set if we have a custom overriden load group
+  nsRefPtr<InterfaceRequestor> mInterfaceRequestor;
+
+  nsAutoPtr<mozilla::ipc::PrincipalInfo> mPrincipalInfo;
+  nsCString mDomain;
+
+  nsString mServiceWorkerCacheName;
+
+  uint64_t mWindowID;
+
+  bool mFromWindow;
+  bool mEvalAllowed;
+  bool mReportCSPViolations;
+  bool mXHRParamsAllowed;
+  bool mPrincipalIsSystem;
+  bool mIsInPrivilegedApp;
+  bool mIsInCertifiedApp;
+  bool mIndexedDBAllowed;
+
+  WorkerLoadInfo();
+  ~WorkerLoadInfo();
+
+  void StealFrom(WorkerLoadInfo& aOther);
+};
+
+// All of these are implemented in RuntimeService.cpp
 
 void
 CancelWorkersForWindow(nsPIDOMWindow* aWindow);
 
 void
-SuspendWorkersForWindow(nsPIDOMWindow* aWindow);
+FreezeWorkersForWindow(nsPIDOMWindow* aWindow);
 
 void
-ResumeWorkersForWindow(nsPIDOMWindow* aWindow);
+ThawWorkersForWindow(nsPIDOMWindow* aWindow);
 
 class WorkerTask
 {
@@ -213,7 +297,7 @@ class WorkerCrossThreadDispatcher
 
 private:
   // Only created by WorkerPrivate.
-  WorkerCrossThreadDispatcher(WorkerPrivate* aWorkerPrivate);
+  explicit WorkerCrossThreadDispatcher(WorkerPrivate* aWorkerPrivate);
 
   // Only called by WorkerPrivate.
   void
@@ -247,6 +331,18 @@ void
 ThrowDOMExceptionForNSResult(JSContext* aCx, nsresult aNSResult);
 
 } // namespace exceptions
+
+nsIGlobalObject*
+GetGlobalObjectForGlobal(JSObject* global);
+
+bool
+IsWorkerGlobal(JSObject* global);
+
+bool
+IsDebuggerGlobal(JSObject* global);
+
+bool
+IsDebuggerSandbox(JSObject* object);
 
 // Throws the JSMSG_GETTER_ONLY exception.  This shouldn't be used going
 // forward -- getter-only properties should just use JS_PSG for the setter

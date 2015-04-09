@@ -5,18 +5,13 @@
 
 #include "FrozenImage.h"
 
-using namespace mozilla::gfx;
-
 namespace mozilla {
+
+using namespace gfx;
+
 namespace image {
 
 NS_IMPL_ISUPPORTS_INHERITED0(FrozenImage, ImageWrapper)
-
-nsIntRect
-FrozenImage::FrameRect(uint32_t /* aWhichFrame - ignored */)
-{
-  return InnerImage()->FrameRect(FRAME_FIRST);
-}
 
 void
 FrozenImage::IncrementAnimationConsumers()
@@ -49,44 +44,32 @@ FrozenImage::GetFrame(uint32_t aWhichFrame,
   return InnerImage()->GetFrame(FRAME_FIRST, aFlags);
 }
 
-NS_IMETHODIMP_(bool)
-FrozenImage::FrameIsOpaque(uint32_t aWhichFrame)
-{
-  return InnerImage()->FrameIsOpaque(FRAME_FIRST);
-}
-
-NS_IMETHODIMP
-FrozenImage::GetImageContainer(layers::LayerManager* aManager,
-                               layers::ImageContainer** _retval)
+NS_IMETHODIMP_(already_AddRefed<ImageContainer>)
+FrozenImage::GetImageContainer(layers::LayerManager* aManager, uint32_t aFlags)
 {
   // XXX(seth): GetImageContainer does not currently support anything but the
   // current frame. We work around this by always returning null, but if it ever
   // turns out that FrozenImage is widely used on codepaths that can actually
   // benefit from GetImageContainer, it would be a good idea to fix that method
   // for performance reasons.
-
-  *_retval = nullptr;
-  return NS_OK;
+  return nullptr;
 }
 
-NS_IMETHODIMP
+NS_IMETHODIMP_(DrawResult)
 FrozenImage::Draw(gfxContext* aContext,
-                  GraphicsFilter aFilter,
-                  const gfxMatrix& aUserSpaceToImageSpace,
-                  const gfxRect& aFill,
-                  const nsIntRect& aSubimage,
-                  const nsIntSize& aViewportSize,
-                  const SVGImageContext* aSVGContext,
+                  const nsIntSize& aSize,
+                  const ImageRegion& aRegion,
                   uint32_t /* aWhichFrame - ignored */,
+                  GraphicsFilter aFilter,
+                  const Maybe<SVGImageContext>& aSVGContext,
                   uint32_t aFlags)
 {
-  return InnerImage()->Draw(aContext, aFilter, aUserSpaceToImageSpace,
-                            aFill, aSubimage, aViewportSize, aSVGContext,
-                            FRAME_FIRST, aFlags);
+  return InnerImage()->Draw(aContext, aSize, aRegion, FRAME_FIRST,
+                            aFilter, aSVGContext, aFlags);
 }
 
 NS_IMETHODIMP_(void)
-FrozenImage::RequestRefresh(const mozilla::TimeStamp& aTime)
+FrozenImage::RequestRefresh(const TimeStamp& aTime)
 {
   // Do nothing.
 }

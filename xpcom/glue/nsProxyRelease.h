@@ -61,7 +61,7 @@ NS_ProxyRelease(nsIEventTarget* aTarget, nsRefPtr<T>& aDoomed,
  *        true, then an event will always be posted to the target thread for
  *        asynchronous release.
  */
-NS_COM_GLUE nsresult
+nsresult
 NS_ProxyRelease(nsIEventTarget* aTarget, nsISupports* aDoomed,
                 bool aAlwaysProxy = false);
 
@@ -104,7 +104,7 @@ NS_ProxyRelease(nsIEventTarget* aTarget, nsISupports* aDoomed,
  * an nsMainThreadPtrHandle<T> rather than an nsCOMPtr<T>.
  */
 template<class T>
-class nsMainThreadPtrHolder MOZ_FINAL
+class nsMainThreadPtrHolder final
 {
 public:
   // We can only acquire a pointer on the main thread. We to fail fast for
@@ -112,7 +112,7 @@ public:
   // off-main-thread. But some consumers need to use the same pointer for
   // multiple classes, some of which are main-thread-only and some of which
   // aren't. So we allow them to explicitly disable this strict checking.
-  nsMainThreadPtrHolder(T* aPtr, bool aStrict = true)
+  explicit nsMainThreadPtrHolder(T* aPtr, bool aStrict = true)
     : mRawPtr(nullptr)
     , mStrict(aStrict)
   {
@@ -154,6 +154,10 @@ public:
   {
     return mRawPtr == aOther.mRawPtr;
   }
+  bool operator!() const
+  {
+    return !mRawPtr;
+  }
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(nsMainThreadPtrHolder<T>)
 
@@ -177,7 +181,10 @@ class nsMainThreadPtrHandle
 
 public:
   nsMainThreadPtrHandle() : mPtr(nullptr) {}
-  nsMainThreadPtrHandle(nsMainThreadPtrHolder<T>* aHolder) : mPtr(aHolder) {}
+  explicit nsMainThreadPtrHandle(nsMainThreadPtrHolder<T>* aHolder)
+    : mPtr(aHolder)
+  {
+  }
   nsMainThreadPtrHandle(const nsMainThreadPtrHandle& aOther)
     : mPtr(aOther.mPtr)
   {
@@ -185,6 +192,11 @@ public:
   nsMainThreadPtrHandle& operator=(const nsMainThreadPtrHandle& aOther)
   {
     mPtr = aOther.mPtr;
+    return *this;
+  }
+  nsMainThreadPtrHandle& operator=(nsMainThreadPtrHolder<T>* aHolder)
+  {
+    mPtr = aHolder;
     return *this;
   }
 
@@ -207,7 +219,7 @@ public:
   }
 
   operator T*() { return get(); }
-  T* operator->() { return get(); }
+  T* operator->() MOZ_NO_ADDREF_RELEASE_ON_RETURN { return get(); }
 
   // These are safe to call on other threads with appropriate external locking.
   bool operator==(const nsMainThreadPtrHandle<T>& aOther) const
@@ -217,7 +229,9 @@ public:
     }
     return *mPtr == *aOther.mPtr;
   }
-  bool operator!() { return !mPtr; }
+  bool operator!() const {
+    return !mPtr || !*mPtr;
+  }
 };
 
 #endif

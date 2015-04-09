@@ -7,8 +7,6 @@
 #ifndef mozilla_dom_indexeddb_indexeddatabasemanager_h__
 #define mozilla_dom_indexeddb_indexeddatabasemanager_h__
 
-#include "mozilla/dom/indexedDB/IndexedDatabase.h"
-
 #include "nsIObserver.h"
 
 #include "js/TypeDecls.h"
@@ -19,28 +17,37 @@
 #include "nsHashKeys.h"
 
 class nsPIDOMWindow;
+struct PRLogModuleInfo;
 
 namespace mozilla {
-class EventChainPostVisitor;
-namespace dom {
-class TabContext;
-namespace quota {
-class OriginOrPatternString;
-}
-}
-}
 
-BEGIN_INDEXEDDB_NAMESPACE
+class DOMEventTargetHelper;
+class EventChainPostVisitor;
+
+namespace dom {
+
+class TabContext;
+
+namespace indexedDB {
 
 class FileManager;
 class FileManagerInfo;
+class IDBFactory;
 
-class IndexedDatabaseManager MOZ_FINAL : public nsIObserver
+class IndexedDatabaseManager final : public nsIObserver
 {
-  typedef mozilla::dom::quota::OriginOrPatternString OriginOrPatternString;
   typedef mozilla::dom::quota::PersistenceType PersistenceType;
 
 public:
+  enum LoggingMode
+  {
+    Logging_Disabled = 0,
+    Logging_Concise,
+    Logging_Detailed,
+    Logging_ConciseProfilerMarks,
+    Logging_DetailedProfilerMarks
+  };
+
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
 
@@ -75,6 +82,41 @@ public:
   }
 #endif
 
+  static bool
+  InTestingMode();
+
+  static bool
+  FullSynchronous();
+
+  static LoggingMode
+  GetLoggingMode()
+#ifdef DEBUG
+  ;
+#else
+  {
+    return sLoggingMode;
+  }
+#endif
+
+  static PRLogModuleInfo*
+  GetLoggingModule()
+#ifdef DEBUG
+  ;
+#else
+  {
+    return sLoggingModule;
+  }
+#endif
+
+  static bool
+  ExperimentalFeaturesEnabled();
+
+  static bool
+  ExperimentalFeaturesEnabled(JSContext* /* aCx */, JSObject* /* aGlobal */)
+  {
+    return ExperimentalFeaturesEnabled();
+  }
+
   already_AddRefed<FileManager>
   GetFileManager(PersistenceType aPersistenceType,
                  const nsACString& aOrigin,
@@ -88,7 +130,7 @@ public:
 
   void
   InvalidateFileManagers(PersistenceType aPersistenceType,
-                         const OriginOrPatternString& aOriginOrPattern);
+                         const nsACString& aOrigin);
 
   void
   InvalidateFileManager(PersistenceType aPersistenceType,
@@ -122,8 +164,7 @@ public:
   }
 
   static nsresult
-  FireWindowOnError(nsPIDOMWindow* aOwner,
-                    EventChainPostVisitor& aVisitor);
+  CommonPostHandleEvent(EventChainPostVisitor& aVisitor, IDBFactory* aFactory);
 
   static bool
   TabContextMayAccessOrigin(const mozilla::dom::TabContext& aContext,
@@ -142,24 +183,27 @@ private:
   void
   Destroy();
 
-  static PLDHashOperator
-  InvalidateAndRemoveFileManagers(const nsACString& aKey,
-                                  nsAutoPtr<FileManagerInfo>& aValue,
-                                  void* aUserArg);
+  static void
+  LoggingModePrefChangedCallback(const char* aPrefName, void* aClosure);
 
   // Maintains a list of all file managers per origin. This list isn't
   // protected by any mutex but it is only ever touched on the IO thread.
   nsClassHashtable<nsCStringHashKey, FileManagerInfo> mFileManagerInfos;
 
-  // Lock protecting FileManager.mFileInfos and nsDOMFileBase.mFileInfos
+  // Lock protecting FileManager.mFileInfos and FileImplBase.mFileInfos
   // It's s also used to atomically update FileInfo.mRefCnt, FileInfo.mDBRefCnt
   // and FileInfo.mSliceRefCnt
   mozilla::Mutex mFileMutex;
 
   static bool sIsMainProcess;
+  static bool sFullSynchronousMode;
+  static PRLogModuleInfo* sLoggingModule;
+  static Atomic<LoggingMode> sLoggingMode;
   static mozilla::Atomic<bool> sLowDiskSpaceMode;
 };
 
-END_INDEXEDDB_NAMESPACE
+} // namespace indexedDB
+} // namespace dom
+} // namespace mozilla
 
-#endif /* mozilla_dom_indexeddb_indexeddatabasemanager_h__ */
+#endif // mozilla_dom_indexeddb_indexeddatabasemanager_h__

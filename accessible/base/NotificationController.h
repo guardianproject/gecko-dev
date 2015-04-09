@@ -26,7 +26,7 @@ class DocAccessible;
 class Notification
 {
 public:
-  NS_INLINE_DECL_REFCOUNTING(Notification)
+  NS_INLINE_DECL_REFCOUNTING(mozilla::a11y::Notification)
 
   /**
    * Process notification.
@@ -64,7 +64,7 @@ public:
     mInstance(aInstance), mCallback(aCallback), mArg(aArg) { }
   virtual ~TNotification() { mInstance = nullptr; }
 
-  virtual void Process()
+  virtual void Process() override
   {
     (mInstance->*mCallback)(mArg);
 
@@ -85,14 +85,14 @@ private:
 /**
  * Used to process notifications from core for the document accessible.
  */
-class NotificationController : public EventQueue,
-                               public nsARefreshObserver
+class NotificationController final : public EventQueue,
+                                     public nsARefreshObserver
 {
 public:
   NotificationController(DocAccessible* aDocument, nsIPresShell* aPresShell);
 
-  NS_IMETHOD_(MozExternalRefCountType) AddRef(void);
-  NS_IMETHOD_(MozExternalRefCountType) Release(void);
+  NS_IMETHOD_(MozExternalRefCountType) AddRef(void) override;
+  NS_IMETHOD_(MozExternalRefCountType) Release(void) override;
 
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(NotificationController)
 
@@ -203,7 +203,7 @@ private:
   NotificationController& operator = (const NotificationController&);
 
   // nsARefreshObserver
-  virtual void WillRefresh(mozilla::TimeStamp aTime);
+  virtual void WillRefresh(mozilla::TimeStamp aTime) override;
 
 private:
   /**
@@ -275,8 +275,8 @@ private:
     typedef T* KeyType;
     typedef const T* KeyTypePointer;
 
-    nsCOMPtrHashKey(const T* aKey) : mKey(const_cast<T*>(aKey)) {}
-    nsCOMPtrHashKey(const nsPtrHashKey<T> &aToCopy) : mKey(aToCopy.mKey) {}
+    explicit nsCOMPtrHashKey(const T* aKey) : mKey(const_cast<T*>(aKey)) {}
+    explicit nsCOMPtrHashKey(const nsPtrHashKey<T> &aToCopy) : mKey(aToCopy.mKey) {}
     ~nsCOMPtrHashKey() { }
 
     KeyType GetKey() const { return mKey; }

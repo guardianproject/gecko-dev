@@ -47,6 +47,10 @@ class TextOverflow {
   nsDisplayList& GetMarkers() { return mMarkerList; }
 
   /**
+   * @return true if aBlockFrmae has text-overflow:clip on both sides.
+   */
+  static bool HasClippedOverflow(nsIFrame* aBlockFrame);
+  /**
    * @return true if aBlockFrame needs analysis for text overflow.
    */
   static bool CanHaveTextOverflow(nsDisplayListBuilder* aBuilder,
@@ -216,10 +220,10 @@ class TextOverflow {
       mHasOverflow = false;
     }
 
-    // The current width of the marker, the range is [0 .. mIntrinsicWidth].
+    // The current width of the marker, the range is [0 .. mIntrinsicISize].
     nscoord                        mWidth;
     // The intrinsic width of the marker.
-    nscoord                        mIntrinsicWidth;
+    nscoord                        mIntrinsicISize;
     // The style for this side.
     const nsStyleTextOverflowSide* mStyle;
     // True if there is visible overflowing inline content on this side.

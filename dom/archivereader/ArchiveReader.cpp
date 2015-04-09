@@ -14,8 +14,9 @@
 
 #include "mozilla/dom/ArchiveReaderBinding.h"
 #include "mozilla/dom/BindingDeclarations.h"
-#include "mozilla/Preferences.h"
+#include "mozilla/dom/File.h"
 #include "mozilla/dom/EncodingUtils.h"
+#include "mozilla/Preferences.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -23,12 +24,10 @@ USING_ARCHIVEREADER_NAMESPACE
 
 /* static */ already_AddRefed<ArchiveReader>
 ArchiveReader::Constructor(const GlobalObject& aGlobal,
-                           nsIDOMBlob* aBlob,
+                           File& aBlob,
                            const ArchiveReaderOptions& aOptions,
                            ErrorResult& aError)
 {
-  MOZ_ASSERT(aBlob);
-
   nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aGlobal.GetAsSupports());
   if (!window) {
     aError.Throw(NS_ERROR_UNEXPECTED);
@@ -38,7 +37,7 @@ ArchiveReader::Constructor(const GlobalObject& aGlobal,
   nsAutoCString encoding;
   if (!EncodingUtils::FindEncodingForLabelNoReplacement(aOptions.mEncoding,
                                                         encoding)) {
-    aError.ThrowTypeError(MSG_ENCODING_NOT_SUPPORTED, &aOptions.mEncoding);
+    aError.ThrowRangeError(MSG_ENCODING_NOT_SUPPORTED, &aOptions.mEncoding);
     return nullptr;
   }
 
@@ -47,17 +46,14 @@ ArchiveReader::Constructor(const GlobalObject& aGlobal,
   return reader.forget();
 }
 
-ArchiveReader::ArchiveReader(nsIDOMBlob* aBlob, nsPIDOMWindow* aWindow,
+ArchiveReader::ArchiveReader(File& aBlob, nsPIDOMWindow* aWindow,
                              const nsACString& aEncoding)
-  : mBlob(aBlob)
+  : mFileImpl(aBlob.Impl())
   , mWindow(aWindow)
   , mStatus(NOT_STARTED)
   , mEncoding(aEncoding)
 {
-  MOZ_ASSERT(aBlob);
   MOZ_ASSERT(aWindow);
-
-  SetIsDOMBinding();
 }
 
 ArchiveReader::~ArchiveReader()
@@ -65,9 +61,9 @@ ArchiveReader::~ArchiveReader()
 }
 
 /* virtual */ JSObject*
-ArchiveReader::WrapObject(JSContext* aCx)
+ArchiveReader::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return ArchiveReaderBinding::Wrap(aCx, this);
+  return ArchiveReaderBinding::Wrap(aCx, this, aGivenProto);
 }
 
 nsresult
@@ -99,7 +95,7 @@ nsresult
 ArchiveReader::GetInputStream(nsIInputStream** aInputStream)
 {
   // Getting the input stream
-  mBlob->GetInternalStream(aInputStream);
+  mFileImpl->GetInternalStream(aInputStream);
   NS_ENSURE_TRUE(*aInputStream, NS_ERROR_UNEXPECTED);
   return NS_OK;
 }
@@ -107,9 +103,9 @@ ArchiveReader::GetInputStream(nsIInputStream** aInputStream)
 nsresult
 ArchiveReader::GetSize(uint64_t* aSize)
 {
-  nsresult rv = mBlob->GetSize(aSize);
-  NS_ENSURE_SUCCESS(rv, rv);
-  return NS_OK;
+  ErrorResult rv;
+  *aSize = mFileImpl->GetSize(rv);
+  return rv.ErrorCode();
 }
 
 // Here we open the archive:
@@ -203,7 +199,7 @@ ArchiveReader::GenerateArchiveRequest()
 }
 
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(ArchiveReader,
-                                      mBlob,
+                                      mFileImpl,
                                       mWindow,
                                       mData.fileList,
                                       mRequests)

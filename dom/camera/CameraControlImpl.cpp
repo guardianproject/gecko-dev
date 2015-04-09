@@ -8,7 +8,6 @@
 #include "mozilla/unused.h"
 #include "nsPrintfCString.h"
 #include "nsIWeakReferenceUtils.h"
-#include "CameraRecorderProfiles.h"
 #include "CameraCommon.h"
 #include "nsGlobalWindow.h"
 #include "DeviceStorageFileDescriptor.h"
@@ -16,18 +15,31 @@
 
 using namespace mozilla;
 
-nsWeakPtr CameraControlImpl::sCameraThread;
+/* static */ StaticRefPtr<nsIThread> CameraControlImpl::sCameraThread;
 
-CameraControlImpl::CameraControlImpl(uint32_t aCameraId)
+CameraControlImpl::CameraControlImpl()
   : mListenerLock(PR_NewRWLock(PR_RWLOCK_RANK_NONE, "CameraControlImpl.Listeners.Lock"))
-  , mCameraId(aCameraId)
   , mPreviewState(CameraControlListener::kPreviewStopped)
-  , mHardwareState(CameraControlListener::kHardwareClosed)
+  , mHardwareState(CameraControlListener::kHardwareUninitialized)
+  , mHardwareStateChangeReason(NS_OK)
 {
   DOM_CAMERA_LOGT("%s:%d : this=%p\n", __func__, __LINE__, this);
+  mCurrentConfiguration.mMode = ICameraControl::kUnspecifiedMode;
+
+  class Delegate : public nsRunnable
+  {
+  public:
+    NS_IMETHOD
+    Run()
+    {
+      char stackBaseGuess;
+      profiler_register_thread("CameraThread", &stackBaseGuess);
+      return NS_OK;
+    }
+  };
 
   // reuse the same camera thread to conserve resources
-  nsCOMPtr<nsIThread> ct = do_QueryReferent(sCameraThread);
+  nsCOMPtr<nsIThread> ct = do_QueryInterface(sCameraThread);
   if (ct) {
     mCameraThread = ct.forget();
   } else {
@@ -35,9 +47,8 @@ CameraControlImpl::CameraControlImpl(uint32_t aCameraId)
     if (NS_FAILED(rv)) {
       MOZ_CRASH("Failed to create new Camera Thread");
     }
-
-    // keep a weak reference to the new thread
-    sCameraThread = do_GetWeakReference(mCameraThread);
+    mCameraThread->Dispatch(new Delegate(), NS_DISPATCH_NORMAL);
+    sCameraThread = mCameraThread;
   }
 
   // Care must be taken with the mListenerLock read-write lock to prevent
@@ -58,6 +69,8 @@ CameraControlImpl::CameraControlImpl(uint32_t aCameraId)
 
 CameraControlImpl::~CameraControlImpl()
 {
+  DOM_CAMERA_LOGT("%s:%d : this=%p\n", __func__, __LINE__, this);
+
   MOZ_ASSERT(mListenerLock, "mListenerLock missing in ~CameraControlImpl()");
   if (mListenerLock) {
     PR_DestroyRWLock(mListenerLock);
@@ -65,20 +78,9 @@ CameraControlImpl::~CameraControlImpl()
   }
 }
 
-already_AddRefed<RecorderProfileManager>
-CameraControlImpl::GetRecorderProfileManager()
-{
-  return GetRecorderProfileManagerImpl();
-}
-
 void
-CameraControlImpl::Shutdown()
-{
-  DOM_CAMERA_LOGT("%s:%d\n", __func__, __LINE__);
-}
-
-void
-CameraControlImpl::OnHardwareStateChange(CameraControlListener::HardwareState aNewState)
+CameraControlImpl::OnHardwareStateChange(CameraControlListener::HardwareState aNewState,
+                                         nsresult aReason)
 {
   // This callback can run on threads other than the Main Thread and
   //  the Camera Thread. On Gonk, it may be called from the camera's
@@ -91,20 +93,22 @@ CameraControlImpl::OnHardwareStateChange(CameraControlListener::HardwareState aN
   }
 
 #ifdef PR_LOGGING
-  const char* state[] = { "open", "closed", "failed" };
+  const char* state[] = { "uninitialized", "closed", "open", "failed" };
   MOZ_ASSERT(aNewState >= 0);
   if (static_cast<unsigned int>(aNewState) < sizeof(state) / sizeof(state[0])) {
-    DOM_CAMERA_LOGI("New hardware state is '%s'\n", state[aNewState]);
+    DOM_CAMERA_LOGI("New hardware state is '%s' (reason=0x%x)\n",
+      state[aNewState], aReason);
   } else {
     DOM_CAMERA_LOGE("OnHardwareStateChange: got invalid HardwareState value %d\n", aNewState);
   }
 #endif
 
   mHardwareState = aNewState;
+  mHardwareStateChangeReason = aReason;
 
   for (uint32_t i = 0; i < mListeners.Length(); ++i) {
     CameraControlListener* l = mListeners[i];
-    l->OnHardwareStateChange(mHardwareState);
+    l->OnHardwareStateChange(mHardwareState, mHardwareStateChangeReason);
   }
 }
 
@@ -114,7 +118,7 @@ CameraControlImpl::OnConfigurationChange()
   MOZ_ASSERT(NS_GetCurrentThread() == mCameraThread);
   RwLockAutoEnterRead lock(mListenerLock);
 
-  DOM_CAMERA_LOGI("OnConfigurationChange : %d listeners\n", mListeners.Length());
+  DOM_CAMERA_LOGI("OnConfigurationChange : %zu listeners\n", mListeners.Length());
 
   for (uint32_t i = 0; i < mListeners.Length(); ++i) {
     CameraControlListener* l = mListeners[i];
@@ -190,19 +194,6 @@ CameraControlImpl::OnShutter()
 }
 
 void
-CameraControlImpl::OnClosed()
-{
-  // This callback can run on threads other than the Main Thread and
-  //  the Camera Thread.
-  RwLockAutoEnterRead lock(mListenerLock);
-
-  for (uint32_t i = 0; i < mListeners.Length(); ++i) {
-    CameraControlListener* l = mListeners[i];
-    l->OnHardwareStateChange(CameraControlListener::kHardwareClosed);
-  }
-}
-
-void
 CameraControlImpl::OnRecorderStateChange(CameraControlListener::RecorderState aState,
                                          int32_t aStatus, int32_t aTrackNumber)
 {
@@ -269,7 +260,7 @@ CameraControlImpl::OnNewPreviewFrame(layers::Image* aImage, uint32_t aWidth, uin
   //  On Gonk, it is called from the camera driver's preview thread.
   RwLockAutoEnterRead lock(mListenerLock);
 
-  DOM_CAMERA_LOGI("OnNewPreviewFrame: we have %d preview frame listener(s)\n",
+  DOM_CAMERA_LOGI("OnNewPreviewFrame: we have %zu preview frame listener(s)\n",
     mListeners.Length());
 
   bool consumed = false;
@@ -364,7 +355,7 @@ public:
   virtual nsresult RunImpl() = 0;
 
   NS_IMETHOD
-  Run() MOZ_OVERRIDE
+  Run() override
   {
     MOZ_ASSERT(mCameraControl);
     MOZ_ASSERT(NS_GetCurrentThread() == mCameraControl->mCameraThread);
@@ -418,7 +409,7 @@ CameraControlImpl::Start(const Configuration* aConfig)
     }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       if (mHaveInitialConfig) {
         return mCameraControl->StartImpl(&mConfig);
@@ -448,7 +439,7 @@ CameraControlImpl::SetConfiguration(const Configuration& aConfig)
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->SetConfigurationImpl(mConfig);
     }
@@ -472,7 +463,7 @@ CameraControlImpl::AutoFocus()
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->AutoFocusImpl();
     }
@@ -493,7 +484,7 @@ CameraControlImpl::StartFaceDetection()
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->StartFaceDetectionImpl();
     }
@@ -514,7 +505,7 @@ CameraControlImpl::StopFaceDetection()
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->StopFaceDetectionImpl();
     }
@@ -535,7 +526,7 @@ CameraControlImpl::TakePicture()
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->TakePictureImpl();
     }
@@ -566,7 +557,7 @@ CameraControlImpl::StartRecording(DeviceStorageFileDescriptor* aFileDescriptor,
     }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->StartRecordingImpl(mFileDescriptor,
         mOptionsPassed ? &mOptions : nullptr);
@@ -597,7 +588,7 @@ CameraControlImpl::StopRecording()
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->StopRecordingImpl();
     }
@@ -618,7 +609,7 @@ CameraControlImpl::StartPreview()
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->StartPreviewImpl();
     }
@@ -639,7 +630,7 @@ CameraControlImpl::StopPreview()
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->StopPreviewImpl();
     }
@@ -660,7 +651,7 @@ CameraControlImpl::ResumeContinuousFocus()
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->ResumeContinuousFocusImpl();
     }
@@ -681,7 +672,7 @@ CameraControlImpl::Stop()
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       return mCameraControl->StopImpl();
     }
@@ -713,7 +704,7 @@ CameraControlImpl::AddListenerImpl(already_AddRefed<CameraControlListener> aList
 
   // Update the newly-added listener's state
   l->OnConfigurationChange(mCurrentConfiguration);
-  l->OnHardwareStateChange(mHardwareState);
+  l->OnHardwareStateChange(mHardwareState, mHardwareStateChangeReason);
   l->OnPreviewStateChange(mPreviewState);
 }
 
@@ -729,7 +720,7 @@ CameraControlImpl::AddListener(CameraControlListener* aListener)
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       mCameraControl->AddListenerImpl(mListener.forget());
       return NS_OK;
@@ -763,7 +754,7 @@ CameraControlImpl::RemoveListener(CameraControlListener* aListener)
     { }
 
     nsresult
-    RunImpl() MOZ_OVERRIDE
+    RunImpl() override
     {
       mCameraControl->RemoveListenerImpl(mListener);
       return NS_OK;

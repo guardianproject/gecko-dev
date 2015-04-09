@@ -7,8 +7,6 @@
 #ifndef nsTimerImpl_h___
 #define nsTimerImpl_h___
 
-//#define FORCE_PR_LOG /* Allow logging in the release build */
-
 #include "nsITimer.h"
 #include "nsIEventTarget.h"
 #include "nsIObserver.h"
@@ -46,7 +44,7 @@ enum
   CALLBACK_TYPE_OBSERVER  = 3
 };
 
-class nsTimerImpl MOZ_FINAL : public nsITimer
+class nsTimerImpl final : public nsITimer
 {
 public:
   typedef mozilla::TimeStamp TimeStamp;
@@ -62,7 +60,7 @@ public:
   void Fire();
   // If a failure is encountered, the reference is returned to the caller
   static already_AddRefed<nsTimerImpl> PostTimerEvent(
-      already_AddRefed<nsTimerImpl> aTimerRef);
+    already_AddRefed<nsTimerImpl> aTimerRef);
   void SetDelayInternal(uint32_t aDelay);
 
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -80,7 +78,7 @@ public:
   }
 #endif
 
-  virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
+  virtual size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const override;
 
 private:
   ~nsTimerImpl();
@@ -154,7 +152,7 @@ private:
   TimeStamp             mTimeout;
 
 #ifdef MOZ_TASK_TRACER
-  nsAutoPtr<mozilla::tasktracer::FakeTracedTask> mTracedTask;
+  nsRefPtr<mozilla::tasktracer::FakeTracedTask> mTracedTask;
 #endif
 
 #ifdef DEBUG_TIMERS

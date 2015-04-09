@@ -23,32 +23,30 @@ public:
 
   XULMenuitemAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  // nsIAccessible
-  NS_IMETHOD DoAction(uint8_t index);
-  NS_IMETHOD GetActionName(uint8_t aIndex, nsAString& aName);
-
   // Accessible
-  virtual void Description(nsString& aDescription);
-  virtual a11y::role NativeRole();
-  virtual uint64_t NativeState();
-  virtual uint64_t NativeInteractiveState() const;
-  virtual int32_t GetLevelInternal();
+  virtual void Description(nsString& aDescription) override;
+  virtual a11y::role NativeRole() override;
+  virtual uint64_t NativeState() override;
+  virtual uint64_t NativeInteractiveState() const override;
+  virtual int32_t GetLevelInternal() override;
 
-  virtual bool CanHaveAnonChildren();
+  virtual bool CanHaveAnonChildren() override;
 
   // ActionAccessible
-  virtual uint8_t ActionCount();
-  virtual KeyBinding AccessKey() const;
-  virtual KeyBinding KeyboardShortcut() const;
+  virtual uint8_t ActionCount() override;
+  virtual void ActionNameAt(uint8_t aIndex, nsAString& aName) override;
+  virtual bool DoAction(uint8_t aIndex) override;
+  virtual KeyBinding AccessKey() const override;
+  virtual KeyBinding KeyboardShortcut() const override;
 
   // Widgets
-  virtual bool IsActiveWidget() const;
-  virtual bool AreItemsOperable() const;
-  virtual Accessible* ContainerWidget() const;
+  virtual bool IsActiveWidget() const override;
+  virtual bool AreItemsOperable() const override;
+  virtual Accessible* ContainerWidget() const override;
 
 protected:
   // Accessible
-  virtual ENameValueFlag NativeName(nsString& aName) MOZ_OVERRIDE;
+  virtual ENameValueFlag NativeName(nsString& aName) override;
 };
 
 /**
@@ -59,20 +57,18 @@ class XULMenuSeparatorAccessible : public XULMenuitemAccessible
 public:
   XULMenuSeparatorAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  // nsIAccessible
-  NS_IMETHOD DoAction(uint8_t index);
-  NS_IMETHOD GetActionName(uint8_t aIndex, nsAString& aName);
-
   // Accessible
-  virtual a11y::role NativeRole();
-  virtual uint64_t NativeState();
+  virtual a11y::role NativeRole() override;
+  virtual uint64_t NativeState() override;
 
   // ActionAccessible
-  virtual uint8_t ActionCount();
+  virtual uint8_t ActionCount() override;
+  virtual void ActionNameAt(uint8_t aIndex, nsAString& aName) override;
+  virtual bool DoAction(uint8_t aIndex) override;
 
 protected:
   // Accessible
-  virtual ENameValueFlag NativeName(nsString& aName) MOZ_OVERRIDE;
+  virtual ENameValueFlag NativeName(nsString& aName) override;
 };
 
 
@@ -85,19 +81,19 @@ public:
   XULMenupopupAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
   // Accessible
-  virtual a11y::role NativeRole();
-  virtual uint64_t NativeState();
+  virtual a11y::role NativeRole() override;
+  virtual uint64_t NativeState() override;
 
   // Widgets
-  virtual bool IsWidget() const;
-  virtual bool IsActiveWidget() const;
-  virtual bool AreItemsOperable() const;
+  virtual bool IsWidget() const override;
+  virtual bool IsActiveWidget() const override;
+  virtual bool AreItemsOperable() const override;
 
-  virtual Accessible* ContainerWidget() const;
+  virtual Accessible* ContainerWidget() const override;
 
 protected:
   // Accessible
-  virtual ENameValueFlag NativeName(nsString& aName) MOZ_OVERRIDE;
+  virtual ENameValueFlag NativeName(nsString& aName) override;
 };
 
 /**
@@ -109,17 +105,17 @@ public:
   XULMenubarAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
   // Accessible
-  virtual a11y::role NativeRole();
+  virtual a11y::role NativeRole() override;
 
   // Widget
-  virtual bool IsActiveWidget() const;
-  virtual bool AreItemsOperable() const;
-  virtual Accessible* CurrentItem();
-  virtual void SetCurrentItem(Accessible* aItem);
+  virtual bool IsActiveWidget() const override;
+  virtual bool AreItemsOperable() const override;
+  virtual Accessible* CurrentItem() override;
+  virtual void SetCurrentItem(Accessible* aItem) override;
 
 protected:
   // Accessible
-  virtual ENameValueFlag NativeName(nsString& aName) MOZ_OVERRIDE;
+  virtual ENameValueFlag NativeName(nsString& aName) override;
 };
 
 } // namespace a11y

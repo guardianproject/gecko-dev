@@ -27,14 +27,14 @@ class EventTarget;
 // with the DOM with AddChromeListeners() and removing itself with
 // RemoveChromeListeners().
 //
-class nsPrintPreviewListener MOZ_FINAL : public nsIDOMEventListener
+class nsPrintPreviewListener final : public nsIDOMEventListener
 
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIDOMEVENTLISTENER
 
-  nsPrintPreviewListener(mozilla::dom::EventTarget* aTarget);
+  explicit nsPrintPreviewListener(mozilla::dom::EventTarget* aTarget);
 
   // Add/remove the relevant listeners, based on what interfaces
   // the embedding chrome implements.

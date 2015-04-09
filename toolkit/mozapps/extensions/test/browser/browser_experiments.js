@@ -2,6 +2,8 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
+Components.utils.import("resource://gre/modules/Promise.jsm", this);
+
 let {AddonTestUtils} = Components.utils.import("resource://testing-common/AddonManagerTesting.jsm", {});
 let {HttpServer} = Components.utils.import("resource://testing-common/httpd.js", {});
 
@@ -98,7 +100,6 @@ add_task(function* initializeState() {
     Services.prefs.clearUserPref("experiments.enabled");
     if (gHttpServer) {
       gHttpServer.stop(() => {});
-      Services.prefs.clearUserPref("experiments.manifest.cert.checkAttributes");
       if (gSavedManifestURI !== undefined) {
         Services.prefs.setCharPref("experments.manifest.uri", gSavedManifestURI);
       }
@@ -179,7 +180,7 @@ add_task(function* testExperimentLearnMore() {
     info("Telemetry privacy policy window opened.");
     window.removeEventListener("DOMContentLoaded", onLoad, false);
 
-    let browser = gBrowser.selectedTab.linkedBrowser;
+    let browser = gBrowser.selectedBrowser;
     let expected = Services.prefs.getCharPref("toolkit.telemetry.infoURL");
     Assert.equal(browser.currentURI.spec, expected, "New tab should have loaded privacy policy.");
     browser.contentWindow.close();
@@ -287,7 +288,6 @@ add_task(function* testActivateExperiment() {
     response.finish();
   });
 
-  Services.prefs.setBoolPref("experiments.manifest.cert.checkAttributes", false);
   gSavedManifestURI = Services.prefs.getCharPref("experiments.manifest.uri");
   Services.prefs.setCharPref("experiments.manifest.uri", root + "manifest");
 
@@ -584,7 +584,7 @@ add_task(function testDetailView() {
   yield gCategoryUtilities.openType("experiment");
   yield openDetailsView("experiment-3");
 
-  let el = gManagerWindow.document.getElementById("detail-experiment-state");
+  el = gManagerWindow.document.getElementById("detail-experiment-state");
   is_element_visible(el, "Experiment state label should be visible.");
   if (gIsEnUsLocale) {
     Assert.equal(el.value, "Complete");
@@ -629,7 +629,6 @@ add_task(function* testRemoveAndUndo() {
 add_task(function* testCleanup() {
   if (gExperiments) {
     Services.prefs.clearUserPref("experiments.enabled");
-    Services.prefs.clearUserPref("experiments.manifest.cert.checkAttributes");
     Services.prefs.setCharPref("experiments.manifest.uri", gSavedManifestURI);
 
     // We perform the uninit/init cycle to purge any leftover state.

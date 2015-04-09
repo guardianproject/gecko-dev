@@ -38,14 +38,12 @@ NS_NewXBLContentSink(nsIXMLContentSink** aResult,
 {
   NS_ENSURE_ARG_POINTER(aResult);
 
-  nsXBLContentSink* it = new nsXBLContentSink();
-  NS_ENSURE_TRUE(it, NS_ERROR_OUT_OF_MEMORY);
-
-  nsCOMPtr<nsIXMLContentSink> kungFuDeathGrip = it;
+  nsRefPtr<nsXBLContentSink> it = new nsXBLContentSink();
   nsresult rv = it->Init(aDoc, aURI, aContainer);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  return CallQueryInterface(it, aResult);
+  it.forget(aResult);
+  return NS_OK;
 }
 
 nsXBLContentSink::nsXBLContentSink()
@@ -138,9 +136,9 @@ nsXBLContentSink::FlushText(bool aReleaseTextNode)
     nsIContent* content = GetCurrentContent();
     if (content &&
         (content->NodeInfo()->NamespaceEquals(kNameSpaceID_XBL) ||
-         (content->NodeInfo()->NamespaceEquals(kNameSpaceID_XUL) &&
-          content->Tag() != nsGkAtoms::label &&
-          content->Tag() != nsGkAtoms::description))) {
+         (content->IsXULElement() &&
+          !content->IsAnyOfXULElements(nsGkAtoms::label,
+                                       nsGkAtoms::description)))) {
 
       bool isWS = true;
       if (mTextLength > 0) {
@@ -461,11 +459,9 @@ nsXBLContentSink::OnOpenContainer(const char16_t **aAtts,
     }
     nsXBLProtoImplAnonymousMethod* newMethod =
       new nsXBLProtoImplAnonymousMethod(name.get());
-    if (newMethod) {
-      newMethod->SetLineNumber(aLineNumber);
-      mBinding->SetConstructor(newMethod);
-      AddMember(newMethod);
-    }
+    newMethod->SetLineNumber(aLineNumber);
+    mBinding->SetConstructor(newMethod);
+    AddMember(newMethod);
   }
   else if (aTagName == nsGkAtoms::destructor) {
     ENSURE_XBL_STATE(mState == eXBL_InImplementation &&
@@ -481,11 +477,9 @@ nsXBLContentSink::OnOpenContainer(const char16_t **aAtts,
     }
     nsXBLProtoImplAnonymousMethod* newMethod =
       new nsXBLProtoImplAnonymousMethod(name.get());
-    if (newMethod) {
-      newMethod->SetLineNumber(aLineNumber);
-      mBinding->SetDestructor(newMethod);
-      AddMember(newMethod);
-    }
+    newMethod->SetLineNumber(aLineNumber);
+    mBinding->SetDestructor(newMethod);
+    AddMember(newMethod);
   }
   else if (aTagName == nsGkAtoms::field) {
     ENSURE_XBL_STATE(mState == eXBL_InImplementation &&
@@ -551,9 +545,7 @@ nsXBLContentSink::ConstructBinding(uint32_t aLineNumber)
   // performs this check.
   if (!cid.IsEmpty()) {
     mBinding = new nsXBLPrototypeBinding();
-    if (!mBinding)
-      return NS_ERROR_OUT_OF_MEMORY;
-      
+
     rv = mBinding->Init(cid, mDocInfo, binding, !mFoundFirstBinding);
     if (NS_SUCCEEDED(rv) &&
         NS_SUCCEEDED(mDocInfo->SetPrototypeBinding(cid, mBinding))) {
@@ -675,22 +667,17 @@ nsXBLContentSink::ConstructHandler(const char16_t **aAtts, uint32_t aLineNumber)
                                          clickcount, group, preventdefault,
                                          allowuntrusted, mBinding, aLineNumber);
 
-  if (newHandler) {
-    // Add this handler to our chain of handlers.
-    if (mHandler) {
-      // Already have a chain. Just append to the end.
-      mHandler->SetNextHandler(newHandler);
-    }
-    else {
-      // We're the first handler in the chain.
-      mBinding->SetPrototypeHandlers(newHandler);
-    }
-    // Adjust our mHandler pointer to point to the new last handler in the
-    // chain.
-    mHandler = newHandler;
+  // Add this handler to our chain of handlers.
+  if (mHandler) {
+    // Already have a chain. Just append to the end.
+    mHandler->SetNextHandler(newHandler);
   } else {
-    mState = eXBL_Error;
+    // We're the first handler in the chain.
+    mBinding->SetPrototypeHandlers(newHandler);
   }
+  // Adjust our mHandler pointer to point to the new last handler in the
+  // chain.
+  mHandler = newHandler;
 }
 
 void
@@ -773,10 +760,8 @@ nsXBLContentSink::ConstructField(const char16_t **aAtts, uint32_t aLineNumber)
     // All of our pointers are now filled in. Construct our field with all of
     // these parameters.
     mField = new nsXBLProtoImplField(name, readonly);
-    if (mField) {
-      mField->SetLineNumber(aLineNumber);
-      AddField(mField);
-    }
+    mField->SetLineNumber(aLineNumber);
+    AddField(mField);
   }
 }
 
@@ -882,8 +867,6 @@ nsXBLContentSink::CreateElement(const char16_t** aAtts, uint32_t aAttsCount,
 
   *aAppendContent = true;
   nsRefPtr<nsXULPrototypeElement> prototype = new nsXULPrototypeElement();
-  if (!prototype)
-    return NS_ERROR_OUT_OF_MEMORY;
 
   prototype->mNodeInfo = aNodeInfo;
 
@@ -900,7 +883,7 @@ nsresult
 nsXBLContentSink::AddAttributes(const char16_t** aAtts,
                                 nsIContent* aContent)
 {
-  if (aContent->IsXUL())
+  if (aContent->IsXULElement())
     return NS_OK; // Nothing to do, since the proto already has the attrs.
 
   return nsXMLContentSink::AddAttributes(aAtts, aContent);
@@ -919,8 +902,6 @@ nsXBLContentSink::AddAttributesToXULPrototype(const char16_t **aAtts,
   nsXULPrototypeAttribute* attrs = nullptr;
   if (aAttsCount > 0) {
     attrs = new nsXULPrototypeAttribute[aAttsCount];
-    if (!attrs)
-      return NS_ERROR_OUT_OF_MEMORY;
   }
 
   aElement->mAttributes    = attrs;

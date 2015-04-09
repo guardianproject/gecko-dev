@@ -3,8 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef MOZILLA_IMAGELIB_CLIPPEDIMAGE_H_
-#define MOZILLA_IMAGELIB_CLIPPEDIMAGE_H_
+#ifndef mozilla_image_src_ClippedImage_h
+#define mozilla_image_src_ClippedImage_h
 
 #include "ImageWrapper.h"
 #include "mozilla/gfx/2D.h"
@@ -26,33 +26,35 @@ class DrawSingleTileCallback;
  */
 class ClippedImage : public ImageWrapper
 {
-  typedef mozilla::gfx::SourceSurface SourceSurface;
+  typedef gfx::SourceSurface SourceSurface;
 
 public:
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual nsIntRect FrameRect(uint32_t aWhichFrame) MOZ_OVERRIDE;
-
-  NS_IMETHOD GetWidth(int32_t* aWidth) MOZ_OVERRIDE;
-  NS_IMETHOD GetHeight(int32_t* aHeight) MOZ_OVERRIDE;
-  NS_IMETHOD GetIntrinsicSize(nsSize* aSize) MOZ_OVERRIDE;
-  NS_IMETHOD GetIntrinsicRatio(nsSize* aRatio) MOZ_OVERRIDE;
-  NS_IMETHOD_(mozilla::TemporaryRef<SourceSurface>)
-    GetFrame(uint32_t aWhichFrame, uint32_t aFlags) MOZ_OVERRIDE;
-  NS_IMETHOD GetImageContainer(mozilla::layers::LayerManager* aManager,
-                               mozilla::layers::ImageContainer** _retval) MOZ_OVERRIDE;
-  NS_IMETHOD Draw(gfxContext* aContext,
-                  GraphicsFilter aFilter,
-                  const gfxMatrix& aUserSpaceToImageSpace,
-                  const gfxRect& aFill,
-                  const nsIntRect& aSubimage,
-                  const nsIntSize& aViewportSize,
-                  const SVGImageContext* aSVGContext,
-                  uint32_t aWhichFrame,
-                  uint32_t aFlags) MOZ_OVERRIDE;
-  NS_IMETHOD RequestDiscard() MOZ_OVERRIDE;
-  NS_IMETHOD_(Orientation) GetOrientation() MOZ_OVERRIDE;
-  NS_IMETHOD_(nsIntRect) GetImageSpaceInvalidationRect(const nsIntRect& aRect) MOZ_OVERRIDE;
+  NS_IMETHOD GetWidth(int32_t* aWidth) override;
+  NS_IMETHOD GetHeight(int32_t* aHeight) override;
+  NS_IMETHOD GetIntrinsicSize(nsSize* aSize) override;
+  NS_IMETHOD GetIntrinsicRatio(nsSize* aRatio) override;
+  NS_IMETHOD_(TemporaryRef<SourceSurface>)
+    GetFrame(uint32_t aWhichFrame, uint32_t aFlags) override;
+  NS_IMETHOD_(already_AddRefed<layers::ImageContainer>)
+    GetImageContainer(layers::LayerManager* aManager,
+                      uint32_t aFlags) override;
+  NS_IMETHOD_(DrawResult) Draw(gfxContext* aContext,
+                               const nsIntSize& aSize,
+                               const ImageRegion& aRegion,
+                               uint32_t aWhichFrame,
+                               GraphicsFilter aFilter,
+                               const Maybe<SVGImageContext>& aSVGContext,
+                               uint32_t aFlags) override;
+  NS_IMETHOD RequestDiscard() override;
+  NS_IMETHOD_(Orientation) GetOrientation() override;
+  NS_IMETHOD_(nsIntRect) GetImageSpaceInvalidationRect(const nsIntRect& aRect)
+    override;
+  nsIntSize OptimalImageSizeForDest(const gfxSize& aDest,
+                                    uint32_t aWhichFrame,
+                                    GraphicsFilter aFilter,
+                                    uint32_t aFlags) override;
 
 protected:
   ClippedImage(Image* aImage, nsIntRect aClip);
@@ -60,27 +62,19 @@ protected:
   virtual ~ClippedImage();
 
 private:
-  mozilla::TemporaryRef<SourceSurface>
-    GetFrameInternal(const nsIntSize& aViewportSize,
-                     const SVGImageContext* aSVGContext,
+  TemporaryRef<SourceSurface>
+    GetFrameInternal(const nsIntSize& aSize,
+                     const Maybe<SVGImageContext>& aSVGContext,
                      uint32_t aWhichFrame,
                      uint32_t aFlags);
   bool ShouldClip();
-  bool MustCreateSurface(gfxContext* aContext,
-                         const gfxMatrix& aTransform,
-                         const gfxRect& aSourceRect,
-                         const nsIntRect& aSubimage,
-                         const uint32_t aFlags) const;
-  gfxFloat ClampFactor(const gfxFloat aToClamp, const int aReference) const;
-  nsresult DrawSingleTile(gfxContext* aContext,
-                          GraphicsFilter aFilter,
-                          const gfxMatrix& aUserSpaceToImageSpace,
-                          const gfxRect& aFill,
-                          const nsIntRect& aSubimage,
-                          const nsIntSize& aViewportSize,
-                          const SVGImageContext* aSVGContext,
-                          uint32_t aWhichFrame,
-                          uint32_t aFlags);
+  DrawResult DrawSingleTile(gfxContext* aContext,
+                            const nsIntSize& aSize,
+                            const ImageRegion& aRegion,
+                            uint32_t aWhichFrame,
+                            GraphicsFilter aFilter,
+                            const Maybe<SVGImageContext>& aSVGContext,
+                            uint32_t aFlags);
 
   // If we are forced to draw a temporary surface, we cache it here.
   nsAutoPtr<ClippedImageCachedSurface> mCachedSurface;
@@ -95,4 +89,4 @@ private:
 } // namespace image
 } // namespace mozilla
 
-#endif // MOZILLA_IMAGELIB_CLIPPEDIMAGE_H_
+#endif // mozilla_image_src_ClippedImage_h

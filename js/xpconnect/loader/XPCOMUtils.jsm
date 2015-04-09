@@ -107,7 +107,16 @@ this.XPCOMUtils = {
    */
   generateQI: function XPCU_generateQI(interfaces) {
     /* Note that Ci[Ci.x] == Ci.x for all x */
-    return makeQI([Ci[i].name for each (i in interfaces) if (Ci[i])]);
+    let a = [];
+    if (interfaces) {
+      for (let i = 0; i < interfaces.length; i++) {
+        let iface = interfaces[i];
+        if (Ci[iface]) {
+          a.push(Ci[iface].name);
+        }
+      }
+    }
+    return makeQI(a);
   },
 
   /**
@@ -123,17 +132,22 @@ this.XPCOMUtils = {
     if (QueryInterface in classInfo)
       throw Error("In generateCI, don't use a component for generating classInfo");
     /* Note that Ci[Ci.x] == Ci.x for all x */
-    var _interfaces = [Ci[i] for each (i in classInfo.interfaces) if (Ci[i])];
+    let _interfaces = [];
+    for (let i = 0; i < classInfo.interfaces.length; i++) {
+      let iface = classInfo.interfaces[i];
+      if (Ci[iface]) {
+        _interfaces.push(Ci[iface]);
+      }
+    }
     return {
       getInterfaces: function XPCU_getInterfaces(countRef) {
         countRef.value = _interfaces.length;
         return _interfaces;
       },
-      getHelperForLanguage: function XPCU_getHelperForLanguage(language) null,
+      getScriptableHelper: function XPCU_getScriptableHelper() null,
       contractID: classInfo.contractID,
       classDescription: classInfo.classDescription,
       classID: classInfo.classID,
-      implementationLanguage: Ci.nsIProgrammingLanguage.JAVASCRIPT,
       flags: classInfo.flags,
       QueryInterface: this.generateQI([Ci.nsIClassInfo])
     };
@@ -144,7 +158,8 @@ this.XPCOMUtils = {
    */
   generateNSGetFactory: function XPCU_generateNSGetFactory(componentsArray) {
     let classes = {};
-    for each (let component in componentsArray) {
+    for (let i = 0; i < componentsArray.length; i++) {
+        let component = componentsArray[i];
         if (!(component.prototype.classID instanceof Components.ID))
           throw Error("In generateNSGetFactory, classID missing or incorrect for component " + component);
 
@@ -173,8 +188,19 @@ this.XPCOMUtils = {
   {
     Object.defineProperty(aObject, aName, {
       get: function () {
+        // Redefine this accessor property as a data property.
+        // Delete it first, to rule out "too much recursion" in case aObject is
+        // a proxy whose defineProperty handler might unwittingly trigger this
+        // getter again.
         delete aObject[aName];
-        return aObject[aName] = aLambda.apply(aObject);
+        let value = aLambda.apply(aObject);
+        Object.defineProperty(aObject, aName, {
+          value,
+          writable: true,
+          configurable: true,
+          enumerable: true
+        });
+        return value;
       },
       configurable: true,
       enumerable: true
@@ -274,7 +300,8 @@ this.XPCOMUtils = {
           if (outer)
             throw Cr.NS_ERROR_NO_AGGREGATION;
           return (new component()).QueryInterface(iid);
-        }
+        },
+        QueryInterface: XPCOMUtils.generateQI([Ci.nsIFactory])
       }
     }
     return factory;
@@ -329,8 +356,8 @@ function makeQI(interfaceNames) {
       return this;
     if (iid.equals(Ci.nsIClassInfo) && "classInfo" in this)
       return this.classInfo;
-    for each(let interfaceName in interfaceNames) {
-      if (Ci[interfaceName].equals(iid))
+    for (let i = 0; i < interfaceNames.length; i++) {
+      if (Ci[interfaceNames[i]].equals(iid))
         return this;
     }
 

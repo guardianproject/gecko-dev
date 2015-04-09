@@ -26,9 +26,9 @@ class nsIRunnable;
 namespace mozilla {
 namespace dom {
 
-class FileHandle;
+class FileHandleBase;
 
-class FileService MOZ_FINAL : public nsIObserver
+class FileService final : public nsIObserver
 {
 public:
   NS_DECL_ISUPPORTS
@@ -50,10 +50,10 @@ public:
   IsShuttingDown();
 
   nsresult
-  Enqueue(FileHandle* aFileHandle, FileHelper* aFileHelper);
+  Enqueue(FileHandleBase* aFileHandle, FileHelper* aFileHelper);
 
   void
-  NotifyFileHandleCompleted(FileHandle* aFileHandle);
+  NotifyFileHandleCompleted(FileHandleBase* aFileHandle);
 
   void
   WaitForStoragesToComplete(nsTArray<nsCOMPtr<nsIOfflineStorage> >& aStorages,
@@ -61,9 +61,6 @@ public:
 
   void
   AbortFileHandlesForStorage(nsIOfflineStorage* aStorage);
-
-  bool
-  HasFileHandlesForStorage(nsIOfflineStorage* aStorage);
 
   nsIEventTarget*
   StreamTransportTarget()
@@ -73,26 +70,26 @@ public:
   }
 
 private:
-  class FileHandleQueue MOZ_FINAL : public FileHelperListener
+  class FileHandleQueue final : public FileHelperListener
   {
     friend class FileService;
 
   public:
     NS_IMETHOD_(MozExternalRefCountType)
-    AddRef() MOZ_OVERRIDE;
+    AddRef() override;
 
     NS_IMETHOD_(MozExternalRefCountType)
-    Release() MOZ_OVERRIDE;
+    Release() override;
 
     inline nsresult
     Enqueue(FileHelper* aFileHelper);
 
     virtual void
-    OnFileHelperComplete(FileHelper* aFileHelper) MOZ_OVERRIDE;
+    OnFileHelperComplete(FileHelper* aFileHelper) override;
 
   private:
     inline
-    FileHandleQueue(FileHandle* aFileHandle);
+    explicit FileHandleQueue(FileHandleBase* aFileHandle);
 
     ~FileHandleQueue();
 
@@ -101,7 +98,7 @@ private:
 
     ThreadSafeAutoRefCnt mRefCnt;
     NS_DECL_OWNINGTHREAD
-    nsRefPtr<FileHandle> mFileHandle;
+    nsRefPtr<FileHandleBase> mFileHandle;
     nsTArray<nsRefPtr<FileHelper> > mQueue;
     nsRefPtr<FileHelper> mCurrentHelper;
   };
@@ -111,7 +108,7 @@ private:
     DelayedEnqueueInfo();
     ~DelayedEnqueueInfo();
 
-    nsRefPtr<FileHandle> mFileHandle;
+    nsRefPtr<FileHandleBase> mFileHandle;
     nsRefPtr<FileHelper> mFileHelper;
   };
 
@@ -121,13 +118,13 @@ private:
 
   public:
     inline FileHandleQueue*
-    CreateFileHandleQueue(FileHandle* aFileHandle);
+    CreateFileHandleQueue(FileHandleBase* aFileHandle);
 
     inline FileHandleQueue*
-    GetFileHandleQueue(FileHandle* aFileHandle);
+    GetFileHandleQueue(FileHandleBase* aFileHandle);
 
     void
-    RemoveFileHandleQueue(FileHandle* aFileHandle);
+    RemoveFileHandleQueue(FileHandleBase* aFileHandle);
 
     bool
     HasRunningFileHandles()
@@ -135,16 +132,14 @@ private:
       return !mFileHandleQueues.IsEmpty();
     }
 
-    inline bool
-    HasRunningFileHandles(nsIOfflineStorage* aStorage);
-
     inline DelayedEnqueueInfo*
-    CreateDelayedEnqueueInfo(FileHandle* aFileHandle, FileHelper* aFileHelper);
+    CreateDelayedEnqueueInfo(FileHandleBase* aFileHandle,
+                             FileHelper* aFileHelper);
 
     inline void
     CollectRunningAndDelayedFileHandles(
-                                 nsIOfflineStorage* aStorage,
-                                 nsTArray<nsRefPtr<FileHandle>>& aFileHandles);
+                              nsIOfflineStorage* aStorage,
+                              nsTArray<nsRefPtr<FileHandleBase>>& aFileHandles);
 
     void
     LockFileForReading(const nsAString& aFileName)

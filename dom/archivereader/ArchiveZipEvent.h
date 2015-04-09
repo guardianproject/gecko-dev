@@ -24,12 +24,14 @@ public:
   ArchiveZipItem(const char* aFilename,
                  const ZipCentral& aCentralStruct,
                  const nsACString& aEncoding);
+protected:
   virtual ~ArchiveZipItem();
 
-  nsresult GetFilename(nsString& aFilename) MOZ_OVERRIDE;
+public:
+  nsresult GetFilename(nsString& aFilename) override;
 
-  // From zipItem to DOMFile:
-  virtual nsIDOMFile* File(ArchiveReader* aArchiveReader) MOZ_OVERRIDE;
+  // From zipItem to File:
+  virtual nsIDOMFile* File(ArchiveReader* aArchiveReader) override;
 
 public: // for the event
   static uint32_t StrToInt32(const uint8_t* aStr);
@@ -56,7 +58,7 @@ public:
   ArchiveReaderZipEvent(ArchiveReader* aArchiveReader,
                         const nsACString& aEncoding);
 
-  nsresult Exec() MOZ_OVERRIDE;
+  nsresult Exec() override;
 
 private:
   nsCString mEncoding;

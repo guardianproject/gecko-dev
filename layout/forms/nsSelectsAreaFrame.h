@@ -19,7 +19,7 @@ public:
 
   virtual void BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
-                                const nsDisplayListSet& aLists) MOZ_OVERRIDE;
+                                const nsDisplayListSet& aLists) override;
 
   void BuildDisplayListInternal(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
@@ -28,12 +28,12 @@ public:
   virtual void Reflow(nsPresContext*           aCX,
                       nsHTMLReflowMetrics&     aDesiredSize,
                       const nsHTMLReflowState& aReflowState,
-                      nsReflowStatus&          aStatus) MOZ_OVERRIDE;
+                      nsReflowStatus&          aStatus) override;
 
   nscoord HeightOfARow() const { return mHeightOfARow; }
   
 protected:
-  nsSelectsAreaFrame(nsStyleContext* aContext) :
+  explicit nsSelectsAreaFrame(nsStyleContext* aContext) :
     nsBlockFrame(aContext),
     mHeightOfARow(0)
   {}

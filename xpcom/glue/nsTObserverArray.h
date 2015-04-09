@@ -21,7 +21,7 @@
  * @see nsTObserverArray, nsTArray
  */
 
-class NS_COM_GLUE nsTObserverArray_base
+class nsTObserverArray_base
 {
 public:
   typedef size_t index_type;
@@ -311,7 +311,7 @@ public:
     typedef nsAutoTObserverArray<T, N> array_type;
     typedef Iterator                   base_type;
 
-    ForwardIterator(const array_type& aArray)
+    explicit ForwardIterator(const array_type& aArray)
       : Iterator(0, aArray)
     {
     }
@@ -354,7 +354,7 @@ public:
     typedef nsAutoTObserverArray<T, N> array_type;
     typedef Iterator                   base_type;
 
-    EndLimitedIterator(const array_type& aArray)
+    explicit EndLimitedIterator(const array_type& aArray)
       : ForwardIterator(aArray)
       , mEnd(aArray, aArray.Length())
     {
@@ -391,7 +391,7 @@ public:
     typedef nsAutoTObserverArray<T, N> array_type;
     typedef Iterator                   base_type;
 
-    BackwardIterator(const array_type& aArray)
+    explicit BackwardIterator(const array_type& aArray)
       : Iterator(aArray.Length(), aArray)
     {
     }
@@ -485,6 +485,19 @@ ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback& aCallback,
     while (iter_.HasMore()) {                                                \
       obs_ = iter_.GetNext();                                                \
       obs_ -> func_ params_ ;                                                \
+    }                                                                        \
+  PR_END_MACRO
+
+#define NS_OBSERVER_ARRAY_NOTIFY_OBSERVERS_WITH_QI(array_, basetype_, obstype_, func_, params_) \
+  PR_BEGIN_MACRO                                                             \
+    nsTObserverArray<basetype_ *>::ForwardIterator iter_(array_);            \
+    basetype_* obsbase_;                                                     \
+    while (iter_.HasMore()) {                                                \
+      obsbase_ = iter_.GetNext();                                            \
+      nsCOMPtr<obstype_> obs_ = do_QueryInterface(obsbase_);                 \
+      if (obs_) {                                                            \
+        obs_ -> func_ params_ ;                                              \
+      }                                                                      \
     }                                                                        \
   PR_END_MACRO
 #endif // nsTObserverArray_h___

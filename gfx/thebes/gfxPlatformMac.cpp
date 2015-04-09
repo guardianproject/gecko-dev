@@ -12,16 +12,21 @@
 #include "gfxMacPlatformFontList.h"
 #include "gfxMacFont.h"
 #include "gfxCoreTextShaper.h"
+#include "gfxTextRun.h"
 #include "gfxUserFontSet.h"
 
 #include "nsTArray.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/VsyncDispatcher.h"
 #include "qcms.h"
 #include "gfx2DGlue.h"
 
 #include <dlfcn.h>
+#include <CoreVideo/CoreVideo.h>
 
 #include "nsCocoaFeatures.h"
+#include "mozilla/layers/CompositorParent.h"
+#include "VsyncSource.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -34,7 +39,7 @@ typedef uint32_t AutoActivationSetting;
 
 // bug 567552 - disable auto-activation of fonts
 
-static void 
+static void
 DisableFontActivation()
 {
     // get the main bundle identifier
@@ -76,6 +81,18 @@ gfxPlatformMac::gfxPlatformMac()
     uint32_t contentMask = BackendTypeBit(BackendType::COREGRAPHICS);
     InitBackendPrefs(canvasMask, BackendType::COREGRAPHICS,
                      contentMask, BackendType::COREGRAPHICS);
+
+    // XXX: Bug 1036682 - we run out of fds on Mac when using tiled layers because
+    // with 256x256 tiles we can easily hit the soft limit of 800 when using double
+    // buffered tiles in e10s, so let's bump the soft limit to the hard limit for the OS
+    // up to a new cap of OPEN_MAX.
+    struct rlimit limits;
+    if (getrlimit(RLIMIT_NOFILE, &limits) == 0) {
+        limits.rlim_cur = std::min(rlim_t(OPEN_MAX), limits.rlim_max);
+        if (setrlimit(RLIMIT_NOFILE, &limits) != 0) {
+            NS_WARNING("Unable to bump RLIMIT_NOFILE to the maximum number on this OS");
+        }
+    }
 }
 
 gfxPlatformMac::~gfxPlatformMac()
@@ -99,8 +116,7 @@ gfxPlatformMac::CreateOffscreenSurface(const IntSize& size,
                                        gfxContentType contentType)
 {
     nsRefPtr<gfxASurface> newSurface =
-      new gfxQuartzSurface(ThebesIntSize(size),
-                           OptimalFormatForContent(contentType));
+      new gfxQuartzSurface(size, OptimalFormatForContent(contentType));
     return newSurface.forget();
 }
 
@@ -128,21 +144,32 @@ gfxPlatformMac::CreateFontGroup(const FontFamilyList& aFontFamilyList,
 
 // these will move to gfxPlatform once all platforms support the fontlist
 gfxFontEntry* 
-gfxPlatformMac::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                const nsAString& aFontName)
+gfxPlatformMac::LookupLocalFont(const nsAString& aFontName,
+                                uint16_t aWeight,
+                                int16_t aStretch,
+                                bool aItalic)
 {
-    return gfxPlatformFontList::PlatformFontList()->LookupLocalFont(aProxyEntry, 
-                                                                    aFontName);
+    return gfxPlatformFontList::PlatformFontList()->LookupLocalFont(aFontName,
+                                                                    aWeight,
+                                                                    aStretch,
+                                                                    aItalic);
 }
 
 gfxFontEntry* 
-gfxPlatformMac::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                 const uint8_t *aFontData, uint32_t aLength)
+gfxPlatformMac::MakePlatformFont(const nsAString& aFontName,
+                                 uint16_t aWeight,
+                                 int16_t aStretch,
+                                 bool aItalic,
+                                 const uint8_t* aFontData,
+                                 uint32_t aLength)
 {
     // Ownership of aFontData is received here, and passed on to
     // gfxPlatformFontList::MakePlatformFont(), which must ensure the data
     // is released with NS_Free when no longer needed
-    return gfxPlatformFontList::PlatformFontList()->MakePlatformFont(aProxyEntry,
+    return gfxPlatformFontList::PlatformFontList()->MakePlatformFont(aFontName,
+                                                                     aWeight,
+                                                                     aStretch,
+                                                                     aItalic,
                                                                      aFontData,
                                                                      aLength);
 }
@@ -155,9 +182,7 @@ gfxPlatformMac::IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags)
                  "strange font format hint set");
 
     // accept supported formats
-    if (aFormatFlags & (gfxUserFontSet::FLAG_FORMAT_WOFF     |
-                        gfxUserFontSet::FLAG_FORMAT_OPENTYPE | 
-                        gfxUserFontSet::FLAG_FORMAT_TRUETYPE | 
+    if (aFormatFlags & (gfxUserFontSet::FLAG_FORMATS_COMMON |
                         gfxUserFontSet::FLAG_FORMAT_TRUETYPE_AAT)) {
         return true;
     }
@@ -216,10 +241,14 @@ static const char kFontSTIXGeneral[] = "STIXGeneral";
 static const char kFontTamilMN[] = "Tamil MN";
 
 void
-gfxPlatformMac::GetCommonFallbackFonts(const uint32_t aCh,
+gfxPlatformMac::GetCommonFallbackFonts(uint32_t aCh, uint32_t aNextCh,
                                        int32_t aRunScript,
                                        nsTArray<const char*>& aFontList)
 {
+    if (aNextCh == 0xfe0f) {
+        aFontList.AppendElement(kFontAppleColorEmoji);
+    }
+
     aFontList.AppendElement(kFontLucidaGrande);
 
     if (!IS_IN_BMP(aCh)) {
@@ -303,11 +332,11 @@ gfxPlatformMac::GetCommonFallbackFonts(const uint32_t aCh,
         case 0x2a:
         case 0x2b:
         case 0x2e:
+            aFontList.AppendElement(kFontHiraginoKakuGothic);
             aFontList.AppendElement(kFontAppleSymbols);
             aFontList.AppendElement(kFontMenlo);
             aFontList.AppendElement(kFontSTIXGeneral);
             aFontList.AppendElement(kFontGeneva);
-            aFontList.AppendElement(kFontHiraginoKakuGothic);
             aFontList.AppendElement(kFontAppleColorEmoji);
             break;
         case 0x2c:
@@ -358,14 +387,14 @@ uint32_t
 gfxPlatformMac::ReadAntiAliasingThreshold()
 {
     uint32_t threshold = 0;  // default == no threshold
-    
+
     // first read prefs flag to determine whether to use the setting or not
     bool useAntiAliasingThreshold = Preferences::GetBool("gfx.use_text_smoothing_setting", false);
 
     // if the pref setting is disabled, return 0 which effectively disables this feature
     if (!useAntiAliasingThreshold)
         return threshold;
-        
+
     // value set via Appearance pref panel, "Turn off text smoothing for font sizes xxx and smaller"
     CFNumberRef prefValue = (CFNumberRef)CFPreferencesCopyAppValue(CFSTR("AppleAntiAliasingThreshold"), kCFPreferencesCurrentApplication);
 
@@ -384,6 +413,184 @@ gfxPlatformMac::UseAcceleratedCanvas()
 {
   // Lion or later is required
   return nsCocoaFeatures::OnLionOrLater() && Preferences::GetBool("gfx.canvas.azure.accelerated", false);
+}
+
+bool
+gfxPlatformMac::UseProgressivePaint()
+{
+  // Progressive painting requires cross-process mutexes, which don't work so
+  // well on OS X 10.6 so we disable there.
+  return nsCocoaFeatures::OnLionOrLater() && gfxPlatform::UseProgressivePaint();
+}
+
+// This is the renderer output callback function, called on the vsync thread
+static CVReturn VsyncCallback(CVDisplayLinkRef aDisplayLink,
+                              const CVTimeStamp* aNow,
+                              const CVTimeStamp* aOutputTime,
+                              CVOptionFlags aFlagsIn,
+                              CVOptionFlags* aFlagsOut,
+                              void* aDisplayLinkContext);
+
+class OSXVsyncSource final : public VsyncSource
+{
+public:
+  OSXVsyncSource()
+  {
+  }
+
+  virtual Display& GetGlobalDisplay() override
+  {
+    return mGlobalDisplay;
+  }
+
+  class OSXDisplay final : public VsyncSource::Display
+  {
+  public:
+    OSXDisplay()
+      : mDisplayLink(nullptr)
+    {
+      MOZ_ASSERT(NS_IsMainThread());
+      mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
+    }
+
+    ~OSXDisplay()
+    {
+      MOZ_ASSERT(NS_IsMainThread());
+      mTimer->Cancel();
+      mTimer = nullptr;
+      DisableVsync();
+    }
+
+    static void RetryEnableVsync(nsITimer* aTimer, void* aOsxDisplay)
+    {
+      MOZ_ASSERT(NS_IsMainThread());
+      OSXDisplay* osxDisplay = static_cast<OSXDisplay*>(aOsxDisplay);
+      MOZ_ASSERT(osxDisplay);
+      osxDisplay->EnableVsync();
+    }
+
+    virtual void EnableVsync() override
+    {
+      MOZ_ASSERT(NS_IsMainThread());
+      if (IsVsyncEnabled()) {
+        return;
+      }
+
+      // Create a display link capable of being used with all active displays
+      // TODO: See if we need to create an active DisplayLink for each monitor in multi-monitor
+      // situations. According to the docs, it is compatible with all displays running on the computer
+      // But if we have different monitors at different display rates, we may hit issues.
+      if (CVDisplayLinkCreateWithActiveCGDisplays(&mDisplayLink) != kCVReturnSuccess) {
+        NS_WARNING("Could not create a display link with all active displays. Retrying\n");
+        CVDisplayLinkRelease(mDisplayLink);
+        mDisplayLink = nullptr;
+
+        // bug 1142708 - When coming back from sleep,
+        // or when changing displays, active displays may not be ready yet,
+        // even if listening for the kIOMessageSystemHasPoweredOn event
+        // from OS X sleep notifications.
+        // Active displays are those that are drawable.
+        // bug 1144638 - When changing display configurations and getting
+        // notifications from CGDisplayReconfigurationCallBack, the
+        // callback gets called twice for each active display
+        // so it's difficult to know when all displays are active.
+        // Instead, try again soon. The delay is arbitrary. 100ms chosen
+        // because on a late 2013 15" retina, it takes about that
+        // long to come back up from sleep.
+        uint32_t delay = 100;
+        mTimer->InitWithFuncCallback(RetryEnableVsync, this, delay, nsITimer::TYPE_ONE_SHOT);
+        return;
+      }
+
+      if (CVDisplayLinkSetOutputCallback(mDisplayLink, &VsyncCallback, this) != kCVReturnSuccess) {
+        NS_WARNING("Could not set displaylink output callback");
+        CVDisplayLinkRelease(mDisplayLink);
+        mDisplayLink = nullptr;
+        return;
+      }
+
+      mPreviousTimestamp = TimeStamp::Now();
+      if (CVDisplayLinkStart(mDisplayLink) != kCVReturnSuccess) {
+        NS_WARNING("Could not activate the display link");
+        CVDisplayLinkRelease(mDisplayLink);
+        mDisplayLink = nullptr;
+      }
+    }
+
+    virtual void DisableVsync() override
+    {
+      MOZ_ASSERT(NS_IsMainThread());
+      if (!IsVsyncEnabled()) {
+        return;
+      }
+
+      // Release the display link
+      if (mDisplayLink) {
+        CVDisplayLinkRelease(mDisplayLink);
+        mDisplayLink = nullptr;
+      }
+    }
+
+    virtual bool IsVsyncEnabled() override
+    {
+      MOZ_ASSERT(NS_IsMainThread());
+      return mDisplayLink != nullptr;
+    }
+
+    // The vsync timestamps given by the CVDisplayLinkCallback are
+    // in the future for the NEXT frame. Large parts of Gecko, such
+    // as animations assume a timestamp at either now or in the past.
+    // Normalize the timestamps given to the VsyncDispatchers to the vsync
+    // that just occured, not the vsync that is upcoming.
+    TimeStamp mPreviousTimestamp;
+
+  private:
+    // Manages the display link render thread
+    CVDisplayLinkRef   mDisplayLink;
+    nsRefPtr<nsITimer> mTimer;
+  }; // OSXDisplay
+
+private:
+  virtual ~OSXVsyncSource()
+  {
+  }
+
+  OSXDisplay mGlobalDisplay;
+}; // OSXVsyncSource
+
+static CVReturn VsyncCallback(CVDisplayLinkRef aDisplayLink,
+                              const CVTimeStamp* aNow,
+                              const CVTimeStamp* aOutputTime,
+                              CVOptionFlags aFlagsIn,
+                              CVOptionFlags* aFlagsOut,
+                              void* aDisplayLinkContext)
+{
+  // Executed on OS X hardware vsync thread
+  OSXVsyncSource::OSXDisplay* display = (OSXVsyncSource::OSXDisplay*) aDisplayLinkContext;
+  int64_t nextVsyncTimestamp = aOutputTime->hostTime;
+  mozilla::TimeStamp nextVsync = mozilla::TimeStamp::FromSystemTime(nextVsyncTimestamp);
+
+  mozilla::TimeStamp previousVsync = display->mPreviousTimestamp;
+  display->mPreviousTimestamp = nextVsync;
+  MOZ_ASSERT(TimeStamp::Now() > previousVsync);
+
+  display->NotifyVsync(previousVsync);
+  return kCVReturnSuccess;
+}
+
+already_AddRefed<mozilla::gfx::VsyncSource>
+gfxPlatformMac::CreateHardwareVsyncSource()
+{
+  nsRefPtr<VsyncSource> osxVsyncSource = new OSXVsyncSource();
+  VsyncSource::Display& primaryDisplay = osxVsyncSource->GetGlobalDisplay();
+  primaryDisplay.EnableVsync();
+  if (!primaryDisplay.IsVsyncEnabled()) {
+    NS_WARNING("OS X Vsync source not enabled. Falling back to software vsync.\n");
+    return gfxPlatform::CreateHardwareVsyncSource();
+  }
+
+  primaryDisplay.DisableVsync();
+  return osxVsyncSource.forget();
 }
 
 void

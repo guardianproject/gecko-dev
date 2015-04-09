@@ -2,22 +2,25 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
+Components.utils.import("resource://testing-common/MockRegistrar.jsm");
+
 function run_test() {
   setupTestCommon();
 
-  logTestInfo("testing download a complete on partial failure. Calling " +
-              "nsIUpdatePrompt::showUpdateError should call getNewPrompter " +
-              "and alert on the object returned by getNewPrompter when the " +
-              "update.state == " + STATE_FAILED + " and the update.errorCode " +
-              "== " + WRITE_ERROR + " (Bug 595059).");
+  debugDump("testing download a complete on partial failure. Calling " +
+            "nsIUpdatePrompt::showUpdateError should call getNewPrompter " +
+            "and alert on the object returned by getNewPrompter when the " +
+            "update.state == " + STATE_FAILED + " and the update.errorCode " +
+             "== " + WRITE_ERROR + " (Bug 595059).");
 
   Services.prefs.setBoolPref(PREF_APP_UPDATE_SILENT, false);
 
-  let registrar = Components.manager.QueryInterface(AUS_Ci.nsIComponentRegistrar);
-  registrar.registerFactory(Components.ID("{1dfeb90a-2193-45d5-9cb8-864928b2af55}"),
-                            "Fake Window Watcher",
-                            "@mozilla.org/embedcomp/window-watcher;1",
-                            WindowWatcherFactory);
+  let windowWatcherCID =
+    MockRegistrar.register("@mozilla.org/embedcomp/window-watcher;1",
+                           WindowWatcher);
+  do_register_cleanup(() => {
+    MockRegistrar.unregister(windowWatcherCID);
+  });
 
   standardInit();
 
@@ -34,18 +37,12 @@ function run_test() {
 
   let update = gUpdateManager.activeUpdate;
   update.errorCode = WRITE_ERROR;
-  let prompter = AUS_Cc["@mozilla.org/updates/update-prompt;1"].
-                 createInstance(AUS_Ci.nsIUpdatePrompt);
+  let prompter = Cc["@mozilla.org/updates/update-prompt;1"].
+                 createInstance(Ci.nsIUpdatePrompt);
   prompter.showUpdateError(update);
 }
 
-function end_test() {
-  let registrar = Components.manager.QueryInterface(AUS_Ci.nsIComponentRegistrar);
-  registrar.unregisterFactory(Components.ID("{1dfeb90a-2193-45d5-9cb8-864928b2af55}"),
-                              WindowWatcherFactory);
-}
-
-var WindowWatcher = {
+const WindowWatcher = {
   getNewPrompter: function(aParent) {
     do_check_eq(aParent, null);
     return {
@@ -62,19 +59,5 @@ var WindowWatcher = {
     }; 
   },
 
-  QueryInterface: function(iid) {
-    if (iid.equals(AUS_Ci.nsIWindowWatcher) ||
-        iid.equals(AUS_Ci.nsISupports))
-      return this;
-
-    throw AUS_Cr.NS_ERROR_NO_INTERFACE;
-  }
-}
-
-var WindowWatcherFactory = {
-  createInstance: function createInstance(outer, iid) {
-    if (outer != null)
-      throw AUS_Cr.NS_ERROR_NO_AGGREGATION;
-    return WindowWatcher.QueryInterface(iid);
-  }
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWindowWatcher])
 };

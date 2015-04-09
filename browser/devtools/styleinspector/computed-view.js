@@ -130,8 +130,8 @@ UpdateProcess.prototype = {
  */
 function CssHtmlTree(aStyleInspector, aPageStyle)
 {
-  this.styleWindow = aStyleInspector.window;
-  this.styleDocument = aStyleInspector.window.document;
+  this.styleWindow = aStyleInspector.doc.defaultView;
+  this.styleDocument = aStyleInspector.doc;
   this.styleInspector = aStyleInspector;
   this.inspector = this.styleInspector.inspector;
   this.pageStyle = aPageStyle;
@@ -284,13 +284,12 @@ CssHtmlTree.prototype = {
   },
 
   /**
-   * Update the highlighted element. The CssHtmlTree panel will show the style
-   * information for the given element.
-   * @param {nsIDOMElement} aElement The highlighted node to get styles for.
-   *
+   * Update the view with a new selected element.
+   * The CssHtmlTree panel will show the style information for the given element.
+   * @param {NodeFront} aElement The highlighted node to get styles for.
    * @returns a promise that will be resolved when highlighting is complete.
    */
-  highlight: function(aElement) {
+  selectElement: function(aElement) {
     if (!aElement) {
       this.viewedElement = null;
       this.noResults.hidden = false;
@@ -325,38 +324,83 @@ CssHtmlTree.prototype = {
    * returns null of the node isn't anything we care about
    */
   getNodeInfo: function(node) {
-    let type, value;
+    if (!node) {
+      return null;
+    }
+
     let classes = node.classList;
 
-    if (classes.contains("property-name") ||
-        classes.contains("property-value") ||
-        (classes.contains("theme-link") && !classes.contains("link"))) {
-      // Go up to the common parent to find the property and value
-      let parent = node.parentNode;
-      while (!parent.classList.contains("property-view")) {
-        parent = parent.parentNode;
+    // Check if the node isn't a selector first since this doesn't require
+    // walking the DOM
+    if (classes.contains("matched") ||
+        classes.contains("bestmatch") ||
+        classes.contains("parentmatch")) {
+      let selectorText = "";
+      for (let child of node.childNodes) {
+        if (child.nodeType === node.TEXT_NODE) {
+          selectorText += child.textContent;
+        }
       }
+      return {
+        type: overlays.VIEW_NODE_SELECTOR_TYPE,
+        value: selectorText.trim()
+      }
+    }
+
+    // Walk up the nodes to find out where node is
+    let propertyView;
+    let propertyContent;
+    let parent = node;
+    while (parent.parentNode) {
+      if (parent.classList.contains("property-view")) {
+        propertyView = parent;
+        break;
+      }
+      if (parent.classList.contains("property-content")) {
+        propertyContent = parent;
+        break;
+      }
+      parent = parent.parentNode;
+    }
+    if (!propertyView && !propertyContent) {
+      return null;
+    }
+
+    let value, type;
+
+    // Get the property and value for a node that's a property name or value
+    let isHref = classes.contains("theme-link") && !classes.contains("link");
+    if (propertyView && (classes.contains("property-name") ||
+                         classes.contains("property-value") ||
+                         isHref)) {
       value = {
         property: parent.querySelector(".property-name").textContent,
         value: parent.querySelector(".property-value").textContent
       };
     }
+    if (propertyContent && (classes.contains("other-property-value") ||
+                            isHref)) {
+      let view = propertyContent.previousSibling;
+      value = {
+        property: view.querySelector(".property-name").textContent,
+        value: node.textContent
+      };
+    }
 
+    // Get the type
     if (classes.contains("property-name")) {
       type = overlays.VIEW_NODE_PROPERTY_TYPE;
-    } else if (classes.contains("property-value")) {
+    } else if (classes.contains("property-value") ||
+               classes.contains("other-property-value")) {
       type = overlays.VIEW_NODE_VALUE_TYPE;
-    } else if (classes.contains("theme-link")) {
+    } else if (isHref) {
       type = overlays.VIEW_NODE_IMAGE_URL_TYPE;
       value.url = node.href;
     } else {
       return null;
     }
 
-    return {
-      type: type,
-      value: value
-    };
+    return {type, value};
   },
 
   _createPropertyViews: function()
@@ -408,6 +452,10 @@ CssHtmlTree.prototype = {
       return promise.resolve();
     }
 
+    // Capture the current viewed element to return from the promise handler
+    // early if it changed
+    let viewedElement = this.viewedElement;
+
     return promise.all([
       this._createPropertyViews(),
       this.pageStyle.getComputed(this.viewedElement, {
@@ -416,6 +464,10 @@ CssHtmlTree.prototype = {
         markMatched: true
       })
     ]).then(([createViews, computed]) => {
+      if (viewedElement !== this.viewedElement) {
+        return;
+      }
+
       this._matchedProperties = new Set;
       for (let name in computed) {
         if (computed[name].matched) {
@@ -503,6 +555,7 @@ CssHtmlTree.prototype = {
     for (let propView of this.propertyViews) {
       propView.updateSourceLinks();
     }
+    this.inspector.emit("computed-view-sourcelinks-updated");
   },
 
   /**
@@ -522,7 +575,10 @@ CssHtmlTree.prototype = {
     let mozProps = [];
     for (let i = 0, numStyles = styles.length; i < numStyles; i++) {
       let prop = styles.item(i);
-      if (prop.charAt(0) == "-") {
+      if (prop.startsWith("--")) {
+        // Skip any CSS variables used inside of browser CSS files
+        continue;
+      } else if (prop.startsWith("-")) {
         mozProps.push(prop);
       } else {
         CssHtmlTree.propertyNames.push(prop);
@@ -533,7 +589,14 @@ CssHtmlTree.prototype = {
     CssHtmlTree.propertyNames.push.apply(CssHtmlTree.propertyNames,
       mozProps.sort());
 
-    this._createPropertyViews();
+    this._createPropertyViews().then(null, e => {
+      if (!this.styleInspector) {
+        console.warn("The creation of property views was cancelled because the " +
+          "computed-view was destroyed before it was done creating views");
+      } else {
+        console.error(e);
+      }
+    });
   },
 
   /**
@@ -593,7 +656,8 @@ CssHtmlTree.prototype = {
     this.menuitemSources= createMenuItem(this._contextmenu, {
       label: "ruleView.contextmenu.showOrigSources",
       accesskey: "ruleView.contextmenu.showOrigSources.accessKey",
-      command: this._onToggleOrigSources
+      command: this._onToggleOrigSources,
+      type: "checkbox"
     });
 
     let popupset = doc.documentElement.querySelector("popupset");
@@ -614,16 +678,8 @@ CssHtmlTree.prototype = {
     let disable = win.getSelection().isCollapsed;
     this.menuitemCopy.disabled = disable;
 
-    let label = "ruleView.contextmenu.showOrigSources";
-    if (Services.prefs.getBoolPref(PREF_ORIG_SOURCES)) {
-      label = "ruleView.contextmenu.showCSSSources";
-    }
-    this.menuitemSources.setAttribute("label",
-                                      CssHtmlTree.l10n(label));
-
-    let accessKey = label + ".accessKey";
-    this.menuitemSources.setAttribute("accesskey",
-                                      CssHtmlTree.l10n(accessKey));
+    let showOrig = Services.prefs.getBoolPref(PREF_ORIG_SOURCES);
+    this.menuitemSources.setAttribute("checked", showOrig);
 
     this.menuitemCopyColor.hidden = !this._isColorPopup();
   },
@@ -854,6 +910,10 @@ function createMenuItem(aMenu, aAttributes)
   item.setAttribute("accesskey", CssHtmlTree.l10n(aAttributes.accesskey));
   item.addEventListener("command", aAttributes.command);
 
+  if (aAttributes.type) {
+    item.setAttribute("type", aAttributes.type);
+  }
+
   aMenu.appendChild(item);
 
   return item;
@@ -964,7 +1024,7 @@ PropertyView.prototype = {
   {
     if (this.visible) {
       let isDark = this.tree._darkStripe = !this.tree._darkStripe;
-      return isDark ? "property-view theme-bg-darker" : "property-view";
+      return isDark ? "property-view row-striped" : "property-view";
     }
     return "property-view-hidden";
   },
@@ -978,7 +1038,7 @@ PropertyView.prototype = {
   {
     if (this.visible) {
       let isDark = this.tree._darkStripe;
-      return isDark ? "property-content theme-bg-darker" : "property-content";
+      return isDark ? "property-content row-striped" : "property-content";
     }
     return "property-content-hidden";
   },
@@ -1323,7 +1383,7 @@ SelectorView.prototype = {
    */
   updateSourceLink: function()
   {
-    this.updateSource().then((oldSource) => {
+    return this.updateSource().then((oldSource) => {
       if (oldSource != this.source && this.tree.element) {
         let selector = '[sourcelocation="' + oldSource + '"]';
         let link = this.tree.element.querySelector(selector);
@@ -1417,19 +1477,16 @@ SelectorView.prototype = {
       return;
     }
 
-    let location = promise.resolve({
-      href: rule.href,
-      line: rule.line
-    });
-    if (rule.href && Services.prefs.getBoolPref(PREF_ORIG_SOURCES)) {
+    let location = promise.resolve(rule.location);
+    if (Services.prefs.getBoolPref(PREF_ORIG_SOURCES)) {
       location = rule.getOriginalLocation();
     }
-
-    location.then(({href, line}) => {
+    location.then(({source, href, line, column}) => {
       let target = inspector.target;
       if (ToolDefinitions.styleEditor.isTargetSupported(target)) {
         gDevTools.showToolbox(target, "styleeditor").then(function(toolbox) {
-          toolbox.getCurrentPanel().selectStyleSheet(href, line);
+          let sheet = source || href;
+          toolbox.getCurrentPanel().selectStyleSheet(sheet, line, column);
         });
       }
     });

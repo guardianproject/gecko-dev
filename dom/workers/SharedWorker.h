@@ -25,7 +25,7 @@ class MessagePort;
 class RuntimeService;
 class WorkerPrivate;
 
-class SharedWorker MOZ_FINAL : public DOMEventTargetHelper
+class SharedWorker final : public DOMEventTargetHelper
 {
   friend class MessagePort;
   friend class RuntimeService;
@@ -35,9 +35,9 @@ class SharedWorker MOZ_FINAL : public DOMEventTargetHelper
 
   nsRefPtr<WorkerPrivate> mWorkerPrivate;
   nsRefPtr<MessagePort> mMessagePort;
-  nsTArray<nsCOMPtr<nsIDOMEvent>> mSuspendedEvents;
+  nsTArray<nsCOMPtr<nsIDOMEvent>> mFrozenEvents;
   uint64_t mSerial;
-  bool mSuspended;
+  bool mFrozen;
 
 public:
   static already_AddRefed<SharedWorker>
@@ -45,7 +45,7 @@ public:
               const nsAString& aScriptURL, const Optional<nsAString>& aName,
               ErrorResult& aRv);
 
-  already_AddRefed<MessagePort>
+  already_AddRefed<mozilla::dom::workers::MessagePort>
   Port();
 
   uint64_t
@@ -55,16 +55,16 @@ public:
   }
 
   bool
-  IsSuspended() const
+  IsFrozen() const
   {
-    return mSuspended;
+    return mFrozen;
   }
 
   void
-  Suspend();
+  Freeze();
 
   void
-  Resume();
+  Thaw();
 
   void
   QueueEvent(nsIDOMEvent* aEvent);
@@ -78,10 +78,10 @@ public:
   IMPL_EVENT_HANDLER(error)
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   virtual nsresult
-  PreHandleEvent(EventChainPreVisitor& aVisitor) MOZ_OVERRIDE;
+  PreHandleEvent(EventChainPreVisitor& aVisitor) override;
 
   WorkerPrivate*
   GetWorkerPrivate() const

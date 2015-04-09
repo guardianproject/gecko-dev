@@ -8,18 +8,21 @@
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/DOMError.h"
 #include "mozilla/dom/DOMErrorBinding.h"
+#include "mozilla/dom/DOMException.h"
+#include "mozilla/dom/DOMExceptionBinding.h"
 #include "jsfriendapi.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIXPConnect.h"
 #include "nsIScriptContext.h"
 #include "nsPIDOMWindow.h"
 #include "nsJSUtils.h"
-#include "nsCxPusher.h"
 #include "nsIScriptSecurityManager.h"
 #include "xpcprivate.h"
 #include "WorkerPrivate.h"
 #include "nsGlobalWindow.h"
 #include "WorkerScope.h"
+#include "jsapi.h"
+#include "nsJSPrincipals.h"
 
 namespace mozilla {
 namespace dom {
@@ -58,10 +61,6 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
   , mExceptionHandling(aExceptionHandling)
   , mIsMainThread(NS_IsMainThread())
 {
-  if (mIsMainThread) {
-    nsContentUtils::EnterMicroTask();
-  }
-
   // Compute the caller's subject principal (if necessary) early, before we
   // do anything that might perturb the relevant state.
   nsIPrincipal* webIDLCallerPrincipal = nullptr;
@@ -110,13 +109,15 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
       } else {
         // No DOM Window. Store the global and use the SafeJSContext.
         JSObject* glob = js::GetGlobalForObjectCrossCompartment(realCallback);
-        globalObject = xpc::GetNativeForGlobal(glob);
+        globalObject = xpc::NativeGlobal(glob);
         MOZ_ASSERT(globalObject);
         cx = nsContentUtils::GetSafeJSContext();
       }
     } else {
       cx = workers::GetCurrentThreadJSContext();
-      globalObject = workers::GetCurrentThreadWorkerPrivate()->GlobalScope();
+      JSObject *global = js::GetGlobalForObjectCrossCompartment(realCallback);
+      globalObject = workers::GetGlobalObjectForGlobal(global);
+      MOZ_ASSERT(globalObject);
     }
 
     // Bail out if there's no useful global. This seems to happen intermittently
@@ -126,8 +127,8 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
       return;
     }
 
-    mAutoEntryScript.construct(globalObject, mIsMainThread, cx);
-    mAutoEntryScript.ref().SetWebIDLCallerPrincipal(webIDLCallerPrincipal);
+    mAutoEntryScript.emplace(globalObject, mIsMainThread, cx);
+    mAutoEntryScript->SetWebIDLCallerPrincipal(webIDLCallerPrincipal);
     nsIGlobalObject* incumbent = aCallback->IncumbentGlobalOrNull();
     if (incumbent) {
       // The callback object traces its incumbent JS global, so in general it
@@ -138,7 +139,7 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
       if (!incumbent->GetGlobalJSObject()) {
         return;
       }
-      mAutoIncumbentScript.construct(incumbent);
+      mAutoIncumbentScript.emplace(incumbent);
     }
 
     // Unmark the callable (by invoking Callback() and not the CallbackPreserveColor()
@@ -150,7 +151,7 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
     //
     // We can do this even though we're not in the right compartment yet, because
     // Rooted<> does not care about compartments.
-    mRootedCallable.construct(cx, aCallback->Callback());
+    mRootedCallable.emplace(cx, aCallback->Callback());
   }
 
   // JS-implemented WebIDL is always OK to run, since it runs with Chrome
@@ -172,7 +173,7 @@ CallbackObject::CallSetup::CallSetup(CallbackObject* aCallback,
   // Note that if the callback is a wrapper, this will not be the same
   // compartment that we ended up in with mAutoEntryScript above, because the
   // entry point is based off of the unwrapped callback (realCallback).
-  mAc.construct(cx, mRootedCallable.ref());
+  mAc.emplace(cx, *mRootedCallable);
 
   // And now we're ready to go.
   mCx = cx;
@@ -189,13 +190,35 @@ bool
 CallbackObject::CallSetup::ShouldRethrowException(JS::Handle<JS::Value> aException)
 {
   if (mExceptionHandling == eRethrowExceptions) {
-    return true;
+    if (!mCompartment) {
+      // Caller didn't ask us to filter for only exceptions we subsume.
+      return true;
+    }
+
+    // On workers, we don't have nsIPrincipals to work with.  But we also only
+    // have one compartment, so check whether mCompartment is the same as the
+    // current compartment of mCx.
+    if (mCompartment == js::GetContextCompartment(mCx)) {
+      return true;
+    }
+
+    MOZ_ASSERT(NS_IsMainThread());
+
+    // At this point mCx is in the compartment of our unwrapped callback, so
+    // just check whether the principal of mCompartment subsumes that of the
+    // current compartment/global of mCx.
+    nsIPrincipal* callerPrincipal =
+      nsJSPrincipals::get(JS_GetCompartmentPrincipals(mCompartment));
+    nsIPrincipal* calleePrincipal = nsContentUtils::SubjectPrincipal();
+    if (callerPrincipal->SubsumesConsideringDomain(calleePrincipal)) {
+      return true;
+    }
   }
 
-  MOZ_ASSERT(mExceptionHandling == eRethrowContentExceptions);
+  MOZ_ASSERT(mCompartment);
 
-  // For eRethrowContentExceptions we only want to throw an exception if the
-  // object that was thrown is a DOMError object in the caller compartment
+  // Now we only want to throw an exception to the caller if the object that was
+  // thrown is a DOMError or DOMException object in the caller compartment
   // (which we stored in mCompartment).
 
   if (!aException.isObject()) {
@@ -209,7 +232,9 @@ CallbackObject::CallSetup::ShouldRethrowException(JS::Handle<JS::Value> aExcepti
   }
 
   DOMError* domError;
-  return NS_SUCCEEDED(UNWRAP_OBJECT(DOMError, obj, domError));
+  DOMException* domException;
+  return NS_SUCCEEDED(UNWRAP_OBJECT(DOMError, obj, domError)) ||
+         NS_SUCCEEDED(UNWRAP_OBJECT(DOMException, obj, domException));
 }
 
 CallbackObject::CallSetup::~CallSetup()
@@ -219,7 +244,7 @@ CallbackObject::CallSetup::~CallSetup()
   // so we end up reporting them while in the compartment of our entry point,
   // not whatever cross-compartment wrappper mCallback might be.
   // Be careful: the JSAutoCompartment might not have been constructed at all!
-  mAc.destroyIfConstructed();
+  mAc.reset();
 
   // Now, if we have a JSContext, report any pending errors on it, unless we
   // were told to re-throw them.
@@ -273,14 +298,8 @@ CallbackObject::CallSetup::~CallSetup()
     }
   }
 
-  mAutoIncumbentScript.destroyIfConstructed();
-  mAutoEntryScript.destroyIfConstructed();
-
-  // It is important that this is the last thing we do, after leaving the
-  // compartment and undoing all our entry/incumbent script changes
-  if (mIsMainThread) {
-    nsContentUtils::LeaveMicroTask();
-  }
+  mAutoIncumbentScript.reset();
+  mAutoEntryScript.reset();
 }
 
 already_AddRefed<nsISupports>

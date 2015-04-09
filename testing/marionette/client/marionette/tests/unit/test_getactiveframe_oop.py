@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from marionette_test import MarionetteTestCase
+from marionette import MarionetteTestCase
 
 
 class TestGetActiveFrameOOP(MarionetteTestCase):
@@ -55,7 +55,7 @@ class TestGetActiveFrameOOP(MarionetteTestCase):
         # Switch to top-level then back to active frame, verify correct frame
         self.marionette.switch_to_frame()
         self.marionette.switch_to_frame(active_frame1)
-        self.assertTrue("test_oop_1.html" in self.marionette.get_url())
+        self.assertTrue("test_oop_1.html" in self.marionette.execute_script("return document.wrappedJSObject.location.href"))
 
         # Create another OOP frame
         self.marionette.switch_to_frame()
@@ -78,18 +78,18 @@ class TestGetActiveFrameOOP(MarionetteTestCase):
         # Switch to top-level then back to active frame 1, verify correct frame
         self.marionette.switch_to_frame()
         self.marionette.switch_to_frame(active_frame1)
-        self.assertTrue("test_oop_1.html" in self.marionette.get_url())
+        self.assertTrue("test_oop_1.html" in self.marionette.execute_script("return document.wrappedJSObject.location.href"))
 
         # Switch to top-level then back to active frame 2, verify correct frame
         self.marionette.switch_to_frame()
         self.marionette.switch_to_frame(active_frame2)
-        self.assertTrue("test_oop_2.html" in self.marionette.get_url())
+        self.assertTrue("test_oop_2.html" in self.marionette.execute_script("return document.wrappedJSObject.location.href"))
 
         # NOTE: For some reason the emulator, the contents of the OOP iframes are not
         # actually rendered, even though the page_source is correct. When this test runs
         # on a b2g device, the contents do appear
-        #print self.marionette.get_url()
-        #print self.marionette.page_source
+        # print self.marionette.get_url()
+        # print self.marionette.page_source
 
     def tearDown(self):
         if self.oop_by_default is None:

@@ -14,7 +14,7 @@
 #include "nsCOMArray.h"
 #include "nsCOMPtr.h"
 
-class nsSimpleArrayEnumerator MOZ_FINAL : public nsISimpleEnumerator
+class nsSimpleArrayEnumerator final : public nsISimpleEnumerator
 {
 public:
   // nsISupports interface
@@ -24,7 +24,7 @@ public:
   NS_DECL_NSISIMPLEENUMERATOR
 
   // nsSimpleArrayEnumerator methods
-  nsSimpleArrayEnumerator(nsIArray* aValueArray)
+  explicit nsSimpleArrayEnumerator(nsIArray* aValueArray)
     : mValueArray(aValueArray)
     , mIndex(0)
   {
@@ -106,7 +106,7 @@ NS_NewArrayEnumerator(nsISimpleEnumerator** aResult, nsIArray* aArray)
 // creates a snapshot of the array in question
 // you MUST use NS_NewArrayEnumerator to create this, so that
 // allocation is done correctly
-class nsCOMArrayEnumerator MOZ_FINAL : public nsISimpleEnumerator
+class nsCOMArrayEnumerator final : public nsISimpleEnumerator
 {
 public:
   // nsISupports interface

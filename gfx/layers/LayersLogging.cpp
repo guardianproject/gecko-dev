@@ -7,7 +7,6 @@
 
 #include "LayersLogging.h"
 #include <stdint.h>                     // for uint8_t
-#include "gfx3DMatrix.h"                // for gfx3DMatrix
 #include "gfxColor.h"                   // for gfxRGBA
 #include "mozilla/gfx/Matrix.h"         // for Matrix4x4, Matrix
 #include "nsDebug.h"                    // for NS_ERROR
@@ -69,6 +68,26 @@ AppendToString(std::stringstream& aStream, const gfxRGBA& c,
 }
 
 void
+AppendToString(std::stringstream& aStream, const nsPoint& p,
+               const char* pfx, const char* sfx)
+{
+  aStream << pfx;
+  aStream << nsPrintfCString("(x=%d, y=%d)", p.x, p.y).get();
+  aStream << sfx;
+}
+
+void
+AppendToString(std::stringstream& aStream, const nsRect& r,
+               const char* pfx, const char* sfx)
+{
+  aStream << pfx;
+  aStream << nsPrintfCString(
+    "(x=%d, y=%d, w=%d, h=%d)",
+    r.x, r.y, r.width, r.height).get();
+  aStream << sfx;
+}
+
+void
 AppendToString(std::stringstream& aStream, const nsIntPoint& p,
                const char* pfx, const char* sfx)
 {
@@ -85,6 +104,23 @@ AppendToString(std::stringstream& aStream, const nsIntRect& r,
   aStream << nsPrintfCString(
     "(x=%d, y=%d, w=%d, h=%d)",
     r.x, r.y, r.width, r.height).get();
+  aStream << sfx;
+}
+
+void
+AppendToString(std::stringstream& aStream, const nsRegion& r,
+               const char* pfx, const char* sfx)
+{
+  aStream << pfx;
+
+  nsRegionRectIterator it(r);
+  aStream << "< ";
+  while (const nsRect* sr = it.Next()) {
+    AppendToString(aStream, *sr);
+    aStream << "; ";
+  }
+  aStream << ">";
+
   aStream << sfx;
 }
 
@@ -106,12 +142,26 @@ AppendToString(std::stringstream& aStream, const nsIntRegion& r,
 }
 
 void
-AppendToString(std::stringstream& aStream, const nsIntSize& sz,
+AppendToString(std::stringstream& aStream, const EventRegions& e,
                const char* pfx, const char* sfx)
 {
-  aStream << pfx;
-  aStream << nsPrintfCString("(w=%d, h=%d)", sz.width, sz.height).get();
-  aStream << sfx;
+  aStream << pfx << "{";
+  if (!e.mHitRegion.IsEmpty()) {
+    AppendToString(aStream, e.mHitRegion, " hitregion=", "");
+  }
+  if (!e.mDispatchToContentHitRegion.IsEmpty()) {
+    AppendToString(aStream, e.mDispatchToContentHitRegion, " dispatchtocontentregion=", "");
+  }
+  if (!e.mNoActionRegion.IsEmpty()) {
+    AppendToString(aStream, e.mNoActionRegion, " NoActionRegion=","");
+  }
+  if (!e.mHorizontalPanRegion.IsEmpty()) {
+    AppendToString(aStream, e.mHorizontalPanRegion, " HorizontalPanRegion=", "");
+  }
+  if (!e.mVerticalPanRegion.IsEmpty()) {
+    AppendToString(aStream, e.mVerticalPanRegion, " VerticalPanRegion=", "");
+  }
+  aStream << "}" << sfx;
 }
 
 void
@@ -119,28 +169,49 @@ AppendToString(std::stringstream& aStream, const FrameMetrics& m,
                const char* pfx, const char* sfx, bool detailed)
 {
   aStream << pfx;
-  AppendToString(aStream, m.mCompositionBounds, "{ cb=");
-  AppendToString(aStream, m.mScrollableRect, " sr=");
-  AppendToString(aStream, m.GetScrollOffset(), " s=");
-  AppendToString(aStream, m.mDisplayPort, " dp=");
-  AppendToString(aStream, m.mCriticalDisplayPort, " cdp=");
+  AppendToString(aStream, m.mCompositionBounds, "{ [cb=");
+  AppendToString(aStream, m.GetScrollableRect(), "] [sr=");
+  AppendToString(aStream, m.GetScrollOffset(), "] [s=");
+  if (m.GetDoSmoothScroll()) {
+    AppendToString(aStream, m.GetSmoothScrollOffset(), "] [ss=");
+  }
+  AppendToString(aStream, m.GetDisplayPort(), "] [dp=");
+  AppendToString(aStream, m.GetCriticalDisplayPort(), "] [cdp=");
+  AppendToString(aStream, m.GetBackgroundColor(), "] [color=");
   if (!detailed) {
-    aStream << nsPrintfCString(" z=%.3f }", m.GetZoom().scale).get();
+    AppendToString(aStream, m.GetScrollId(), "] [scrollId=");
+    if (m.GetScrollParentId() != FrameMetrics::NULL_SCROLL_ID) {
+      AppendToString(aStream, m.GetScrollParentId(), "] [scrollParent=");
+    }
+    AppendToString(aStream, m.GetZoom(), "] [z=", "] }");
   } else {
-    AppendToString(aStream, m.GetDisplayPortMargins(), " dpm=");
-    aStream << nsPrintfCString(" um=%d", m.GetUseDisplayPortMargins()).get();
-    AppendToString(aStream, m.GetRootCompositionSize(), " rcs=");
-    AppendToString(aStream, m.mViewport, " v=");
-    aStream << nsPrintfCString(" z=(ld=%.3f r=%.3f cr=%.3f z=%.3f ts=%.3f)",
-            m.mDevPixelsPerCSSPixel.scale, m.mResolution.scale,
-            m.mCumulativeResolution.scale, m.GetZoom().scale,
-            m.mTransformScale.scale).get();
-    aStream << nsPrintfCString(" u=(%d %lu)",
-            m.GetScrollOffsetUpdated(), m.GetScrollGeneration()).get();
-    aStream << nsPrintfCString(" i=(%ld %lld) }",
+    AppendToString(aStream, m.GetDisplayPortMargins(), " [dpm=");
+    aStream << nsPrintfCString("] um=%d", m.GetUseDisplayPortMargins()).get();
+    AppendToString(aStream, m.GetRootCompositionSize(), "] [rcs=");
+    AppendToString(aStream, m.GetViewport(), "] [v=");
+    aStream << nsPrintfCString("] [z=(ld=%.3f r=%.3f",
+            m.GetDevPixelsPerCSSPixel().scale,
+            m.GetPresShellResolution()).get();
+    AppendToString(aStream, m.GetCumulativeResolution(), " cr=");
+    AppendToString(aStream, m.GetZoom(), " z=");
+    AppendToString(aStream, m.GetExtraResolution(), " er=");
+    aStream << nsPrintfCString(")] [u=(%d %d %lu)",
+            m.GetScrollOffsetUpdated(), m.GetDoSmoothScroll(),
+            m.GetScrollGeneration()).get();
+    AppendToString(aStream, m.GetScrollParentId(), "] [p=");
+    aStream << nsPrintfCString("] [i=(%ld %lld)] }",
             m.GetPresShellId(), m.GetScrollId()).get();
   }
   aStream << sfx;
+}
+
+void
+AppendToString(std::stringstream& aStream, const ScrollableLayerGuid& s,
+               const char* pfx, const char* sfx)
+{
+  aStream << pfx
+          << nsPrintfCString("{ l=%llu, p=%u, v=%llu }", s.mLayersId, s.mPresShellId, s.mScrollId).get()
+          << sfx;
 }
 
 void
@@ -168,6 +239,22 @@ AppendToString(std::stringstream& aStream, const Matrix4x4& m,
   }
   aStream << sfx;
 }
+
+void
+AppendToString(std::stringstream& aStream, const Matrix5x4& m,
+               const char* pfx, const char* sfx)
+{
+  aStream << pfx;
+  aStream << nsPrintfCString(
+    "[ %g %g %g %g; %g %g %g %g; %g %g %g %g; %g %g %g %g; %g %g %g %g]",
+    m._11, m._12, m._13, m._14,
+    m._21, m._22, m._23, m._24,
+    m._31, m._32, m._33, m._34,
+    m._41, m._42, m._43, m._44,
+    m._51, m._52, m._53, m._54).get();
+  aStream << sfx;
+}
+
 
 void
 AppendToString(std::stringstream& aStream, const Filter filter,
@@ -204,10 +291,8 @@ AppendToString(std::stringstream& aStream, TextureFlags flags,
 }
     bool previous = false;
     AppendFlag(TextureFlags::USE_NEAREST_FILTER);
-    AppendFlag(TextureFlags::NEEDS_Y_FLIP);
+    AppendFlag(TextureFlags::ORIGIN_BOTTOM_LEFT);
     AppendFlag(TextureFlags::DISALLOW_BIGIMAGE);
-    AppendFlag(TextureFlags::ALLOW_REPEAT);
-    AppendFlag(TextureFlags::NEW_TILE);
 
 #undef AppendFlag
   }
@@ -235,3 +320,30 @@ AppendToString(std::stringstream& aStream, mozilla::gfx::SurfaceFormat format,
 
 } // namespace
 } // namespace
+
+void
+print_stderr(std::stringstream& aStr)
+{
+#if defined(ANDROID)
+  // On Android logcat output is truncated to 1024 chars per line, and
+  // we usually use std::stringstream to build up giant multi-line gobs
+  // of output. So to avoid the truncation we find the newlines and
+  // print the lines individually.
+  std::string line;
+  while (std::getline(aStr, line)) {
+    printf_stderr("%s\n", line.c_str());
+  }
+#else
+  printf_stderr("%s", aStr.str().c_str());
+#endif
+}
+
+void
+fprint_stderr(FILE* aFile, std::stringstream& aStr)
+{
+  if (aFile == stderr) {
+    print_stderr(aStr);
+  } else {
+    fprintf_stderr(aFile, "%s", aStr.str().c_str());
+  }
+}

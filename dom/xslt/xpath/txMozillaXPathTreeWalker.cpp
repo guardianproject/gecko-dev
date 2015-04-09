@@ -348,7 +348,8 @@ txXPathNodeUtils::getLocalName(const txXPathNode& aNode)
 
     if (aNode.isContent()) {
         if (aNode.mNode->IsElement()) {
-            nsCOMPtr<nsIAtom> localName = aNode.Content()->Tag();
+            nsCOMPtr<nsIAtom> localName =
+                aNode.Content()->NodeInfo()->NameAtom();
             return localName.forget();
         }
 
@@ -420,7 +421,7 @@ txXPathNodeUtils::getLocalName(const txXPathNode& aNode, nsAString& aLocalName)
 
     // Check for html
     if (aNode.Content()->NodeInfo()->NamespaceEquals(kNameSpaceID_None) &&
-        aNode.Content()->IsHTML()) {
+        aNode.Content()->IsHTMLElement()) {
         nsContentUtils::ASCIIToUpper(aLocalName);
     }
 }
@@ -514,7 +515,7 @@ txXPathNodeUtils::appendNodeValue(const txXPathNode& aNode, nsAString& aResult)
         aNode.mNode->IsElement() ||
         aNode.mNode->IsNodeOfType(nsINode::eDOCUMENT_FRAGMENT)) {
         nsContentUtils::AppendNodeTextContent(aNode.mNode, true, aResult,
-                                              mozilla::fallible_t());
+                                              mozilla::fallible);
 
         return;
     }
@@ -606,7 +607,8 @@ txXPathNodeUtils::comparePosition(const txXPathNode& aNode,
     nsAutoTArray<nsINode*, 8> parents, otherParents;
     nsINode* node = aNode.mNode;
     nsINode* otherNode = aOtherNode.mNode;
-    nsINode* parent, *otherParent;
+    nsINode* parent;
+    nsINode* otherParent;
     while (node && otherNode) {
         parent = node->GetParentNode();
         otherParent = otherNode->GetParentNode();

@@ -22,4 +22,6 @@ LOCAL_INCLUDES += [
     '/xpcom/reflect/xptinfo',
 ]
 
-FINAL_LIBRARY = 'xpcom_core'
+FINAL_LIBRARY = 'xul'
+
+FAIL_ON_WARNINGS = True

@@ -29,7 +29,6 @@ XPathResult::XPathResult(nsINode* aParent)
       mBooleanResult(false),
       mNumberResult(0)
 {
-    SetIsDOMBinding();
 }
 
 XPathResult::XPathResult(const XPathResult &aResult)
@@ -42,7 +41,6 @@ XPathResult::XPathResult(const XPathResult &aResult)
       mResultType(aResult.mResultType),
       mInvalidIteratorState(aResult.mInvalidIteratorState)
 {
-    SetIsDOMBinding();
     if (mDocument) {
         mDocument->AddMutationObserver(this);
     }
@@ -82,9 +80,9 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(XPathResult)
 NS_INTERFACE_MAP_END
 
 JSObject*
-XPathResult::WrapObject(JSContext* aCx)
+XPathResult::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-    return XPathResultBinding::Wrap(aCx, this);
+    return XPathResultBinding::Wrap(aCx, this, aGivenProto);
 }
 
 void

@@ -23,15 +23,16 @@
 #include "nsIObserverService.h"
 #include "nsISettingsService.h"
 #include "nsServiceManagerUtils.h"
+#include "mozilla/dom/BindingUtils.h"
+#include "mozilla/dom/SettingChangeNotificationBinding.h"
 
 #ifdef MOZ_B2G_RIL
-#include "nsIDOMIccInfo.h"
-#include "nsIIccProvider.h"
+#include "nsIIccInfo.h"
+#include "nsIIccService.h"
 #include "nsIMobileConnectionInfo.h"
-#include "nsIMobileConnectionProvider.h"
+#include "nsIMobileConnectionService.h"
 #include "nsIMobileNetworkInfo.h"
 #include "nsITelephonyService.h"
-#include "nsRadioInterfaceLayer.h"
 #endif
 
 /**
@@ -164,7 +165,8 @@ static CINDItem sCINDItems[] = {
 #endif
 };
 
-class BluetoothHfpManager::GetVolumeTask : public nsISettingsServiceCallback
+class BluetoothHfpManager::GetVolumeTask final
+  : public nsISettingsServiceCallback
 {
 public:
   NS_DECL_ISUPPORTS
@@ -205,7 +207,7 @@ BluetoothHfpManager::Observe(nsISupports* aSubject,
                              const char16_t* aData)
 {
   if (!strcmp(aTopic, MOZSETTINGS_CHANGED_ID)) {
-    HandleVolumeChanged(nsDependentString(aData));
+    HandleVolumeChanged(aSubject);
   } else if (!strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID)) {
     HandleShutdown();
   } else {
@@ -232,7 +234,7 @@ BluetoothHfpManager::Notify(const hal::BatteryInformation& aBatteryInfo)
 class BluetoothHfpManager::RespondToBLDNTask : public Task
 {
 private:
-  void Run() MOZ_OVERRIDE
+  void Run() override
   {
     MOZ_ASSERT(sBluetoothHfpManager);
 
@@ -253,7 +255,7 @@ public:
     MOZ_ASSERT(NS_IsMainThread());
   }
 
-  void Run() MOZ_OVERRIDE
+  void Run() override
   {
     MOZ_ASSERT(NS_IsMainThread());
 
@@ -293,7 +295,7 @@ private:
 class BluetoothHfpManager::CloseScoTask : public Task
 {
 private:
-  void Run() MOZ_OVERRIDE
+  void Run() override
   {
     MOZ_ASSERT(sBluetoothHfpManager);
 
@@ -414,6 +416,8 @@ BluetoothHfpManager::Reset()
 bool
 BluetoothHfpManager::Init()
 {
+  // The function must run at b2g process since it would access SettingsService.
+  MOZ_ASSERT(IsMainProcess());
   MOZ_ASSERT(NS_IsMainThread());
 
   nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
@@ -555,7 +559,7 @@ BluetoothHfpManager::NotifyDialer(const nsAString& aCommand)
 #endif // MOZ_B2G_RIL
 
 void
-BluetoothHfpManager::HandleVolumeChanged(const nsAString& aData)
+BluetoothHfpManager::HandleVolumeChanged(nsISupports* aSubject)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -563,32 +567,18 @@ BluetoothHfpManager::HandleVolumeChanged(const nsAString& aData)
   //  {"key":"volumeup", "value":10}
   //  {"key":"volumedown", "value":2}
 
-  JSContext* cx = nsContentUtils::GetSafeJSContext();
-  NS_ENSURE_TRUE_VOID(cx);
-
-  JS::Rooted<JS::Value> val(cx);
-  NS_ENSURE_TRUE_VOID(JS_ParseJSON(cx, aData.BeginReading(), aData.Length(), &val));
-  NS_ENSURE_TRUE_VOID(val.isObject());
-
-  JS::Rooted<JSObject*> obj(cx, &val.toObject());
-  JS::Rooted<JS::Value> key(cx);
-  if (!JS_GetProperty(cx, obj, "key", &key) || !key.isString()) {
+  RootedDictionary<dom::SettingChangeNotification> setting(nsContentUtils::RootingCx());
+  if (!WrappedJSToDictionary(aSubject, setting)) {
+    return;
+  }
+  if (!setting.mKey.EqualsASCII(AUDIO_VOLUME_BT_SCO_ID)) {
+    return;
+  }
+  if (!setting.mValue.isNumber()) {
     return;
   }
 
-  bool match;
-  if (!JS_StringEqualsAscii(cx, key.toString(), AUDIO_VOLUME_BT_SCO_ID, &match) ||
-      !match) {
-    return;
-  }
-
-  JS::Rooted<JS::Value> value(cx);
-  if (!JS_GetProperty(cx, obj, "value", &value)||
-      !value.isNumber()) {
-    return;
-  }
-
-  mCurrentVgs = value.toNumber();
+  mCurrentVgs = setting.mValue.toNumber();
 
   // Adjust volume by headset and we don't have to send volume back to headset
   if (mReceiveVgsFlag) {
@@ -606,12 +596,16 @@ BluetoothHfpManager::HandleVolumeChanged(const nsAString& aData)
 void
 BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
 {
-  nsCOMPtr<nsIMobileConnectionProvider> connection =
-    do_GetService(NS_RILCONTENTHELPER_CONTRACTID);
+  nsCOMPtr<nsIMobileConnectionService> mcService =
+    do_GetService(NS_MOBILE_CONNECTION_SERVICE_CONTRACTID);
+  NS_ENSURE_TRUE_VOID(mcService);
+
+  nsCOMPtr<nsIMobileConnection> connection;
+  mcService->GetItemByServiceId(aClientId, getter_AddRefs(connection));
   NS_ENSURE_TRUE_VOID(connection);
 
   nsCOMPtr<nsIMobileConnectionInfo> voiceInfo;
-  connection->GetVoiceConnectionInfo(aClientId, getter_AddRefs(voiceInfo));
+  connection->GetVoice(getter_AddRefs(voiceInfo));
   NS_ENSURE_TRUE_VOID(voiceInfo);
 
   nsString type;
@@ -631,9 +625,7 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
   }
   UpdateCIND(CINDType::SERVICE, service);
 
-  JSContext* cx = nsContentUtils::GetSafeJSContext();
-  NS_ENSURE_TRUE_VOID(cx);
-  JS::Rooted<JS::Value> value(cx);
+  JS::Rooted<JS::Value> value(nsContentUtils::RootingCxForThread());
   voiceInfo->GetRelSignalStrength(&value);
   NS_ENSURE_TRUE_VOID(value.isNumber());
   uint8_t signal = ceil(value.toNumber() / 20.0);
@@ -641,17 +633,13 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
 
   /**
    * Possible return values for mode are:
-   * - null (unknown): set mNetworkSelectionMode to 0 (auto)
-   * - automatic: set mNetworkSelectionMode to 0 (auto)
-   * - manual: set mNetworkSelectionMode to 1 (manual)
+   * - -1 (unknown): set mNetworkSelectionMode to 0 (auto)
+   * - 0 (automatic): set mNetworkSelectionMode to 0 (auto)
+   * - 1 (manual): set mNetworkSelectionMode to 1 (manual)
    */
-  nsString mode;
-  connection->GetNetworkSelectionMode(aClientId, mode);
-  if (mode.EqualsLiteral("manual")) {
-    mNetworkSelectionMode = 1;
-  } else {
-    mNetworkSelectionMode = 0;
-  }
+  int32_t mode;
+  connection->GetNetworkSelectionMode(&mode);
+  mNetworkSelectionMode = (mode == 1) ? 1 : 0;
 
   nsCOMPtr<nsIMobileNetworkInfo> network;
   voiceInfo->GetNetwork(getter_AddRefs(network));
@@ -675,15 +663,19 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
 void
 BluetoothHfpManager::HandleIccInfoChanged(uint32_t aClientId)
 {
-  nsCOMPtr<nsIIccProvider> icc =
-    do_GetService(NS_RILCONTENTHELPER_CONTRACTID);
+  nsCOMPtr<nsIIccService> service =
+    do_GetService(ICC_SERVICE_CONTRACTID);
+  NS_ENSURE_TRUE_VOID(service);
+
+  nsCOMPtr<nsIIcc> icc;
+  service->GetIccByServiceId(aClientId, getter_AddRefs(icc));
   NS_ENSURE_TRUE_VOID(icc);
 
-  nsCOMPtr<nsIDOMMozIccInfo> iccInfo;
-  icc->GetIccInfo(aClientId, getter_AddRefs(iccInfo));
+  nsCOMPtr<nsIIccInfo> iccInfo;
+  icc->GetIccInfo(getter_AddRefs(iccInfo));
   NS_ENSURE_TRUE_VOID(iccInfo);
 
-  nsCOMPtr<nsIDOMMozGsmIccInfo> gsmIccInfo = do_QueryInterface(iccInfo);
+  nsCOMPtr<nsIGsmIccInfo> gsmIccInfo = do_QueryInterface(iccInfo);
   NS_ENSURE_TRUE_VOID(gsmIccInfo);
   gsmIccInfo->GetMsisdn(mMsisdn);
 }
@@ -699,6 +691,28 @@ BluetoothHfpManager::HandleShutdown()
   sBluetoothHfpManager = nullptr;
 }
 
+void
+BluetoothHfpManager::ParseAtCommand(const nsACString& aAtCommand,
+                                    const int aStart,
+                                    nsTArray<nsCString>& aRetValues)
+{
+  int length = aAtCommand.Length();
+  int begin = aStart;
+
+  for (int i = aStart; i < length; ++i) {
+    // Use ',' as separator
+    if (aAtCommand[i] == ',') {
+      nsCString tmp(nsDependentCSubstring(aAtCommand, begin, i - begin));
+      aRetValues.AppendElement(tmp);
+
+      begin = i + 1;
+    }
+  }
+
+  nsCString tmp(nsDependentCSubstring(aAtCommand, begin));
+  aRetValues.AppendElement(tmp);
+}
+
 // Virtual function of class SocketConsumer
 void
 BluetoothHfpManager::ReceiveSocketData(BluetoothSocket* aSocket,
@@ -707,7 +721,8 @@ BluetoothHfpManager::ReceiveSocketData(BluetoothSocket* aSocket,
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aSocket);
 
-  nsAutoCString msg((const char*)aMessage->mData.get(), aMessage->mSize);
+  nsAutoCString msg(reinterpret_cast<const char*>(aMessage->GetData()),
+                    aMessage->GetSize());
   msg.StripWhitespace();
 
   nsTArray<nsCString> atCommandValues;
@@ -1873,8 +1888,7 @@ BluetoothHfpManager::OnScoConnectSuccess()
 {
   // For active connection request, we need to reply the DOMRequest
   if (mScoRunnable) {
-    DispatchBluetoothReply(mScoRunnable,
-                           BluetoothValue(true), EmptyString());
+    DispatchReplySuccess(mScoRunnable);
     mScoRunnable = nullptr;
   }
 
@@ -1888,9 +1902,8 @@ void
 BluetoothHfpManager::OnScoConnectError()
 {
   if (mScoRunnable) {
-    NS_NAMED_LITERAL_STRING(replyError, "Failed to create SCO socket!");
-    DispatchBluetoothReply(mScoRunnable, BluetoothValue(), replyError);
-
+    DispatchReplyError(mScoRunnable,
+                       NS_LITERAL_STRING("Failed to create SCO socket!"));
     mScoRunnable = nullptr;
   }
 

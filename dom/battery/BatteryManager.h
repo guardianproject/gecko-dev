@@ -27,13 +27,13 @@ class BatteryManager : public DOMEventTargetHelper
                      , public BatteryObserver
 {
 public:
-  BatteryManager(nsPIDOMWindow* aWindow);
+  explicit BatteryManager(nsPIDOMWindow* aWindow);
 
   void Init();
   void Shutdown();
 
   // For IObserver.
-  void Notify(const hal::BatteryInformation& aBatteryInfo);
+  void Notify(const hal::BatteryInformation& aBatteryInfo) override;
 
   /**
    * WebIDL Interface
@@ -44,7 +44,7 @@ public:
      return GetOwner();
   }
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   bool Charging() const
   {

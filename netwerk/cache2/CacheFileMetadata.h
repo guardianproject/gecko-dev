@@ -138,26 +138,28 @@ public:
 
   nsresult SetExpirationTime(uint32_t aExpirationTime);
   nsresult GetExpirationTime(uint32_t *_retval);
-  nsresult SetLastModified(uint32_t aLastModified);
-  nsresult GetLastModified(uint32_t *_retval);
   nsresult SetFrecency(uint32_t aFrecency);
   nsresult GetFrecency(uint32_t *_retval);
+  nsresult GetLastModified(uint32_t *_retval);
   nsresult GetLastFetched(uint32_t *_retval);
   nsresult GetFetchCount(uint32_t *_retval);
+  // Called by upper layers to indicate the entry this metadata belongs
+  // with has been fetched, i.e. delivered to the consumer.
+  nsresult OnFetched();
 
   int64_t  Offset() { return mOffset; }
   uint32_t ElementsSize() { return mElementsSize; }
-  void     MarkDirty() { mIsDirty = true; }
+  void     MarkDirty(bool aUpdateLastModified = true);
   bool     IsDirty() { return mIsDirty; }
   uint32_t MemoryUsage() { return sizeof(CacheFileMetadata) + mHashArraySize + mBufSize; }
 
-  NS_IMETHOD OnFileOpened(CacheFileHandle *aHandle, nsresult aResult);
+  NS_IMETHOD OnFileOpened(CacheFileHandle *aHandle, nsresult aResult) override;
   NS_IMETHOD OnDataWritten(CacheFileHandle *aHandle, const char *aBuf,
-                           nsresult aResult);
-  NS_IMETHOD OnDataRead(CacheFileHandle *aHandle, char *aBuf, nsresult aResult);
-  NS_IMETHOD OnFileDoomed(CacheFileHandle *aHandle, nsresult aResult);
-  NS_IMETHOD OnEOFSet(CacheFileHandle *aHandle, nsresult aResult);
-  NS_IMETHOD OnFileRenamed(CacheFileHandle *aHandle, nsresult aResult);
+                           nsresult aResult) override;
+  NS_IMETHOD OnDataRead(CacheFileHandle *aHandle, char *aBuf, nsresult aResult) override;
+  NS_IMETHOD OnFileDoomed(CacheFileHandle *aHandle, nsresult aResult) override;
+  NS_IMETHOD OnEOFSet(CacheFileHandle *aHandle, nsresult aResult) override;
+  NS_IMETHOD OnFileRenamed(CacheFileHandle *aHandle, nsresult aResult) override;
 
   // Memory reporting
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
@@ -184,9 +186,12 @@ private:
   char                               *mWriteBuf;
   CacheFileMetadataHeader             mMetaHdr;
   uint32_t                            mElementsSize;
-  bool                                mIsDirty;
-  bool                                mAnonymous;
-  bool                                mInBrowser;
+  bool                                mIsDirty        : 1;
+  bool                                mAnonymous      : 1;
+  bool                                mInBrowser      : 1;
+  bool                                mAllocExactSize : 1;
+  bool                                mFirstRead      : 1;
+  mozilla::TimeStamp                  mReadStart;
   uint32_t                            mAppId;
   nsCOMPtr<CacheFileMetadataListener> mListener;
 };

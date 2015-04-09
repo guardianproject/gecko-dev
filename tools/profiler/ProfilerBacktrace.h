@@ -8,11 +8,12 @@
 #define __PROFILER_BACKTRACE_H
 
 class SyncProfile;
+class JSStreamWriter;
 
 class ProfilerBacktrace
 {
 public:
-  ProfilerBacktrace(SyncProfile* aProfile);
+  explicit ProfilerBacktrace(SyncProfile* aProfile);
   ~ProfilerBacktrace();
 
   void StreamJSObject(JSStreamWriter& b);

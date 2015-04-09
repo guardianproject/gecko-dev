@@ -8,24 +8,36 @@ package org.mozilla.gecko.home;
 import java.util.Date;
 import java.util.EnumSet;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.mozilla.gecko.EventDispatcher;
+import org.mozilla.gecko.GeckoAppShell;
+import org.mozilla.gecko.GeckoEvent;
+import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.db.BrowserContract.Combined;
+import org.mozilla.gecko.db.BrowserContract.History;
 import org.mozilla.gecko.db.BrowserDB;
-import org.mozilla.gecko.db.BrowserDB.URLColumns;
+import org.mozilla.gecko.home.HomeContextMenuInfo.RemoveItemType;
 import org.mozilla.gecko.home.HomePager.OnUrlOpenListener;
-import org.mozilla.gecko.util.ThreadUtils;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.database.Cursor;
+import android.graphics.Typeface;
 import android.os.Bundle;
-import android.support.v4.app.LoaderManager.LoaderCallbacks;
 import android.support.v4.content.Loader;
+import android.text.SpannableStringBuilder;
+import android.text.TextPaint;
+import android.text.method.LinkMovementMethod;
+import android.text.style.ClickableSpan;
+import android.text.style.StyleSpan;
+import android.text.style.UnderlineSpan;
+import android.util.Log;
 import android.util.SparseArray;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -45,6 +57,10 @@ public class HistoryPanel extends HomeFragment {
     // Cursor loader ID for history query
     private static final int LOADER_ID_HISTORY = 0;
 
+    // String placeholders to mark formatting.
+    private final static String FORMAT_S1 = "%1$s";
+    private final static String FORMAT_S2 = "%2$s";
+
     // Adapter for the list of recent history entries.
     private HistoryAdapter mAdapter;
 
@@ -59,27 +75,6 @@ public class HistoryPanel extends HomeFragment {
 
     // Callbacks used for the search and favicon cursor loaders
     private CursorLoaderCallbacks mCursorLoaderCallbacks;
-
-    // On URL open listener
-    private OnUrlOpenListener mUrlOpenListener;
-
-    @Override
-    public void onAttach(Activity activity) {
-        super.onAttach(activity);
-
-        try {
-            mUrlOpenListener = (OnUrlOpenListener) activity;
-        } catch (ClassCastException e) {
-            throw new ClassCastException(activity.toString()
-                    + " must implement HomePager.OnUrlOpenListener");
-        }
-    }
-
-    @Override
-    public void onDetach() {
-        super.onDetach();
-        mUrlOpenListener = null;
-    }
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -96,7 +91,7 @@ public class HistoryPanel extends HomeFragment {
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 position -= mAdapter.getMostRecentSectionsCountBefore(position);
                 final Cursor c = mAdapter.getCursor(position);
-                final String url = c.getString(c.getColumnIndexOrThrow(URLColumns.URL));
+                final String url = c.getString(c.getColumnIndexOrThrow(History.URL));
 
                 Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.LIST_ITEM);
 
@@ -112,6 +107,7 @@ public class HistoryPanel extends HomeFragment {
                 info.url = cursor.getString(cursor.getColumnIndexOrThrow(Combined.URL));
                 info.title = cursor.getString(cursor.getColumnIndexOrThrow(Combined.TITLE));
                 info.historyId = cursor.getInt(cursor.getColumnIndexOrThrow(Combined.HISTORY_ID));
+                info.itemType = RemoveItemType.HISTORY;
                 final int bookmarkIdCol = cursor.getColumnIndexOrThrow(Combined.BOOKMARK_ID);
                 if (cursor.isNull(bookmarkIdCol)) {
                     // If this is a combined cursor, we may get a history item without a
@@ -145,13 +141,16 @@ public class HistoryPanel extends HomeFragment {
                     @Override
                     public void onClick(final DialogInterface dialog, final int which) {
                         dialog.dismiss();
-                        ThreadUtils.postToBackgroundThread(new Runnable() {
-                            @Override
-                            public void run() {
-                                final ContentResolver cr = context.getContentResolver();
-                                BrowserDB.clearHistory(cr);
-                            }
-                        });
+
+                        // Send message to Java to clear history.
+                        final JSONObject json = new JSONObject();
+                        try {
+                            json.put("history", true);
+                        } catch (JSONException e) {
+                            Log.e(LOGTAG, "JSON error", e);
+                        }
+
+                        GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("Sanitize:ClearData", json.toString()));
 
                         Telemetry.sendUIEvent(TelemetryContract.Event.SANITIZE, TelemetryContract.Method.BUTTON, "history");
                     }
@@ -191,15 +190,17 @@ public class HistoryPanel extends HomeFragment {
     private static class HistoryCursorLoader extends SimpleCursorLoader {
         // Max number of history results
         private static final int HISTORY_LIMIT = 100;
+        private final BrowserDB mDB;
 
         public HistoryCursorLoader(Context context) {
             super(context);
+            mDB = GeckoProfile.get(context).getDB();
         }
 
         @Override
         public Cursor loadCursor() {
             final ContentResolver cr = getContext().getContentResolver();
-            return BrowserDB.getRecentHistory(cr, HISTORY_LIMIT);
+            return mDB.getRecentHistory(cr, HISTORY_LIMIT);
         }
     }
 
@@ -224,8 +225,78 @@ public class HistoryPanel extends HomeFragment {
             final TextView emptyText = (TextView) mEmptyView.findViewById(R.id.home_empty_text);
             emptyText.setText(R.string.home_most_recent_empty);
 
+            final TextView emptyHint = (TextView) mEmptyView.findViewById(R.id.home_empty_hint);
+            final String hintText = getResources().getString(R.string.home_most_recent_emptyhint);
+
+            final SpannableStringBuilder hintBuilder = formatHintText(hintText);
+            if (hintBuilder != null) {
+                emptyHint.setText(hintBuilder);
+                emptyHint.setMovementMethod(LinkMovementMethod.getInstance());
+                emptyHint.setVisibility(View.VISIBLE);
+            }
+
             mList.setEmptyView(mEmptyView);
         }
+    }
+
+    /**
+     * Make Span that is clickable, italicized, and underlined
+     * between the string markers <code>FORMAT_S1</code> and
+     * <code>FORMAT_S2</code>.
+     *
+     * @param text String to format
+     * @return formatted SpannableStringBuilder, or null if there
+     * is not any text to format.
+     */
+    private SpannableStringBuilder formatHintText(String text) {
+        // Set formatting as marked by string placeholders.
+        final int underlineStart = text.indexOf(FORMAT_S1);
+        final int underlineEnd = text.indexOf(FORMAT_S2);
+
+        // Check that there is text to be formatted.
+        if (underlineStart >= underlineEnd) {
+            return null;
+        }
+
+        final SpannableStringBuilder ssb = new SpannableStringBuilder(text);
+
+        // Set italicization.
+        ssb.setSpan(new StyleSpan(Typeface.ITALIC), 0, ssb.length(), 0);
+
+        // Set clickable text.
+        final ClickableSpan clickableSpan = new ClickableSpan() {
+            @Override
+            public void onClick(View widget) {
+                Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.HOMESCREEN, "hint-private-browsing");
+                try {
+                    final JSONObject json = new JSONObject();
+                    json.put("type", "Menu:Open");
+                    EventDispatcher.getInstance().dispatchEvent(json, null);
+                } catch (JSONException e) {
+                    Log.e(LOGTAG, "Error forming JSON for Private Browsing contextual hint", e);
+                }
+            }
+        };
+
+        ssb.setSpan(clickableSpan, 0, text.length(), 0);
+
+        // Remove underlining set by ClickableSpan.
+        final UnderlineSpan noUnderlineSpan = new UnderlineSpan() {
+            @Override
+            public void updateDrawState(TextPaint textPaint) {
+                textPaint.setUnderlineText(false);
+            }
+        };
+
+        ssb.setSpan(noUnderlineSpan, 0, text.length(), 0);
+
+        // Add underlining for "Private Browsing".
+        ssb.setSpan(new UnderlineSpan(), underlineStart, underlineEnd, 0);
+
+        ssb.delete(underlineEnd, underlineEnd + FORMAT_S2.length());
+        ssb.delete(underlineStart, underlineStart + FORMAT_S1.length());
+
+        return ssb;
     }
 
     private static class HistoryAdapter extends MultiTypeCursorAdapter {
@@ -385,7 +456,7 @@ public class HistoryPanel extends HomeFragment {
 
             do {
                 final int position = c.getPosition();
-                final long time = c.getLong(c.getColumnIndexOrThrow(URLColumns.DATE_LAST_VISITED));
+                final long time = c.getLong(c.getColumnIndexOrThrow(History.DATE_LAST_VISITED));
                 final MostRecentSection itemSection = HistoryAdapter.getMostRecentSectionForTime(today, time);
 
                 if (section != itemSection) {
@@ -401,20 +472,21 @@ public class HistoryPanel extends HomeFragment {
         }
     }
 
-    private class CursorLoaderCallbacks implements LoaderCallbacks<Cursor> {
+    private class CursorLoaderCallbacks extends TransitionAwareCursorLoaderCallbacks {
         @Override
         public Loader<Cursor> onCreateLoader(int id, Bundle args) {
             return new HistoryCursorLoader(getActivity());
         }
 
         @Override
-        public void onLoadFinished(Loader<Cursor> loader, Cursor c) {
+        public void onLoadFinishedAfterTransitions(Loader<Cursor> loader, Cursor c) {
             mAdapter.swapCursor(c);
             updateUiFromCursor(c);
         }
 
         @Override
         public void onLoaderReset(Loader<Cursor> loader) {
+            super.onLoaderReset(loader);
             mAdapter.swapCursor(null);
         }
     }

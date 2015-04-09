@@ -1,5 +1,5 @@
 /* Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 subscriptLoader.loadSubScript("resource://gre/modules/ril_consts.js", this);
 
@@ -8,44 +8,46 @@ function run_test() {
 }
 
 /**
- * Verify RIL.iccGetCardLockState("fdn")
+ * Verify RIL.iccGetCardLockEnabled
  */
-add_test(function test_icc_get_card_lock_state_fdn() {
+add_test(function test_icc_get_card_lock_enabled() {
   let worker = newUint8Worker();
   let context = worker.ContextPool._contexts[0];
-  let ril = context.RIL;
   let buf = context.Buf;
+  let ril = context.RIL;
+  ril.aid = "123456789";
+  ril.v5Legacy = false;
 
-  buf.sendParcel = function() {
-    // Request Type.
-    do_check_eq(this.readInt32(), REQUEST_QUERY_FACILITY_LOCK)
+  function do_test(aLock) {
+    const serviceClass = ICC_SERVICE_CLASS_VOICE |
+                         ICC_SERVICE_CLASS_DATA  |
+                         ICC_SERVICE_CLASS_FAX;
 
-    // Token : we don't care.
-    this.readInt32();
+    buf.sendParcel = function fakeSendParcel() {
+      // Request Type.
+      equal(this.readInt32(), REQUEST_QUERY_FACILITY_LOCK)
 
-    // String Array Length.
-    do_check_eq(this.readInt32(), ril.v5Legacy ? 3 : 4);
-
-    // Facility.
-    do_check_eq(this.readString(), ICC_CB_FACILITY_FDN);
-
-    // Password.
-    do_check_eq(this.readString(), "");
-
-    // Service class.
-    do_check_eq(this.readString(), (ICC_SERVICE_CLASS_VOICE |
-                                    ICC_SERVICE_CLASS_DATA  |
-                                    ICC_SERVICE_CLASS_FAX).toString());
-
-    if (!ril.v5Legacy) {
-      // AID. Ignore because it's from modem.
+      // Token : we don't care.
       this.readInt32();
-    }
 
-    run_next_test();
-  };
+      // Data
+      let parcel = this.readStringList();
+      equal(parcel.length, ril.v5Legacy ? 3 : 4);
+      equal(parcel[0], GECKO_CARDLOCK_TO_FACILITY[aLock]);
+      equal(parcel[1], "");
+      equal(parcel[2], serviceClass.toString());
+      if (!ril.v5Legacy) {
+        equal(parcel[3], ril.aid);
+      }
+    };
 
-  ril.iccGetCardLockState({lockType: "fdn"});
+    ril.iccGetCardLockEnabled({lockType: aLock});
+  }
+
+  do_test(GECKO_CARDLOCK_PIN)
+  do_test(GECKO_CARDLOCK_FDN)
+
+  run_next_test();
 });
 
 add_test(function test_path_id_for_spid_and_spn() {
@@ -62,296 +64,233 @@ add_test(function test_path_id_for_spid_and_spn() {
 
   // Test SIM
   RIL.appType = CARD_APPTYPE_SIM;
-  do_check_eq(ICCFileHelper.getEFPath(ICC_EF_SPDI),
+  equal(ICCFileHelper.getEFPath(ICC_EF_SPDI),
               EF_PATH_MF_SIM + EF_PATH_DF_GSM);
-  do_check_eq(ICCFileHelper.getEFPath(ICC_EF_SPN),
+  equal(ICCFileHelper.getEFPath(ICC_EF_SPN),
               EF_PATH_MF_SIM + EF_PATH_DF_GSM);
 
   // Test USIM
   RIL.appType = CARD_APPTYPE_USIM;
-  do_check_eq(ICCFileHelper.getEFPath(ICC_EF_SPDI),
+  equal(ICCFileHelper.getEFPath(ICC_EF_SPDI),
               EF_PATH_MF_SIM + EF_PATH_ADF_USIM);
-  do_check_eq(ICCFileHelper.getEFPath(ICC_EF_SPDI),
+  equal(ICCFileHelper.getEFPath(ICC_EF_SPDI),
               EF_PATH_MF_SIM + EF_PATH_ADF_USIM);
   run_next_test();
 });
 
-add_test(function test_personalization_state() {
-  let worker = newUint8Worker();
-  let context = worker.ContextPool._contexts[0];
-  let ril = context.RIL;
-
-  context.ICCRecordHelper.readICCID = function fakeReadICCID() {};
-
-  function testPersonalization(isCdma, cardPersoState, geckoCardState) {
-    let iccStatus = {
-      cardState: CARD_STATE_PRESENT,
-      gsmUmtsSubscriptionAppIndex: (!isCdma) ? 0 : -1,
-      cdmaSubscriptionAppIndex: (isCdma) ? 0 : -1,
-      apps: [
-        {
-          app_state: CARD_APPSTATE_SUBSCRIPTION_PERSO,
-          perso_substate: cardPersoState
-        }],
-    };
-
-    ril._isCdma = isCdma;
-    ril._processICCStatus(iccStatus);
-    do_check_eq(ril.cardState, geckoCardState);
-  }
-
-  // Test GSM personalization state.
-  testPersonalization(false, CARD_PERSOSUBSTATE_SIM_NETWORK,
-                      GECKO_CARDSTATE_NETWORK_LOCKED);
-  testPersonalization(false, CARD_PERSOSUBSTATE_SIM_CORPORATE,
-                      GECKO_CARDSTATE_CORPORATE_LOCKED);
-  testPersonalization(false, CARD_PERSOSUBSTATE_SIM_SERVICE_PROVIDER,
-                      GECKO_CARDSTATE_SERVICE_PROVIDER_LOCKED);
-  testPersonalization(false, CARD_PERSOSUBSTATE_SIM_NETWORK_PUK,
-                      GECKO_CARDSTATE_NETWORK_PUK_REQUIRED);
-  testPersonalization(false, CARD_PERSOSUBSTATE_SIM_CORPORATE_PUK,
-                      GECKO_CARDSTATE_CORPORATE_PUK_REQUIRED);
-  testPersonalization(false, CARD_PERSOSUBSTATE_SIM_SERVICE_PROVIDER_PUK,
-                      GECKO_CARDSTATE_SERVICE_PROVIDER_PUK_REQUIRED);
-  testPersonalization(false, CARD_PERSOSUBSTATE_READY,
-                      GECKO_CARDSTATE_PERSONALIZATION_READY);
-
-  // Test CDMA personalization state.
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_NETWORK1,
-                      GECKO_CARDSTATE_NETWORK1_LOCKED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_NETWORK2,
-                      GECKO_CARDSTATE_NETWORK2_LOCKED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_HRPD,
-                      GECKO_CARDSTATE_HRPD_NETWORK_LOCKED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_CORPORATE,
-                      GECKO_CARDSTATE_RUIM_CORPORATE_LOCKED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_SERVICE_PROVIDER,
-                      GECKO_CARDSTATE_RUIM_SERVICE_PROVIDER_LOCKED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_RUIM,
-                      GECKO_CARDSTATE_RUIM_LOCKED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_NETWORK1_PUK,
-                      GECKO_CARDSTATE_NETWORK1_PUK_REQUIRED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_NETWORK2_PUK,
-                      GECKO_CARDSTATE_NETWORK2_PUK_REQUIRED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_HRPD_PUK,
-                      GECKO_CARDSTATE_HRPD_NETWORK_PUK_REQUIRED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_CORPORATE_PUK,
-                      GECKO_CARDSTATE_RUIM_CORPORATE_PUK_REQUIRED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_SERVICE_PROVIDER_PUK,
-                      GECKO_CARDSTATE_RUIM_SERVICE_PROVIDER_PUK_REQUIRED);
-  testPersonalization(true, CARD_PERSOSUBSTATE_RUIM_RUIM_PUK,
-                      GECKO_CARDSTATE_RUIM_PUK_REQUIRED);
-
-  run_next_test();
-});
-
 /**
- * Verify SIM app_state in _processICCStatus
+ * Verify RIL.iccSetCardLockEnabled
  */
-add_test(function test_card_app_state() {
+add_test(function test_icc_set_card_lock_enabled() {
   let worker = newUint8Worker();
   let context = worker.ContextPool._contexts[0];
-  let ril = context.RIL;
-
-  context.ICCRecordHelper.readICCID = function fakeReadICCID() {};
-
-  function testCardAppState(cardAppState, geckoCardState) {
-    let iccStatus = {
-      cardState: CARD_STATE_PRESENT,
-      gsmUmtsSubscriptionAppIndex: 0,
-      apps: [
-      {
-        app_state: cardAppState
-      }],
-    };
-
-    ril._processICCStatus(iccStatus);
-    do_check_eq(ril.cardState, geckoCardState);
-  }
-
-  testCardAppState(CARD_APPSTATE_ILLEGAL,
-                   GECKO_CARDSTATE_ILLEGAL);
-  testCardAppState(CARD_APPSTATE_PIN,
-                   GECKO_CARDSTATE_PIN_REQUIRED);
-  testCardAppState(CARD_APPSTATE_PUK,
-                   GECKO_CARDSTATE_PUK_REQUIRED);
-  testCardAppState(CARD_APPSTATE_READY,
-                   GECKO_CARDSTATE_READY);
-  testCardAppState(CARD_APPSTATE_UNKNOWN,
-                   GECKO_CARDSTATE_UNKNOWN);
-  testCardAppState(CARD_APPSTATE_DETECTED,
-                   GECKO_CARDSTATE_UNKNOWN);
-
-  run_next_test();
-});
-
-/**
- * Verify permanent blocked for ICC.
- */
-add_test(function test_icc_permanent_blocked() {
-  let worker = newUint8Worker();
-  let context = worker.ContextPool._contexts[0];
-  let ril = context.RIL;
-
-  context.ICCRecordHelper.readICCID = function fakeReadICCID() {};
-
-  function testPermanentBlocked(pin1_replaced, universalPINState, pin1) {
-    let iccStatus = {
-      cardState: CARD_STATE_PRESENT,
-      gsmUmtsSubscriptionAppIndex: 0,
-      universalPINState: universalPINState,
-      apps: [
-      {
-        pin1_replaced: pin1_replaced,
-        pin1: pin1
-      }]
-    };
-
-    ril._processICCStatus(iccStatus);
-    do_check_eq(ril.cardState, GECKO_CARDSTATE_PERMANENT_BLOCKED);
-  }
-
-  testPermanentBlocked(1,
-                       CARD_PINSTATE_ENABLED_PERM_BLOCKED,
-                       CARD_PINSTATE_UNKNOWN);
-  testPermanentBlocked(1,
-                       CARD_PINSTATE_ENABLED_PERM_BLOCKED,
-                       CARD_PINSTATE_ENABLED_PERM_BLOCKED);
-  testPermanentBlocked(0,
-                       CARD_PINSTATE_UNKNOWN,
-                       CARD_PINSTATE_ENABLED_PERM_BLOCKED);
-
-  run_next_test();
-});
-
-/**
- * Verify iccSetCardLock - Facility Lock.
- */
-add_test(function test_set_icc_card_lock_facility_lock() {
-  let worker = newUint8Worker();
-  let context = worker.ContextPool._contexts[0];
-  let aid = "123456789";
-  let ril = context.RIL;
-  ril.aid = aid;
-  ril.v5Legacy = false;
   let buf = context.Buf;
-
-  let GECKO_CARDLOCK_TO_FACILITIY_LOCK = {};
-  GECKO_CARDLOCK_TO_FACILITIY_LOCK[GECKO_CARDLOCK_PIN] = ICC_CB_FACILITY_SIM;
-  GECKO_CARDLOCK_TO_FACILITIY_LOCK[GECKO_CARDLOCK_FDN] = ICC_CB_FACILITY_FDN;
-
-  let GECKO_CARDLOCK_TO_PASSWORD_TYPE = {};
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_PIN] = "pin";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_FDN] = "pin2";
-
-  const pin = "1234";
-  const pin2 = "4321";
-  let GECKO_CARDLOCK_TO_PASSWORD = {};
-  GECKO_CARDLOCK_TO_PASSWORD[GECKO_CARDLOCK_PIN] = pin;
-  GECKO_CARDLOCK_TO_PASSWORD[GECKO_CARDLOCK_FDN] = pin2;
-
-  const serviceClass = ICC_SERVICE_CLASS_VOICE |
-                       ICC_SERVICE_CLASS_DATA  |
-                       ICC_SERVICE_CLASS_FAX;
+  let ril = context.RIL;
+  ril.aid = "123456789";
+  ril.v5Legacy = false;
 
   function do_test(aLock, aPassword, aEnabled) {
-    buf.sendParcel = function fakeSendParcel () {
+    const serviceClass = ICC_SERVICE_CLASS_VOICE |
+                         ICC_SERVICE_CLASS_DATA  |
+                         ICC_SERVICE_CLASS_FAX;
+
+    buf.sendParcel = function fakeSendParcel() {
       // Request Type.
-      do_check_eq(this.readInt32(), REQUEST_SET_FACILITY_LOCK);
+      equal(this.readInt32(), REQUEST_SET_FACILITY_LOCK);
 
       // Token : we don't care
       this.readInt32();
 
+      // Data
       let parcel = this.readStringList();
-      do_check_eq(parcel.length, 5);
-      do_check_eq(parcel[0], GECKO_CARDLOCK_TO_FACILITIY_LOCK[aLock]);
-      do_check_eq(parcel[1], aEnabled ? "1" : "0");
-      do_check_eq(parcel[2], GECKO_CARDLOCK_TO_PASSWORD[aLock]);
-      do_check_eq(parcel[3], serviceClass.toString());
-      do_check_eq(parcel[4], aid);
+      equal(parcel.length, ril.v5Legacy ? 4 : 5);
+      equal(parcel[0], GECKO_CARDLOCK_TO_FACILITY[aLock]);
+      equal(parcel[1], aEnabled ? "1" : "0");
+      equal(parcel[2], aPassword);
+      equal(parcel[3], serviceClass.toString());
+      if (!ril.v5Legacy) {
+        equal(parcel[4], ril.aid);
+      }
     };
 
-    let lock = {lockType: aLock,
-                enabled: aEnabled};
-    lock[GECKO_CARDLOCK_TO_PASSWORD_TYPE[aLock]] = aPassword;
-
-    ril.iccSetCardLock(lock);
+    ril.iccSetCardLockEnabled({
+      lockType: aLock,
+      enabled: aEnabled,
+      password: aPassword});
   }
 
-  do_test(GECKO_CARDLOCK_PIN, pin, true);
-  do_test(GECKO_CARDLOCK_PIN, pin, false);
-  do_test(GECKO_CARDLOCK_FDN, pin2, true);
-  do_test(GECKO_CARDLOCK_FDN, pin2, false);
+  do_test(GECKO_CARDLOCK_PIN, "1234", true);
+  do_test(GECKO_CARDLOCK_PIN, "1234", false);
+  do_test(GECKO_CARDLOCK_FDN, "4321", true);
+  do_test(GECKO_CARDLOCK_FDN, "4321", false);
 
   run_next_test();
 });
 
 /**
- * Verify iccUnlockCardLock.
+ * Verify RIL.iccChangeCardLockPassword
  */
-add_test(function test_unlock_card_lock_corporateLocked() {
+add_test(function test_icc_change_card_lock_password() {
   let worker = newUint8Worker();
   let context = worker.ContextPool._contexts[0];
-  let ril = context.RIL;
   let buf = context.Buf;
-  const pin = "12345678";
-  const puk = "12345678";
+  let ril = context.RIL;
 
-  let GECKO_CARDLOCK_TO_PASSWORD_TYPE = {};
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_NCK] = "pin";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_NCK1] = "pin";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_NCK2] = "pin";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_HNCK] = "pin";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_CCK] = "pin";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_SPCK] = "pin";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_RCCK] = "pin";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_RSPCK] = "pin";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_NCK_PUK] = "puk";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_NCK1_PUK] = "puk";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_NCK2_PUK] = "puk";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_HNCK_PUK] = "puk";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_CCK_PUK] = "puk";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_SPCK_PUK] = "puk";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_RCCK_PUK] = "puk";
-  GECKO_CARDLOCK_TO_PASSWORD_TYPE[GECKO_CARDLOCK_RSPCK_PUK] = "puk";
 
-  function do_test(aLock, aPassword) {
-    buf.sendParcel = function fakeSendParcel () {
+  function do_test(aLock, aPassword, aNewPassword) {
+    let GECKO_CARDLOCK_TO_REQUEST = {};
+    GECKO_CARDLOCK_TO_REQUEST[GECKO_CARDLOCK_PIN] = REQUEST_CHANGE_SIM_PIN;
+    GECKO_CARDLOCK_TO_REQUEST[GECKO_CARDLOCK_PIN2] = REQUEST_CHANGE_SIM_PIN2;
+
+    buf.sendParcel = function fakeSendParcel() {
       // Request Type.
-      do_check_eq(this.readInt32(), REQUEST_ENTER_NETWORK_DEPERSONALIZATION_CODE);
+      equal(this.readInt32(), GECKO_CARDLOCK_TO_REQUEST[aLock]);
 
       // Token : we don't care
       this.readInt32();
 
-      let lockType = GECKO_PERSO_LOCK_TO_CARD_PERSO_LOCK[aLock];
-      // Lock Type
-      do_check_eq(this.readInt32(), lockType);
-
-      // Pin/Puk.
-      do_check_eq(this.readString(), aPassword);
+      // Data
+      let parcel = this.readStringList();
+      equal(parcel.length, ril.v5Legacy ? 2 : 3);
+      equal(parcel[0], aPassword);
+      equal(parcel[1], aNewPassword);
+      if (!ril.v5Legacy) {
+        equal(parcel[2], ril.aid);
+      }
     };
 
-    let lock = {lockType: aLock};
-    lock[GECKO_CARDLOCK_TO_PASSWORD_TYPE[aLock]] = aPassword;
-    ril.iccUnlockCardLock(lock);
+    ril.iccChangeCardLockPassword({
+      lockType: aLock,
+      password: aPassword,
+      newPassword: aNewPassword});
   }
 
-  do_test(GECKO_CARDLOCK_NCK, pin);
-  do_test(GECKO_CARDLOCK_NCK1, pin);
-  do_test(GECKO_CARDLOCK_NCK2, pin);
-  do_test(GECKO_CARDLOCK_HNCK, pin);
-  do_test(GECKO_CARDLOCK_CCK, pin);
-  do_test(GECKO_CARDLOCK_SPCK, pin);
-  do_test(GECKO_CARDLOCK_RCCK, pin);
-  do_test(GECKO_CARDLOCK_RSPCK, pin);
-  do_test(GECKO_CARDLOCK_NCK_PUK, puk);
-  do_test(GECKO_CARDLOCK_NCK1_PUK, puk);
-  do_test(GECKO_CARDLOCK_NCK2_PUK, puk);
-  do_test(GECKO_CARDLOCK_HNCK_PUK, puk);
-  do_test(GECKO_CARDLOCK_CCK_PUK, puk);
-  do_test(GECKO_CARDLOCK_SPCK_PUK, puk);
-  do_test(GECKO_CARDLOCK_RCCK_PUK, puk);
-  do_test(GECKO_CARDLOCK_RSPCK_PUK, puk);
+  do_test(GECKO_CARDLOCK_PIN, "1234", "4321");
+  do_test(GECKO_CARDLOCK_PIN2, "1234", "4321");
+
+  run_next_test();
+});
+
+/**
+ * Verify RIL.iccUnlockCardLock - PIN
+ */
+add_test(function test_icc_unlock_card_lock_pin() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let ril = context.RIL;
+  let buf = context.Buf;
+  ril.aid = "123456789";
+  ril.v5Legacy = false;
+
+  function do_test(aLock, aPassword) {
+    let GECKO_CARDLOCK_TO_REQUEST = {};
+    GECKO_CARDLOCK_TO_REQUEST[GECKO_CARDLOCK_PIN] = REQUEST_ENTER_SIM_PIN;
+    GECKO_CARDLOCK_TO_REQUEST[GECKO_CARDLOCK_PIN2] = REQUEST_ENTER_SIM_PIN2;
+
+    buf.sendParcel = function fakeSendParcel() {
+      // Request Type.
+      equal(this.readInt32(), GECKO_CARDLOCK_TO_REQUEST[aLock]);
+
+      // Token : we don't care
+      this.readInt32();
+
+      // Data
+      let parcel = this.readStringList();
+      equal(parcel.length, ril.v5Legacy ? 1 : 2);
+      equal(parcel[0], aPassword);
+      if (!ril.v5Legacy) {
+        equal(parcel[1], ril.aid);
+      }
+    };
+
+    ril.iccUnlockCardLock({
+      lockType: aLock,
+      password: aPassword
+    });
+  }
+
+  do_test(GECKO_CARDLOCK_PIN, "1234");
+  do_test(GECKO_CARDLOCK_PIN2, "1234");
+
+  run_next_test();
+});
+
+/**
+ * Verify RIL.iccUnlockCardLock - PUK
+ */
+add_test(function test_icc_unlock_card_lock_puk() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let ril = context.RIL;
+  let buf = context.Buf;
+  ril.aid = "123456789";
+  ril.v5Legacy = false;
+
+  function do_test(aLock, aPassword, aNewPin) {
+    let GECKO_CARDLOCK_TO_REQUEST = {};
+    GECKO_CARDLOCK_TO_REQUEST[GECKO_CARDLOCK_PUK] = REQUEST_ENTER_SIM_PUK;
+    GECKO_CARDLOCK_TO_REQUEST[GECKO_CARDLOCK_PUK2] = REQUEST_ENTER_SIM_PUK2;
+
+    buf.sendParcel = function fakeSendParcel() {
+      // Request Type.
+      equal(this.readInt32(), GECKO_CARDLOCK_TO_REQUEST[aLock]);
+
+      // Token : we don't care
+      this.readInt32();
+
+      // Data
+      let parcel = this.readStringList();
+      equal(parcel.length, ril.v5Legacy ? 2 : 3);
+      equal(parcel[0], aPassword);
+      equal(parcel[1], aNewPin);
+      if (!ril.v5Legacy) {
+        equal(parcel[2], ril.aid);
+      }
+    };
+
+    ril.iccUnlockCardLock({
+      lockType: aLock,
+      password: aPassword,
+      newPin: aNewPin
+    });
+  }
+
+  do_test(GECKO_CARDLOCK_PUK, "12345678", "1234");
+  do_test(GECKO_CARDLOCK_PUK2, "12345678", "1234");
+
+  run_next_test();
+});
+
+/**
+ * Verify RIL.iccUnlockCardLock - Depersonalization
+ */
+add_test(function test_icc_unlock_card_lock_depersonalization() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let ril = context.RIL;
+  let buf = context.Buf;
+
+  function do_test(aPassword) {
+    buf.sendParcel = function fakeSendParcel() {
+      // Request Type.
+      equal(this.readInt32(), REQUEST_ENTER_NETWORK_DEPERSONALIZATION_CODE);
+
+      // Token : we don't care
+      this.readInt32();
+
+      // Data
+      let parcel = this.readStringList();
+      equal(parcel.length, 1);
+      equal(parcel[0], aPassword);
+    };
+
+    ril.iccUnlockCardLock({
+      lockType: GECKO_CARDLOCK_NCK,
+      password: aPassword
+    });
+  }
+
+  do_test("12345678");
 
   run_next_test();
 });

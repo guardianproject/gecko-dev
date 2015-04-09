@@ -11,6 +11,14 @@
 #include <shobjidl.h>
 #include <uxtheme.h>
 #include <dwmapi.h>
+
+// Undo the windows.h damage
+#undef GetMessage
+#undef CreateEvent
+#undef GetClassName
+#undef GetBinaryType
+#undef RemoveDirectory
+
 #include "nsAutoPtr.h"
 #include "nsString.h"
 #include "nsRegion.h"
@@ -23,6 +31,7 @@
 #include "nsIDownloader.h"
 #include "nsIURI.h"
 #include "nsIWidget.h"
+#include "nsIThread.h"
 
 #include "mozilla/Attributes.h"
 
@@ -67,10 +76,16 @@ class nsWindow;
 class nsWindowBase;
 struct KeyPair;
 struct nsIntRect;
-class nsIThread;
 
 namespace mozilla {
 namespace widget {
+
+// Windows message debugging data
+typedef struct {
+  const char * mStr;
+  UINT         mId;
+} EventMsgInfo;
+extern EventMsgInfo gAllEvents[];
 
 // More complete QS definitions for MsgWaitForMultipleObjects() and
 // GetQueueStatus() that include newer win8 specific defines.
@@ -97,12 +112,16 @@ namespace widget {
 #define LogException(e) mozilla::widget::WinUtils::Log("%s Exception:%s", __FUNCTION__, e->ToString()->Data())
 #define LogHRESULT(hr) mozilla::widget::WinUtils::Log("%s hr=%X", __FUNCTION__, hr)
 
-class myDownloadObserver MOZ_FINAL : public nsIDownloadObserver
+#ifdef MOZ_PLACES
+class myDownloadObserver final : public nsIDownloadObserver
 {
+  ~myDownloadObserver() {}
+
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIDOWNLOADOBSERVER
 };
+#endif
 
 class WinUtils {
 public:
@@ -142,8 +161,9 @@ public:
    * not aware of (e.g., from a different thread).
    * Note that this method may cause sync dispatch of sent (as opposed to
    * posted) messages.
+   * @param aTimeoutMs Timeout for waiting in ms, defaults to INFINITE
    */
-  static void WaitForMessage();
+  static void WaitForMessage(DWORD aTimeoutMs = INFINITE);
 
   /**
    * Gets the value of a string-typed registry value.
@@ -332,6 +352,12 @@ public:
   static nsIntRect ToIntRect(const RECT& aRect);
 
   /**
+   * Helper used in invalidating flash plugin windows owned
+   * by low rights flash containers.
+   */
+  static void InvalidatePluginAsWorkaround(nsIWidget *aWidget, const nsIntRect &aRect);
+
+  /**
    * Returns true if the context or IME state is enabled.  Otherwise, false.
    */
   static bool IsIMEEnabled(const InputContext& aInputContext);
@@ -354,6 +380,7 @@ public:
   typedef HRESULT (WINAPI*DwmInvalidateIconicBitmapsProc)(HWND hWnd);
   typedef HRESULT (WINAPI*DwmDefWindowProcProc)(HWND hWnd, UINT msg, LPARAM lParam, WPARAM wParam, LRESULT *aRetValue);
   typedef HRESULT (WINAPI*DwmGetCompositionTimingInfoProc)(HWND hWnd, DWM_TIMING_INFO *info);
+  typedef HRESULT (WINAPI*DwmFlushProc)(void);
 
   static DwmExtendFrameIntoClientAreaProc dwmExtendFrameIntoClientAreaPtr;
   static DwmIsCompositionEnabledProc dwmIsCompositionEnabledPtr;
@@ -364,6 +391,7 @@ public:
   static DwmInvalidateIconicBitmapsProc dwmInvalidateIconicBitmapsPtr;
   static DwmDefWindowProcProc dwmDwmDefWindowProcPtr;
   static DwmGetCompositionTimingInfoProc dwmGetCompositionTimingInfoPtr;
+  static DwmFlushProc dwmFlushProcPtr;
 
   static void Initialize();
 
@@ -383,7 +411,7 @@ private:
 };
 
 #ifdef MOZ_PLACES
-class AsyncFaviconDataReady MOZ_FINAL : public nsIFaviconDataCallback
+class AsyncFaviconDataReady final : public nsIFaviconDataCallback
 {
 public:
   NS_DECL_ISUPPORTS
@@ -394,6 +422,8 @@ public:
                         const bool aURLShortcut);
   nsresult OnFaviconDataNotAvailable(void);
 private:
+  ~AsyncFaviconDataReady() {}
+
   nsCOMPtr<nsIURI> mNewURI;
   nsCOMPtr<nsIThread> mIOThread;
   const bool mURLShortcut;
@@ -415,9 +445,10 @@ public:
                           uint8_t *aData, uint32_t aDataLen, uint32_t aStride,
                           uint32_t aWidth, uint32_t aHeight,
                           const bool aURLShortcut);
-  virtual ~AsyncEncodeAndWriteIcon();
 
 private:
+  virtual ~AsyncEncodeAndWriteIcon();
+
   nsAutoString mIconPath;
   nsAutoArrayPtr<uint8_t> mBuffer;
   HMODULE sDwmDLL;
@@ -435,9 +466,10 @@ public:
   NS_DECL_NSIRUNNABLE
 
   AsyncDeleteIconFromDisk(const nsAString &aIconPath);
-  virtual ~AsyncDeleteIconFromDisk();
 
 private:
+  virtual ~AsyncDeleteIconFromDisk();
+
   nsAutoString mIconPath;
 };
 
@@ -448,8 +480,10 @@ public:
   NS_DECL_NSIRUNNABLE
 
   AsyncDeleteAllFaviconsFromDisk(bool aIgnoreRecent = false);
-  virtual ~AsyncDeleteAllFaviconsFromDisk();
+
 private:
+  virtual ~AsyncDeleteAllFaviconsFromDisk();
+
   int32_t mIcoNoDeleteSeconds;
   bool mIgnoreRecent;
 };

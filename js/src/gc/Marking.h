@@ -23,6 +23,7 @@ class DebugScopeObject;
 class GCMarker;
 class GlobalObject;
 class LazyScript;
+class NestedScopeObject;
 class SavedFrame;
 class ScopeObject;
 class Shape;
@@ -36,9 +37,50 @@ struct IonScript;
 struct VMFunction;
 }
 
-namespace types {
-class Type;
-}
+/*** Tracing ***/
+
+// Trace through an edge in the live object graph on behalf of tracing. The
+// effect of tracing the edge depends on the JSTracer being used.
+template <typename T>
+void
+TraceEdge(JSTracer* trc, BarrieredBase<T>* thingp, const char* name);
+
+// Trace through a "root" edge. These edges are the initial edges in the object
+// graph traversal. Root edges are asserted to only be traversed in the initial
+// phase of a GC.
+template <typename T>
+void
+TraceRoot(JSTracer* trc, T* thingp, const char* name);
+
+// Like TraceEdge, but for edges that do not use one of the automatic barrier
+// classes and, thus, must be treated specially for moving GC. This method is
+// separate from TraceEdge to make accidental use of such edges more obvious.
+template <typename T>
+void
+TraceManuallyBarrieredEdge(JSTracer* trc, T* thingp, const char* name);
+
+// Trace all edges contained in the given array.
+template <typename T>
+void
+TraceRange(JSTracer* trc, size_t len, BarrieredBase<T>* vec, const char* name);
+
+// Trace all root edges in the given array.
+template <typename T>
+void
+TraceRootRange(JSTracer* trc, size_t len, T* vec, const char* name);
+
+// Trace an edge that crosses compartment boundaries. If the compartment of the
+// destination thing is not being GC'd, then the edge will not be traced.
+template <typename T>
+void
+TraceCrossCompartmentEdge(JSTracer* trc, JSObject* src, BarrieredBase<T>* dst,
+                          const char* name);
+
+// As above but with manual barriers.
+template <typename T>
+void
+TraceManuallyBarrieredCrossCompartmentEdge(JSTracer* trc, JSObject* src, T* dst,
+                                           const char* name);
 
 namespace gc {
 
@@ -50,16 +92,16 @@ namespace gc {
  * these are the variants generated for JSObject. They are listed from most to
  * least desirable for use:
  *
- * MarkObject(JSTracer *trc, const HeapPtrObject &thing, const char *name);
+ * MarkObject(JSTracer* trc, const HeapPtrObject& thing, const char* name);
  *     This function should be used for marking JSObjects, in preference to all
  *     others below. Use it when you have HeapPtrObject, which automatically
  *     implements write barriers.
  *
- * MarkObjectRoot(JSTracer *trc, JSObject *thing, const char *name);
+ * MarkObjectRoot(JSTracer* trc, JSObject* thing, const char* name);
  *     This function is only valid during the root marking phase of GC (i.e.,
  *     when MarkRuntime is on the stack).
  *
- * MarkObjectUnbarriered(JSTracer *trc, JSObject *thing, const char *name);
+ * MarkObjectUnbarriered(JSTracer* trc, JSObject* thing, const char* name);
  *     Like MarkObject, this function can be called at any time. It is more
  *     forgiving, since it doesn't demand a HeapPtr as an argument. Its use
  *     should always be accompanied by a comment explaining how write barriers
@@ -71,73 +113,48 @@ namespace gc {
  * The following functions are provided to test whether a GC thing is marked
  * under different circumstances:
  *
- * IsObjectAboutToBeFinalized(JSObject **thing);
+ * IsObjectAboutToBeFinalized(JSObject** thing);
  *     This function is indended to be used in code used to sweep GC things.  It
  *     indicates whether the object will will be finialized in the current group
  *     of compartments being swept.  Note that this will return false for any
  *     object not in the group of compartments currently being swept, as even if
  *     it is unmarked it may still become marked before it is swept.
  *
- * IsObjectMarked(JSObject **thing);
+ * IsObjectMarked(JSObject** thing);
  *     This function is indended to be used in rare cases in code used to mark
  *     GC things.  It indicates whether the object is currently marked.
  *
- * UpdateObjectIfRelocated(JSObject **thingp);
+ * UpdateObjectIfRelocated(JSObject** thingp);
  *     In some circumstances -- e.g. optional weak marking -- it is necessary
  *     to look at the pointer before marking it strongly or weakly. In these
  *     cases, the following must be called to update the pointer before use.
  */
 
 #define DeclMarker(base, type)                                                                    \
-void Mark##base(JSTracer *trc, BarrieredBase<type*> *thing, const char *name);                    \
-void Mark##base##Root(JSTracer *trc, type **thingp, const char *name);                            \
-void Mark##base##Unbarriered(JSTracer *trc, type **thingp, const char *name);                     \
-void Mark##base##Range(JSTracer *trc, size_t len, HeapPtr<type*> *thing, const char *name);       \
-void Mark##base##RootRange(JSTracer *trc, size_t len, type **thing, const char *name);            \
-bool Is##base##Marked(type **thingp);                                                             \
-bool Is##base##Marked(BarrieredBase<type*> *thingp);                                              \
-bool Is##base##AboutToBeFinalized(type **thingp);                                                 \
-bool Is##base##AboutToBeFinalized(BarrieredBase<type*> *thingp);                                  \
-type *Update##base##IfRelocated(JSRuntime *rt, BarrieredBase<type*> *thingp);                     \
-type *Update##base##IfRelocated(JSRuntime *rt, type **thingp);
-
-DeclMarker(BaseShape, BaseShape)
-DeclMarker(BaseShape, UnownedBaseShape)
-DeclMarker(JitCode, jit::JitCode)
-DeclMarker(Object, ArgumentsObject)
-DeclMarker(Object, ArrayBufferObject)
-DeclMarker(Object, ArrayBufferViewObject)
-DeclMarker(Object, SharedArrayBufferObject)
-DeclMarker(Object, DebugScopeObject)
-DeclMarker(Object, GlobalObject)
-DeclMarker(Object, JSObject)
-DeclMarker(Object, JSFunction)
-DeclMarker(Object, SavedFrame)
-DeclMarker(Object, ScopeObject)
-DeclMarker(Script, JSScript)
-DeclMarker(LazyScript, LazyScript)
-DeclMarker(Shape, Shape)
-DeclMarker(String, JSAtom)
-DeclMarker(String, JSString)
-DeclMarker(String, JSFlatString)
-DeclMarker(String, JSLinearString)
-DeclMarker(String, PropertyName)
-DeclMarker(Symbol, JS::Symbol)
-DeclMarker(TypeObject, types::TypeObject)
-
+void Mark##base(JSTracer* trc, BarrieredBase<type*>* thing, const char* name);                    \
+void Mark##base##Root(JSTracer* trc, type** thingp, const char* name);                            \
+void Mark##base##Unbarriered(JSTracer* trc, type** thingp, const char* name);                     \
+void Mark##base##Range(JSTracer* trc, size_t len, HeapPtr<type*>* thing, const char* name);       \
+void Mark##base##RootRange(JSTracer* trc, size_t len, type** thing, const char* name);            \
+bool Is##base##Marked(type** thingp);                                                             \
+bool Is##base##Marked(BarrieredBase<type*>* thingp);                                              \
+bool Is##base##AboutToBeFinalized(type** thingp);                                                 \
+bool Is##base##AboutToBeFinalized(BarrieredBase<type*>* thingp);                                  \
+type* Update##base##IfRelocated(JSRuntime* rt, BarrieredBase<type*>* thingp);                     \
+type* Update##base##IfRelocated(JSRuntime* rt, type** thingp);
 #undef DeclMarker
 
 void
-MarkPermanentAtom(JSTracer *trc, JSAtom *atom, const char *name);
+MarkPermanentAtom(JSTracer* trc, JSAtom* atom, const char* name);
 
 void
-MarkWellKnownSymbol(JSTracer *trc, JS::Symbol *sym);
+MarkWellKnownSymbol(JSTracer* trc, JS::Symbol* sym);
 
 /* Return true if the pointer is nullptr, or if it is a tagged pointer to
  * nullptr.
  */
 MOZ_ALWAYS_INLINE bool
-IsNullTaggedPointer(void *p)
+IsNullTaggedPointer(void* p)
 {
     return uintptr_t(p) < 32;
 }
@@ -150,107 +167,20 @@ IsNullTaggedPointer(void *p)
  * after we transition to exact rooting.
  */
 void
-MarkKind(JSTracer *trc, void **thingp, JSGCTraceKind kind);
+MarkKind(JSTracer* trc, void** thingp, JSGCTraceKind kind);
 
 void
-MarkGCThingRoot(JSTracer *trc, void **thingp, const char *name);
+MarkGCThingRoot(JSTracer* trc, void** thingp, const char* name);
 
 void
-MarkGCThingUnbarriered(JSTracer *trc, void **thingp, const char *name);
-
-/*** ID Marking ***/
-
-void
-MarkId(JSTracer *trc, BarrieredBase<jsid> *id, const char *name);
-
-void
-MarkIdRoot(JSTracer *trc, jsid *id, const char *name);
-
-void
-MarkIdUnbarriered(JSTracer *trc, jsid *id, const char *name);
-
-void
-MarkIdRange(JSTracer *trc, size_t len, HeapId *vec, const char *name);
-
-void
-MarkIdRootRange(JSTracer *trc, size_t len, jsid *vec, const char *name);
-
-/*** Value Marking ***/
-
-void
-MarkValue(JSTracer *trc, BarrieredBase<Value> *v, const char *name);
-
-void
-MarkValueRange(JSTracer *trc, size_t len, BarrieredBase<Value> *vec, const char *name);
-
-inline void
-MarkValueRange(JSTracer *trc, HeapValue *begin, HeapValue *end, const char *name)
-{
-    return MarkValueRange(trc, end - begin, begin, name);
-}
-
-void
-MarkValueRoot(JSTracer *trc, Value *v, const char *name);
-
-void
-MarkThingOrValueUnbarriered(JSTracer *trc, uintptr_t *word, const char *name);
-
-void
-MarkValueRootRange(JSTracer *trc, size_t len, Value *vec, const char *name);
-
-inline void
-MarkValueRootRange(JSTracer *trc, Value *begin, Value *end, const char *name)
-{
-    MarkValueRootRange(trc, end - begin, begin, name);
-}
-
-void
-MarkTypeRoot(JSTracer *trc, types::Type *v, const char *name);
-
-bool
-IsValueMarked(Value *v);
-
-bool
-IsValueAboutToBeFinalized(Value *v);
+MarkGCThingUnbarriered(JSTracer* trc, void** thingp, const char* name);
 
 /*** Slot Marking ***/
 
-bool
-IsSlotMarked(HeapSlot *s);
-
 void
-MarkSlot(JSTracer *trc, HeapSlot *s, const char *name);
-
-void
-MarkArraySlots(JSTracer *trc, size_t len, HeapSlot *vec, const char *name);
-
-void
-MarkObjectSlots(JSTracer *trc, JSObject *obj, uint32_t start, uint32_t nslots);
-
-void
-MarkCrossCompartmentObjectUnbarriered(JSTracer *trc, JSObject *src, JSObject **dst_obj,
-                                      const char *name);
-
-void
-MarkCrossCompartmentScriptUnbarriered(JSTracer *trc, JSObject *src, JSScript **dst_script,
-                                      const char *name);
-
-/*
- * Mark a value that may be in a different compartment from the compartment
- * being GC'd. (Although it won't be marked if it's in the wrong compartment.)
- */
-void
-MarkCrossCompartmentSlot(JSTracer *trc, JSObject *src, HeapSlot *dst_slot, const char *name);
-
+MarkObjectSlots(JSTracer* trc, NativeObject* obj, uint32_t start, uint32_t nslots);
 
 /*** Special Cases ***/
-
-/*
- * MarkChildren<JSObject> is exposed solely for preWriteBarrier on
- * JSObject::TradeGuts. It should not be considered external interface.
- */
-void
-MarkChildren(JSTracer *trc, JSObject *obj);
 
 /*
  * Trace through the shape and any shapes it contains to mark
@@ -258,107 +188,39 @@ MarkChildren(JSTracer *trc, JSObject *obj);
  * JS_TraceShapeCycleCollectorChildren.
  */
 void
-MarkCycleCollectorChildren(JSTracer *trc, Shape *shape);
+MarkCycleCollectorChildren(JSTracer* trc, Shape* shape);
 
 void
-PushArena(GCMarker *gcmarker, ArenaHeader *aheader);
+PushArena(GCMarker* gcmarker, ArenaHeader* aheader);
 
 /*** Generic ***/
 
-/*
- * The Mark() functions interface should only be used by code that must be
- * templated.  Other uses should use the more specific, type-named functions.
- */
-
-inline void
-Mark(JSTracer *trc, BarrieredBase<Value> *v, const char *name)
-{
-    MarkValue(trc, v, name);
-}
-
-inline void
-Mark(JSTracer *trc, BarrieredBase<JSObject*> *o, const char *name)
-{
-    MarkObject(trc, o, name);
-}
-
-inline void
-Mark(JSTracer *trc, BarrieredBase<JSScript*> *o, const char *name)
-{
-    MarkScript(trc, o, name);
-}
-
-inline void
-Mark(JSTracer *trc, HeapPtrJitCode *code, const char *name)
-{
-    MarkJitCode(trc, code, name);
-}
-
-/* For use by WeakMap's HashKeyRef instantiation. */
-inline void
-Mark(JSTracer *trc, JSObject **objp, const char *name)
-{
-    MarkObjectUnbarriered(trc, objp, name);
-}
-
-/* For use by Debugger::WeakMap's proxiedScopes HashKeyRef instantiation. */
-inline void
-Mark(JSTracer *trc, ScopeObject **obj, const char *name)
-{
-    MarkObjectUnbarriered(trc, obj, name);
-}
-
+template <typename T>
 bool
-IsCellMarked(Cell **thingp);
+IsMarkedUnbarriered(T* thingp);
 
+template <typename T>
 bool
-IsCellAboutToBeFinalized(Cell **thing);
+IsMarked(BarrieredBase<T>* thingp);
+
+template <typename T>
+bool
+IsMarked(ReadBarriered<T>* thingp);
+
+template <typename T>
+bool
+IsAboutToBeFinalizedUnbarriered(T* thingp);
+
+template <typename T>
+bool
+IsAboutToBeFinalized(BarrieredBase<T>* thingp);
+
+template <typename T>
+bool
+IsAboutToBeFinalized(ReadBarriered<T>* thingp);
 
 inline bool
-IsMarked(BarrieredBase<Value> *v)
-{
-    if (!v->isMarkable())
-        return true;
-    return IsValueMarked(v->unsafeGet());
-}
-
-inline bool
-IsMarked(BarrieredBase<JSObject*> *objp)
-{
-    return IsObjectMarked(objp);
-}
-
-inline bool
-IsMarked(BarrieredBase<JSScript*> *scriptp)
-{
-    return IsScriptMarked(scriptp);
-}
-
-inline bool
-IsAboutToBeFinalized(BarrieredBase<Value> *v)
-{
-    if (!v->isMarkable())
-        return false;
-    return IsValueAboutToBeFinalized(v->unsafeGet());
-}
-
-inline bool
-IsAboutToBeFinalized(BarrieredBase<JSObject*> *objp)
-{
-    return IsObjectAboutToBeFinalized(objp);
-}
-
-inline bool
-IsAboutToBeFinalized(BarrieredBase<JSScript*> *scriptp)
-{
-    return IsScriptAboutToBeFinalized(scriptp);
-}
-
-#ifdef JS_ION
-/* Nonsense to get WeakCache to work with new Marking semantics. */
-
-inline bool
-IsAboutToBeFinalized(const js::jit::VMFunction **vmfunc)
+IsAboutToBeFinalized(const js::jit::VMFunction** vmfunc)
 {
     /*
      * Preserves entries in the WeakCache<VMFunction, JitCode>
@@ -367,61 +229,51 @@ IsAboutToBeFinalized(const js::jit::VMFunction **vmfunc)
     return false;
 }
 
-inline bool
-IsAboutToBeFinalized(ReadBarrieredJitCode code)
-{
-    return IsJitCodeAboutToBeFinalized(code.unsafeGet());
-}
-#endif
-
-inline Cell *
-ToMarkable(const Value &v)
+inline Cell*
+ToMarkable(const Value& v)
 {
     if (v.isMarkable())
-        return (Cell *)v.toGCThing();
+        return (Cell*)v.toGCThing();
     return nullptr;
 }
 
-inline Cell *
-ToMarkable(Cell *cell)
+inline Cell*
+ToMarkable(Cell* cell)
 {
     return cell;
 }
 
-inline JSGCTraceKind
-TraceKind(const Value &v)
+/*
+ * HashKeyRef represents a reference to a HashMap key. This should normally
+ * be used through the HashTableWriteBarrierPost function.
+ */
+template <typename Map, typename Key>
+class HashKeyRef : public BufferableRef
 {
-    JS_ASSERT(v.isMarkable());
-    if (v.isObject())
-        return JSTRACE_OBJECT;
-    if (v.isString())
-        return JSTRACE_STRING;
-    JS_ASSERT(v.isSymbol());
-    return JSTRACE_SYMBOL;
-}
+    Map* map;
+    Key key;
 
-inline JSGCTraceKind
-TraceKind(JSObject *obj)
-{
-    return JSTRACE_OBJECT;
-}
+  public:
+    HashKeyRef(Map* m, const Key& k) : map(m), key(k) {}
 
-inline JSGCTraceKind
-TraceKind(JSScript *script)
-{
-    return JSTRACE_SCRIPT;
-}
-
-inline JSGCTraceKind
-TraceKind(LazyScript *lazy)
-{
-    return JSTRACE_LAZY_SCRIPT;
-}
+    void mark(JSTracer* trc) {
+        Key prior = key;
+        typename Map::Ptr p = map->lookup(key);
+        if (!p)
+            return;
+        trc->setTracingLocation(&*p);
+        TraceManuallyBarrieredEdge(trc, &key, "HashKeyRef");
+        map->rekeyIfMoved(prior, key);
+    }
+};
 
 } /* namespace gc */
 
 void
-TraceChildren(JSTracer *trc, void *thing, JSGCTraceKind kind);
+TraceChildren(JSTracer* trc, void* thing, JSGCTraceKind kind);
+
+bool
+UnmarkGrayShapeRecursively(Shape* shape);
 
 } /* namespace js */
 

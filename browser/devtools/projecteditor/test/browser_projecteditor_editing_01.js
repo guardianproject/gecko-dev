@@ -4,10 +4,17 @@
 
 "use strict";
 
+///////////////////
+//
+// Whitelisting this test.
+// As part of bug 1077403, the leaking uncaught rejection should be fixed.
+//
+thisTestLeaksUncaughtRejectionsAndShouldBeFixed("destroy");
+
 loadHelperScript("helper_edits.js");
 
 // Test ProjectEditor basic functionality
-let test = asyncTest(function*() {
+add_task(function*() {
   let projecteditor = yield addProjectEditorTabForTempDirectory();
   let TEMP_PATH = projecteditor.project.allPaths()[0];
 
@@ -37,6 +44,10 @@ function testEditFile(projecteditor, filePath, newData) {
   is (editor.editor.getText(), initialData, "Editor is loaded with correct file contents");
 
   info ("Setting text in the editor and doing checks before saving");
+
+  editor.editor.undo();
+  editor.editor.undo();
+  is (editor.editor.getText(), initialData, "Editor is still loaded with correct contents after undo");
 
   editor.editor.setText(newData);
   is (editor.editor.getText(), newData, "Editor has been filled with new data");

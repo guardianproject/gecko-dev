@@ -8,7 +8,8 @@
 #define mozilla_dom_archivereader_domarchivefile_h__
 
 #include "mozilla/Attributes.h"
-#include "nsDOMFile.h"
+#include "mozilla/ErrorResult.h"
+#include "mozilla/dom/File.h"
 
 #include "ArchiveReader.h"
 
@@ -18,9 +19,9 @@
 BEGIN_ARCHIVEREADER_NAMESPACE
 
 /**
- * ArchiveZipFileImpl to DOMFileImpl
+ * ArchiveZipFileImpl to FileImpl
  */
-class ArchiveZipFileImpl : public DOMFileImplBase
+class ArchiveZipFileImpl : public FileImplBase
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
@@ -29,13 +30,13 @@ public:
                      const nsAString& aContentType,
                      uint64_t aLength,
                      ZipCentral& aCentral,
-                     ArchiveReader* aReader)
-  : DOMFileImplBase(aName, aContentType, aLength),
+                     FileImpl* aFileImpl)
+  : FileImplBase(aName, aContentType, aLength),
     mCentral(aCentral),
-    mArchiveReader(aReader),
+    mFileImpl(aFileImpl),
     mFilename(aName)
   {
-    NS_ASSERTION(mArchiveReader, "must have a reader");
+    MOZ_ASSERT(mFileImpl);
     MOZ_COUNT_CTOR(ArchiveZipFileImpl);
   }
 
@@ -44,40 +45,31 @@ public:
                      uint64_t aStart,
                      uint64_t aLength,
                      ZipCentral& aCentral,
-                     ArchiveReader* aReader)
-  : DOMFileImplBase(aContentType, aStart, aLength),
+                     FileImpl* aFileImpl)
+  : FileImplBase(aContentType, aStart, aLength),
     mCentral(aCentral),
-    mArchiveReader(aReader),
+    mFileImpl(aFileImpl),
     mFilename(aName)
   {
-    NS_ASSERTION(mArchiveReader, "must have a reader");
+    MOZ_ASSERT(mFileImpl);
     MOZ_COUNT_CTOR(ArchiveZipFileImpl);
   }
 
   // Overrides:
-  virtual nsresult GetInternalStream(nsIInputStream**) MOZ_OVERRIDE;
-
-  virtual void Unlink() MOZ_OVERRIDE;
-  virtual void Traverse(nsCycleCollectionTraversalCallback &aCb) MOZ_OVERRIDE;
-
-  virtual bool IsCCed() const MOZ_OVERRIDE
-  {
-    return true;
-  }
-
+  virtual nsresult GetInternalStream(nsIInputStream**) override;
 protected:
   virtual ~ArchiveZipFileImpl()
   {
     MOZ_COUNT_DTOR(ArchiveZipFileImpl);
   }
 
-  virtual already_AddRefed<nsIDOMBlob> CreateSlice(uint64_t aStart,
-                                                   uint64_t aLength,
-                                                   const nsAString& aContentType) MOZ_OVERRIDE;
+  virtual already_AddRefed<FileImpl>
+  CreateSlice(uint64_t aStart, uint64_t aLength, const nsAString& aContentType,
+              mozilla::ErrorResult& aRv) override;
 
 private: // Data
   ZipCentral mCentral;
-  nsRefPtr<ArchiveReader> mArchiveReader;
+  nsRefPtr<FileImpl> mFileImpl;
 
   nsString mFilename;
 };

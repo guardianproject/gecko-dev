@@ -1,3 +1,5 @@
+MOZ_AUTOMATION_UPLOAD_SYMBOLS=0
+MOZ_AUTOMATION_UPDATE_PACKAGING=0
 . "$topsrcdir/b2g/config/mozconfigs/common"
 
 # Use sccache
@@ -31,5 +33,8 @@ ENABLE_MARIONETTE=1
 export CXXFLAGS=-DMOZ_ENABLE_JS_DUMP
 
 GAIADIR=$topsrcdir/gaia
+
+# Include Firefox OS fonts.
+MOZTTDIR=$topsrcdir/moztt
 
 . "$topsrcdir/b2g/config/mozconfigs/common.override"

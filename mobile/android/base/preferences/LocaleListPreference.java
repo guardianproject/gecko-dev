@@ -12,7 +12,9 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 
+import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.BrowserLocaleManager;
+import org.mozilla.gecko.Locales;
 import org.mozilla.gecko.R;
 
 import android.content.Context;
@@ -58,9 +60,31 @@ public class LocaleListPreference extends ListPreference {
             c.drawText(text, 0, BITMAP_HEIGHT / 2, this.paint);
             return b;
         }
-        private static byte[] getPixels(Bitmap b) {
-            ByteBuffer buffer = ByteBuffer.allocate(b.getByteCount());
-            b.copyPixelsToBuffer(buffer);
+
+        private static byte[] getPixels(final Bitmap b) {
+            final int byteCount;
+            if (Versions.feature19Plus) {
+                byteCount = b.getAllocationByteCount();
+            } else {
+                // Close enough for government work.
+                // Equivalent to getByteCount, but works on <12.
+                byteCount = b.getRowBytes() * b.getHeight();
+            }
+
+            final ByteBuffer buffer = ByteBuffer.allocate(byteCount);
+            try {
+                b.copyPixelsToBuffer(buffer);
+            } catch (RuntimeException e) {
+                // Android throws this if there's not enough space in the buffer.
+                // This should never occur, but if it does, we don't
+                // really care -- we probably don't need the entire image.
+                // This is awful. I apologize.
+                if ("Buffer not large enough for pixels".equals(e.getMessage())) {
+                    return buffer.array();
+                }
+                throw e;
+            }
+
             return buffer.array();
         }
 
@@ -94,7 +118,7 @@ public class LocaleListPreference extends ListPreference {
         private final String nativeName;
 
         public LocaleDescriptor(String tag) {
-            this(BrowserLocaleManager.parseLocaleCode(tag), tag);
+            this(Locales.parseLocaleCode(tag), tag);
         }
 
         public LocaleDescriptor(Locale locale, String tag) {
@@ -149,6 +173,12 @@ public class LocaleListPreference extends ListPreference {
          *         on this device without known issues.
          */
         public boolean isUsable(CharacterValidator validator) {
+            if (Versions.preLollipop && this.tag.matches("[a-zA-Z]{3}.*")) {
+                // Earlier versions of Android can't load three-char locale code
+                // resources.
+                return false;
+            }
+
             // Oh, for Java 7 switch statements.
             if (this.tag.equals("bn-IN")) {
                 // Bengali sometimes has an English label if the Bengali script
@@ -169,6 +199,7 @@ public class LocaleListPreference extends ListPreference {
             // See documentation for CharacterValidator.
             // Note that bn-IN is checked here even if it passed above.
             if (this.tag.equals("or") ||
+                this.tag.equals("my") ||
                 this.tag.equals("pa-IN") ||
                 this.tag.equals("gu-IN") ||
                 this.tag.equals("bn-IN")) {
@@ -192,7 +223,7 @@ public class LocaleListPreference extends ListPreference {
 
         // Future: single-locale builds should be specified, too.
         if (shippingLocales == null) {
-            final String fallbackTag = BrowserLocaleManager.getFallbackLocaleTag();
+            final String fallbackTag = BrowserLocaleManager.getInstance().getFallbackLocaleTag();
             return new LocaleDescriptor[] { new LocaleDescriptor(fallbackTag) };
         }
 
@@ -233,7 +264,7 @@ public class LocaleListPreference extends ListPreference {
         if (tag == null || tag.equals("")) {
             return Locale.getDefault();
         }
-        return BrowserLocaleManager.parseLocaleCode(tag);
+        return Locales.parseLocaleCode(tag);
     }
 
     @Override
@@ -246,8 +277,7 @@ public class LocaleListPreference extends ListPreference {
 
         // We can't trust super.getSummary() across locale changes,
         // apparently, so let's do the same work.
-        final Locale loc = new Locale(value);
-        return loc.getDisplayName(loc);
+        return new LocaleDescriptor(value).getDisplayName();
     }
 
     private void buildList() {
@@ -273,8 +303,11 @@ public class LocaleListPreference extends ListPreference {
         values[0] = "";
 
         for (int i = 0; i < count; ++i) {
-            entries[i + 1] = descriptors[i].getDisplayName();
-            values[i + 1] = descriptors[i].getTag();
+            final String displayName = descriptors[i].getDisplayName();
+            final String tag = descriptors[i].getTag();
+            Log.v(LOG_TAG, displayName + " => " + tag);
+            entries[i + 1] = displayName;
+            values[i + 1] = tag;
         }
 
         setEntries(entries);

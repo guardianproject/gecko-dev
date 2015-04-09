@@ -4,6 +4,7 @@
 
 #include "ActiveLayerTracker.h"
 
+#include "mozilla/ArrayUtils.h"
 #include "nsExpirationTracker.h"
 #include "nsContainerFrame.h"
 #include "nsIContent.h"
@@ -12,6 +13,7 @@
 #include "nsIDocument.h"
 #include "nsAnimationManager.h"
 #include "nsTransitionManager.h"
+#include "nsDisplayList.h"
 
 namespace mozilla {
 
@@ -27,7 +29,7 @@ namespace mozilla {
  */
 class LayerActivity {
 public:
-  LayerActivity(nsIFrame* aFrame)
+  explicit LayerActivity(nsIFrame* aFrame)
     : mFrame(aFrame)
     , mContent(nullptr)
     , mOpacityRestyleCount(0)
@@ -83,7 +85,7 @@ public:
   bool mContentActive;
 };
 
-class LayerActivityTracker MOZ_FINAL : public nsExpirationTracker<LayerActivity,4> {
+class LayerActivityTracker final : public nsExpirationTracker<LayerActivity,4> {
 public:
   // 75-100ms is a good timeout period. We use 4 generations of 25ms each.
   enum { GENERATION_MS = 100 };
@@ -106,13 +108,8 @@ LayerActivity::~LayerActivity()
   }
 }
 
-static void DestroyLayerActivity(void* aPropertyValue)
-{
-  delete static_cast<LayerActivity*>(aPropertyValue);
-}
-
 // Frames with this property have NS_FRAME_HAS_LAYER_ACTIVITY_PROPERTY set
-NS_DECLARE_FRAME_PROPERTY(LayerActivityProperty, DestroyLayerActivity)
+NS_DECLARE_FRAME_PROPERTY(LayerActivityProperty, DeleteValue<LayerActivity>)
 
 void
 LayerActivityTracker::NotifyExpired(LayerActivity* aObject)
@@ -259,15 +256,24 @@ ActiveLayerTracker::NotifyInlineStyleRuleModified(nsIFrame* aFrame,
 }
 
 /* static */ bool
-ActiveLayerTracker::IsStyleAnimated(nsIFrame* aFrame, nsCSSProperty aProperty)
+ActiveLayerTracker::IsStyleMaybeAnimated(nsIFrame* aFrame, nsCSSProperty aProperty)
+{
+  return IsStyleAnimated(nullptr, aFrame, aProperty);
+}
+
+/* static */ bool
+ActiveLayerTracker::IsStyleAnimated(nsDisplayListBuilder* aBuilder,
+                                    nsIFrame* aFrame, nsCSSProperty aProperty)
 {
   // TODO: Add some abuse restrictions
   if ((aFrame->StyleDisplay()->mWillChangeBitField & NS_STYLE_WILL_CHANGE_TRANSFORM) &&
-      aProperty == eCSSProperty_transform) {
+      aProperty == eCSSProperty_transform &&
+      (!aBuilder || aBuilder->IsInWillChangeBudget(aFrame))) {
     return true;
   }
   if ((aFrame->StyleDisplay()->mWillChangeBitField & NS_STYLE_WILL_CHANGE_OPACITY) &&
-      aProperty == eCSSProperty_opacity) {
+      aProperty == eCSSProperty_opacity &&
+      (!aBuilder || aBuilder->IsInWillChangeBudget(aFrame))) {
     return true;
   }
 
@@ -278,11 +284,11 @@ ActiveLayerTracker::IsStyleAnimated(nsIFrame* aFrame, nsCSSProperty aProperty)
     }
   }
   if (aProperty == eCSSProperty_transform && aFrame->Preserves3D()) {
-    return IsStyleAnimated(aFrame->GetParent(), aProperty);
+    return IsStyleAnimated(aBuilder, aFrame->GetParent(), aProperty);
   }
   nsIContent* content = aFrame->GetContent();
   if (content) {
-    return nsLayoutUtils::HasAnimations(content, aProperty);
+    return nsLayoutUtils::HasCurrentAnimationsForProperties(content, &aProperty, 1);
   }
 
   return false;
@@ -301,6 +307,23 @@ ActiveLayerTracker::IsOffsetOrMarginStyleAnimated(nsIFrame* aFrame)
         layerActivity->mMarginTopRestyleCount >= 2 ||
         layerActivity->mMarginRightRestyleCount >= 2 ||
         layerActivity->mMarginBottomRestyleCount >= 2) {
+      return true;
+    }
+  }
+  nsIContent* content = aFrame->GetContent();
+  if (content) {
+    static const nsCSSProperty properties[] = {
+      eCSSProperty_left,
+      eCSSProperty_top,
+      eCSSProperty_right,
+      eCSSProperty_bottom,
+      eCSSProperty_margin_left,
+      eCSSProperty_margin_top,
+      eCSSProperty_margin_right,
+      eCSSProperty_margin_bottom
+    };
+    if (nsLayoutUtils::HasCurrentAnimationsForProperties(
+          content, properties, MOZ_ARRAY_LENGTH(properties))) {
       return true;
     }
   }

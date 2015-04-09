@@ -7,17 +7,16 @@
 #ifndef jit_JitOptions_h
 #define jit_JitOptions_h
 
+#include "mozilla/Maybe.h"
+
 #include "jit/IonTypes.h"
 #include "js/TypeDecls.h"
-
-#ifdef JS_ION
 
 namespace js {
 namespace jit {
 
 // Longer scripts can only be compiled off thread, as these compilations
 // can be expensive and stall the main thread for too long.
-static const uint32_t MAX_OFF_THREAD_SCRIPT_SIZE = 100 * 1000;
 static const uint32_t MAX_MAIN_THREAD_SCRIPT_SIZE = 2 * 1000;
 static const uint32_t MAX_MAIN_THREAD_LOCALS_AND_ARGS = 256;
 
@@ -28,6 +27,18 @@ enum IonRegisterAllocator {
     RegisterAllocator_Stupid
 };
 
+static inline mozilla::Maybe<IonRegisterAllocator>
+LookupRegisterAllocator(const char* name)
+{
+    if (!strcmp(name, "lsra"))
+        return mozilla::Some(RegisterAllocator_LSRA);
+    if (!strcmp(name, "backtracking"))
+        return mozilla::Some(RegisterAllocator_Backtracking);
+    if (!strcmp(name, "stupid"))
+        return mozilla::Some(RegisterAllocator_Stupid);
+    return mozilla::Nothing();
+}
+
 struct JitOptions
 {
     bool checkGraphConsistency;
@@ -35,41 +46,41 @@ struct JitOptions
     bool checkOsiPointRegisters;
 #endif
     bool checkRangeAnalysis;
-    bool compileTryCatch;
+    bool runExtraChecks;
+    bool disableScalarReplacement;
+    bool disableEagerSimdUnbox;
     bool disableGvn;
     bool disableLicm;
     bool disableInlining;
     bool disableEdgeCaseAnalysis;
     bool disableRangeAnalysis;
-    bool disableUce;
+    bool disableSink;
+    bool disableLoopUnrolling;
     bool disableEaa;
+    bool disableAma;
     bool eagerCompilation;
-    bool forceDefaultIonUsesBeforeCompile;
-    uint32_t forcedDefaultIonUsesBeforeCompile;
-    bool forceRegisterAllocator;
-    IonRegisterAllocator forcedRegisterAllocator;
+    mozilla::Maybe<uint32_t> forcedDefaultIonWarmUpThreshold;
+    mozilla::Maybe<IonRegisterAllocator> forcedRegisterAllocator;
     bool limitScriptSize;
     bool osr;
-    uint32_t baselineUsesBeforeCompile;
+    uint32_t baselineWarmUpThreshold;
     uint32_t exceptionBailoutThreshold;
     uint32_t frequentBailoutThreshold;
     uint32_t maxStackArgs;
     uint32_t osrPcMismatchesBeforeRecompile;
     uint32_t smallFunctionMaxBytecodeLength_;
-    uint32_t usesBeforeCompilePar;
 
     JitOptions();
-    bool isSmallFunction(JSScript *script) const;
+    bool isSmallFunction(JSScript* script) const;
     void setEagerCompilation();
-    void setUsesBeforeCompile(uint32_t useCount);
-    void resetUsesBeforeCompile();
+    void setCompilerWarmUpThreshold(uint32_t warmUpThreshold);
+    void resetCompilerWarmUpThreshold();
+    void enableGvn(bool val);
 };
 
 extern JitOptions js_JitOptions;
 
 } // namespace jit
 } // namespace js
-
-#endif // JS_ION
 
 #endif /* jit_JitOptions_h */

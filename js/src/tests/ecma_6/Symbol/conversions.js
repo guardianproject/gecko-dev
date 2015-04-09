@@ -21,10 +21,12 @@ for (var sym of symbols) {
     assertThrowsInstanceOf(() => String(symobj), TypeError);
     assertThrowsInstanceOf(() => symobj < 0, TypeError);
     assertThrowsInstanceOf(() => 0 < symobj, TypeError);
-    assertThrowsInstanceOf(() => symobj == 0, TypeError);
-    assertThrowsInstanceOf(() => 0 != symobj, TypeError);
     assertThrowsInstanceOf(() => symobj + 1, TypeError);
     assertThrowsInstanceOf(() => "" + symobj, TypeError);
+    assertEq(sym == symobj, true);
+    assertEq(sym === symobj, false);
+    assertEq(symobj == 0, false);
+    assertEq(0 != symobj, true);
 
     // 7.1.2 ToBoolean
     assertEq(Boolean(sym), true);
@@ -33,15 +35,21 @@ for (var sym of symbols) {
     assertEq(sym && 13, 13);
 
     // 7.1.3 ToNumber
-    assertEq(+sym, NaN);
-    assertEq(sym | 0, 0);
+    assertThrowsInstanceOf(() => +sym, TypeError);
+    assertThrowsInstanceOf(() => sym | 0, TypeError);
 
     // 7.1.12 ToString
-    assertThrowsInstanceOf(() => String(sym), TypeError);
     assertThrowsInstanceOf(() => "" + sym, TypeError);
     assertThrowsInstanceOf(() => sym + "", TypeError);
     assertThrowsInstanceOf(() => "" + [1, 2, Symbol()], TypeError);
     assertThrowsInstanceOf(() => ["simple", "thimble", Symbol()].join(), TypeError);
+
+    // 21.1.1.1 String()
+    assertEq(String(sym), sym.toString());
+    assertThrowsInstanceOf(() => String(Object(sym)), TypeError);
+
+    // 21.1.1.2 new String()
+    assertThrowsInstanceOf(() => new String(sym), TypeError);
 
     // 7.1.13 ToObject
     var obj = Object(sym);

@@ -48,7 +48,7 @@ function test() {
           statusText: "OK",
           type: "json",
           fullMimeType: "application/json; charset=utf-8",
-          size: L10N.getFormatStrWithNumbers("networkMenu.sizeKB", 0.02),
+          size: L10N.getFormatStrWithNumbers("networkMenu.sizeKB", 0.03),
           time: true
         });
       verifyRequestItemTarget(RequestsMenu.getItemAtIndex(4),
@@ -67,7 +67,7 @@ function test() {
           statusText: "OK",
           type: "png",
           fullMimeType: "image/png",
-          size: L10N.getFormatStrWithNumbers("networkMenu.sizeKB", 0.75),
+          size: L10N.getFormatStrWithNumbers("networkMenu.sizeKB", 0.76),
           time: true
         });
 
@@ -208,7 +208,7 @@ function test() {
                 .getAttribute("value"), "base64",
                 "The image encoding info isn't correct.");
               is(tabpanel.querySelector("#response-content-image-dimensions-value")
-                .getAttribute("value"), "16 x 16",
+                .getAttribute("value"), "16" + " \u00D7 " + "16",
                 "The image dimensions info isn't correct.");
 
               deferred.resolve();

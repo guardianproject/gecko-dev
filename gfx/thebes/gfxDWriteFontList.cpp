@@ -6,10 +6,6 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/MemoryReporting.h"
 
-#ifdef MOZ_LOGGING
-#define FORCE_PR_LOG /* Allow logging in the release build */
-#endif /* MOZ_LOGGING */
-
 #include "gfxDWriteFontList.h"
 #include "gfxDWriteFonts.h"
 #include "nsUnicharUtils.h"
@@ -100,14 +96,8 @@ GetDirectWriteFontName(IDWriteFont *aFont, nsAString& aFontName)
     return S_OK;
 }
 
-// These strings are only defined in Win SDK 8+, so use #ifdef for now
-#if MOZ_WINSDK_TARGETVER > 0x08000000
 #define FULLNAME_ID   DWRITE_INFORMATIONAL_STRING_FULL_NAME
 #define PSNAME_ID     DWRITE_INFORMATIONAL_STRING_POSTSCRIPT_NAME
-#else
-#define FULLNAME_ID   DWRITE_INFORMATIONAL_STRING_ID(DWRITE_INFORMATIONAL_STRING_SAMPLE_TEXT + 1)
-#define PSNAME_ID     DWRITE_INFORMATIONAL_STRING_ID(DWRITE_INFORMATIONAL_STRING_SAMPLE_TEXT + 2)
-#endif
 
 // for use in reading postscript or fullname
 static HRESULT
@@ -467,9 +457,12 @@ class FontTableRec {
 public:
     FontTableRec(IDWriteFontFace *aFontFace, void *aContext)
         : mFontFace(aFontFace), mContext(aContext)
-    { }
+    {
+        MOZ_COUNT_CTOR(FontTableRec);
+    }
 
     ~FontTableRec() {
+        MOZ_COUNT_DTOR(FontTableRec);
         mFontFace->ReleaseFontTable(mContext);
     }
 
@@ -730,7 +723,7 @@ gfxDWriteFontList::GetDefaultFont(const gfxFontStyle *aStyle)
 
     // try Arial first
     gfxFontFamily *ff;
-    if (ff = FindFamily(NS_LITERAL_STRING("Arial"))) {
+    if ((ff = FindFamily(NS_LITERAL_STRING("Arial")))) {
         return ff;
     }
 
@@ -751,12 +744,14 @@ gfxDWriteFontList::GetDefaultFont(const gfxFontStyle *aStyle)
 }
 
 gfxFontEntry *
-gfxDWriteFontList::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                   const nsAString& aFullname)
+gfxDWriteFontList::LookupLocalFont(const nsAString& aFontName,
+                                   uint16_t aWeight,
+                                   int16_t aStretch,
+                                   bool aItalic)
 {
     gfxFontEntry *lookup;
 
-    lookup = LookupInFaceNameLists(aFullname);
+    lookup = LookupInFaceNameLists(aFontName);
     if (!lookup) {
         return nullptr;
     }
@@ -765,16 +760,19 @@ gfxDWriteFontList::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
     gfxDWriteFontEntry *fe =
         new gfxDWriteFontEntry(lookup->Name(),
                                dwriteLookup->mFont,
-                               aProxyEntry->Weight(),
-                               aProxyEntry->Stretch(),
-                               aProxyEntry->IsItalic());
+                               aWeight,
+                               aStretch,
+                               aItalic);
     fe->SetForceGDIClassic(dwriteLookup->GetForceGDIClassic());
     return fe;
 }
 
 gfxFontEntry *
-gfxDWriteFontList::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                    const uint8_t *aFontData,
+gfxDWriteFontList::MakePlatformFont(const nsAString& aFontName,
+                                    uint16_t aWeight,
+                                    int16_t aStretch,
+                                    bool aItalic,
+                                    const uint8_t* aFontData,
                                     uint32_t aLength)
 {
     nsresult rv;
@@ -836,9 +834,9 @@ gfxDWriteFontList::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
     gfxDWriteFontEntry *entry = 
         new gfxDWriteFontEntry(uniqueName, 
                                fontFile,
-                               aProxyEntry->Weight(),
-                               aProxyEntry->Stretch(),
-                               aProxyEntry->IsItalic());
+                               aWeight,
+                               aStretch,
+                               aItalic);
 
     fontFile->Analyze(&isSupported, &fileType, &entry->mFaceType, &numFaces);
     if (!isSupported || numFaces > 1) {
@@ -895,11 +893,6 @@ gfxDWriteFontList::InitFontList()
     QueryPerformanceCounter(&t1);
 
     HRESULT hr;
-    gfxFontCache *fc = gfxFontCache::GetCache();
-    if (fc) {
-        fc->AgeAllGenerations();
-    }
-
     mGDIFontTableAccess = Preferences::GetBool("gfx.font_rendering.directwrite.use_gdi_table_loading", false);
 
     gfxPlatformFontList::InitFontList();
@@ -931,13 +924,10 @@ gfxDWriteFontList::InitFontList()
     }
 
     elapsedTime = (t3.QuadPart - t1.QuadPart) * 1000.0 / frequency.QuadPart;
-    Telemetry::Accumulate(Telemetry::DWRITEFONT_INITFONTLIST_TOTAL, elapsedTime);
     LOG_FONTINIT(("Total time in InitFontList:    %9.3f ms\n", elapsedTime));
     elapsedTime = (t2.QuadPart - t1.QuadPart) * 1000.0 / frequency.QuadPart;
-    Telemetry::Accumulate(Telemetry::DWRITEFONT_INITFONTLIST_INIT, elapsedTime);
     LOG_FONTINIT((" --- gfxPlatformFontList init: %9.3f ms\n", elapsedTime));
     elapsedTime = (t3.QuadPart - t2.QuadPart) * 1000.0 / frequency.QuadPart;
-    Telemetry::Accumulate(Telemetry::DWRITEFONT_INITFONTLIST_GDI, elapsedTime);
     LOG_FONTINIT((" --- GdiInterop object:        %9.3f ms\n", elapsedTime));
 
     return NS_OK;
@@ -1030,6 +1020,8 @@ gfxDWriteFontList::DelayedInitFontList()
 
             // add faces to Gill Sans MT
             for (i = 0; i < faces.Length(); i++) {
+                // change the entry's family name to match its adoptive family
+                faces[i]->mFamilyName = gillSansMTFamily->Name();
                 gillSansMTFamily->AddFontEntry(faces[i]);
 
 #ifdef PR_LOGGING
@@ -1088,7 +1080,6 @@ gfxDWriteFontList::DelayedInitFontList()
     Telemetry::Accumulate(Telemetry::DWRITEFONT_DELAYEDINITFONTLIST_TOTAL, elapsedTime);
     Telemetry::Accumulate(Telemetry::DWRITEFONT_DELAYEDINITFONTLIST_COUNT,
                           mSystemFonts->GetFontFamilyCount());
-    Telemetry::Accumulate(Telemetry::DWRITEFONT_DELAYEDINITFONTLIST_GDI_TABLE, mGDIFontTableAccess);
     LOG_FONTINIT((
        "Total time in DelayedInitFontList:    %9.3f ms (families: %d, %s)\n",
        elapsedTime, mSystemFonts->GetFontFamilyCount(),
@@ -1099,7 +1090,6 @@ gfxDWriteFontList::DelayedInitFontList()
     LOG_FONTINIT((" --- GetSystemFontCollection:  %9.3f ms\n", elapsedTime));
 
     elapsedTime = (t3.QuadPart - t2.QuadPart) * 1000.0 / frequency.QuadPart;
-    Telemetry::Accumulate(Telemetry::DWRITEFONT_DELAYEDINITFONTLIST_ITERATE, elapsedTime);
     LOG_FONTINIT((" --- iterate over families:    %9.3f ms\n", elapsedTime));
 
     return NS_OK;
@@ -1319,7 +1309,8 @@ gfxDWriteFontList::GetStandardFamilyName(const nsAString& aFontName,
     return false;
 }
 
-gfxFontFamily* gfxDWriteFontList::FindFamily(const nsAString& aFamily)
+gfxFontFamily*
+gfxDWriteFontList::FindFamily(const nsAString& aFamily, bool aUseSystemFonts)
 {
     if (!mInitialized) {
         mInitialized = true;
@@ -1553,7 +1544,7 @@ gfxDWriteFontList::GlobalFontFallback(const uint32_t aCh,
         gfxFontEntry *fontEntry;
         bool needsBold;  // ignored in the system fallback case
         fontEntry = family->FindFontForStyle(*aMatchStyle, needsBold);
-        if (fontEntry && fontEntry->TestCharacterMap(aCh)) {
+        if (fontEntry && fontEntry->HasCharacter(aCh)) {
             *aMatchedFamily = family;
             return fontEntry;
         }
@@ -1812,9 +1803,9 @@ public:
     IFACEMETHODIMP GetCurrentFontFile(IDWriteFontFile ** fontFile);
 
 private:
-    BundledFontFileEnumerator() MOZ_DELETE;
-    BundledFontFileEnumerator(const BundledFontFileEnumerator&) MOZ_DELETE;
-    BundledFontFileEnumerator& operator=(const BundledFontFileEnumerator&) MOZ_DELETE;
+    BundledFontFileEnumerator() = delete;
+    BundledFontFileEnumerator(const BundledFontFileEnumerator&) = delete;
+    BundledFontFileEnumerator& operator=(const BundledFontFileEnumerator&) = delete;
 
     nsRefPtr<IDWriteFactory>      mFactory;
 
@@ -1880,8 +1871,8 @@ public:
         IDWriteFontFileEnumerator **aFontFileEnumerator);
 
 private:
-    BundledFontLoader(const BundledFontLoader&) MOZ_DELETE;
-    BundledFontLoader& operator=(const BundledFontLoader&) MOZ_DELETE;
+    BundledFontLoader(const BundledFontLoader&) = delete;
+    BundledFontLoader& operator=(const BundledFontLoader&) = delete;
 };
 
 IFACEMETHODIMP

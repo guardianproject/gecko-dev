@@ -14,14 +14,13 @@
 #include "nsIStringBundle.h"
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
-#endif
 #include "nsINSSErrorsService.h"
 #include "nsNSSCallbacks.h"
 #include "SharedCertVerifier.h"
 #include "nsNSSHelper.h"
 #include "nsClientAuthRemember.h"
 #include "prerror.h"
+#include "sslt.h"
 
 class nsIDOMWindow;
 class nsIPrompt;
@@ -44,10 +43,10 @@ MOZ_WARN_UNUSED_RESULT
 //Define an interface that we can use to look up from the
 //callbacks passed to NSS.
 
-#define NS_INSSCOMPONENT_IID_STR "538c5093-7cfe-4f13-bc8e-e767766a2d4d"
+#define NS_INSSCOMPONENT_IID_STR "e60602a8-97a3-4fe7-b5b7-56bc6ce87ab4"
 #define NS_INSSCOMPONENT_IID \
-  { 0x538c5093, 0x7cfe, 0x4f13, \
-    { 0xbc, 0x8e, 0xe7, 0x67, 0x76, 0x6a, 0x2d, 0x4d } }
+  { 0xe60602a8, 0x97a3, 0x4fe7, \
+    { 0xb5, 0xb7, 0x56, 0xbc, 0x6c, 0xe8, 0x7a, 0xb4 } }
 
 enum EnsureNSSOperator
 {
@@ -56,7 +55,8 @@ enum EnsureNSSOperator
   nssInitFailed = 2,
   nssShutdown = 3,
   nssEnsure = 100,
-  nssEnsureOnChromeOnly = 101
+  nssEnsureOnChromeOnly = 101,
+  nssEnsureChromeOrContent = 102,
 };
 
 extern bool EnsureNSSInitializedChromeOrContent();
@@ -87,16 +87,10 @@ class NS_NO_VTABLE nsINSSComponent : public nsISupports {
 
   NS_IMETHOD LogoutAuthenticatedPK11() = 0;
 
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
+#ifndef MOZ_NO_SMART_CARDS
   NS_IMETHOD LaunchSmartCardThread(SECMODModule* module) = 0;
 
   NS_IMETHOD ShutdownSmartCardThread(SECMODModule* module) = 0;
-
-  NS_IMETHOD PostEvent(const nsAString& eventType,
-                       const nsAString& token) = 0;
-
-  NS_IMETHOD DispatchEvent(const nsAString& eventType,
-                           const nsAString& token) = 0;
 #endif
 
   NS_IMETHOD IsNSSInitialized(bool* initialized) = 0;
@@ -111,10 +105,10 @@ class nsNSSShutDownList;
 class nsCertVerificationThread;
 
 // Implementation of the PSM component interface.
-class nsNSSComponent : public nsIEntropyCollector,
-                       public nsINSSComponent,
-                       public nsIObserver,
-                       public nsSupportsWeakReference
+class nsNSSComponent final : public nsIEntropyCollector,
+                             public nsINSSComponent,
+                             public nsIObserver,
+                             public nsSupportsWeakReference
 {
   typedef mozilla::Mutex Mutex;
 
@@ -131,26 +125,24 @@ public:
 
   static nsresult GetNewPrompter(nsIPrompt** result);
   static nsresult ShowAlertWithConstructedString(const nsString& message);
-  NS_IMETHOD ShowAlertFromStringBundle(const char* messageID);
+  NS_IMETHOD ShowAlertFromStringBundle(const char* messageID) override;
 
   NS_IMETHOD GetPIPNSSBundleString(const char* name,
-                                   nsAString& outString);
+                                   nsAString& outString) override;
   NS_IMETHOD PIPBundleFormatStringFromName(const char* name,
                                            const char16_t** params,
                                            uint32_t numParams,
-                                           nsAString& outString);
-  NS_IMETHOD GetNSSBundleString(const char* name, nsAString& outString);
+                                           nsAString& outString) override;
+  NS_IMETHOD GetNSSBundleString(const char* name, nsAString& outString) override;
   NS_IMETHOD NSSBundleFormatStringFromName(const char* name,
                                            const char16_t** params,
                                            uint32_t numParams,
-                                           nsAString& outString);
-  NS_IMETHOD LogoutAuthenticatedPK11();
+                                           nsAString& outString) override;
+  NS_IMETHOD LogoutAuthenticatedPK11() override;
 
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
-  NS_IMETHOD LaunchSmartCardThread(SECMODModule* module);
-  NS_IMETHOD ShutdownSmartCardThread(SECMODModule* module);
-  NS_IMETHOD PostEvent(const nsAString& eventType, const nsAString& token);
-  NS_IMETHOD DispatchEvent(const nsAString& eventType, const nsAString& token);
+#ifndef MOZ_NO_SMART_CARDS
+  NS_IMETHOD LaunchSmartCardThread(SECMODModule* module) override;
+  NS_IMETHOD ShutdownSmartCardThread(SECMODModule* module) override;
   void LaunchSmartCardThreads();
   void ShutdownSmartCardThreads();
   nsresult DispatchEventToWindow(nsIDOMWindow* domWin,
@@ -158,10 +150,19 @@ public:
                                  const nsAString& token);
 #endif
 
-  NS_IMETHOD IsNSSInitialized(bool* initialized);
+  NS_IMETHOD IsNSSInitialized(bool* initialized) override;
 
   ::mozilla::TemporaryRef<mozilla::psm::SharedCertVerifier>
-    GetDefaultCertVerifier() MOZ_OVERRIDE;
+    GetDefaultCertVerifier() override;
+
+  // The following two methods are thread-safe.
+  static bool AreAnyWeakCiphersEnabled();
+  static void UseWeakCiphersOnSocket(PRFileDesc* fd);
+
+  static void FillTLSVersionRange(SSLVersionRange& rangeOut,
+                                  uint32_t minFromPrefs,
+                                  uint32_t maxFromPrefs,
+                                  SSLVersionRange defaults);
 
 protected:
   virtual ~nsNSSComponent();
@@ -195,7 +196,7 @@ private:
   bool mObserversRegistered;
   static int mInstanceCount;
   nsNSSShutDownList* mShutdownObjectList;
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
+#ifndef MOZ_NO_SMART_CARDS
   SmartCardThreadList* mThreadList;
 #endif
   bool mIsNetworkDown;
@@ -206,7 +207,6 @@ private:
 
   nsNSSHttpInterface mHttpForNSS;
   mozilla::RefPtr<mozilla::psm::SharedCertVerifier> mDefaultCertVerifier;
-
 
   static PRStatus IdentityInfoInit(void);
 };

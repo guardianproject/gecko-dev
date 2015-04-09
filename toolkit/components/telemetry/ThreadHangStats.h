@@ -8,6 +8,7 @@
 
 #include "mozilla/Array.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/HangAnnotations.h"
 #include "mozilla/Move.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/PodOperations.h"
@@ -115,8 +116,12 @@ private:
   static uint32_t GetHash(const HangStack& aStack);
 
   HangStack mStack;
+  // Native stack that corresponds to the pseudostack in mStack
+  HangStack mNativeStack;
   // Use a hash to speed comparisons
   const uint32_t mHash;
+  // Annotations attributed to this stack
+  HangMonitor::HangAnnotationsVector mAnnotations;
 
 public:
   explicit HangHistogram(HangStack&& aStack)
@@ -127,7 +132,9 @@ public:
   HangHistogram(HangHistogram&& aOther)
     : TimeHistogram(mozilla::Move(aOther))
     , mStack(mozilla::Move(aOther.mStack))
+    , mNativeStack(mozilla::Move(aOther.mNativeStack))
     , mHash(mozilla::Move(aOther.mHash))
+    , mAnnotations(mozilla::Move(aOther.mAnnotations))
   {
   }
   bool operator==(const HangHistogram& aOther) const;
@@ -138,12 +145,29 @@ public:
   const HangStack& GetStack() const {
     return mStack;
   }
+  HangStack& GetNativeStack() {
+    return mNativeStack;
+  }
+  const HangStack& GetNativeStack() const {
+    return mNativeStack;
+  }
+  const HangMonitor::HangAnnotationsVector& GetAnnotations() const {
+    return mAnnotations;
+  }
+  void Add(PRIntervalTime aTime, HangMonitor::HangAnnotationsPtr aAnnotations) {
+    TimeHistogram::Add(aTime);
+    if (aAnnotations) {
+      mAnnotations.append(Move(aAnnotations));
+    }
+  }
 };
 
 /* Thread hang stats consist of
  - thread name
  - time histogram of all task run times
- - hang histograms of individual hangs. */
+ - hang histograms of individual hangs
+ - annotations for each hang
+*/
 class ThreadHangStats
 {
 private:

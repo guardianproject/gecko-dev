@@ -83,7 +83,7 @@ public:
 
   ~QueuedDataMessage()
   {
-    moz_free(mData);
+    free(mData);
   }
 
   uint16_t mStream;
@@ -114,7 +114,7 @@ public:
     virtual void NotifyDataChannel(already_AddRefed<DataChannel> channel) = 0;
   };
 
-  DataChannelConnection(DataConnectionListener *listener);
+  explicit DataChannelConnection(DataConnectionListener *listener);
 
   bool Init(unsigned short aPort, uint16_t aNumStreams, bool aUsingDtls);
   void Destroy(); // So we can spawn refs tied to runnables in shutdown
@@ -264,7 +264,7 @@ private:
   // channels available from the stack must be negotiated!
   bool mAllocateEven;
   nsAutoTArray<nsRefPtr<DataChannel>,16> mStreams;
-  nsDeque mPending; // Holds already_AddRefed<DataChannel>s -- careful!
+  nsDeque mPending; // Holds addref'ed DataChannel's -- careful!
   // holds data that's come in before a channel is open
   nsTArray<nsAutoPtr<QueuedDataMessage> > mQueuedData;
 

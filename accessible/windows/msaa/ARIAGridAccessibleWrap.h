@@ -22,6 +22,8 @@ namespace a11y {
 class ARIAGridAccessibleWrap : public ARIAGridAccessible,
                                public ia2AccessibleTable
 {
+  ~ARIAGridAccessibleWrap() {}
+
 public:
   ARIAGridAccessibleWrap(nsIContent* aContent, DocAccessible* aDoc) :
     ARIAGridAccessible(aContent, aDoc), ia2AccessibleTable(this) {}
@@ -32,7 +34,7 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual void Shutdown() MOZ_OVERRIDE;
+  virtual void Shutdown() override;
 };
 
 /**
@@ -42,6 +44,8 @@ public:
 class ARIAGridCellAccessibleWrap : public ARIAGridCellAccessible,
                                    public ia2AccessibleTableCell
 {
+  ~ARIAGridCellAccessibleWrap() {}
+
 public:
   ARIAGridCellAccessibleWrap(nsIContent* aContent, DocAccessible* aDoc) :
     ARIAGridCellAccessible(aContent, aDoc), ia2AccessibleTableCell(this) {}
@@ -52,7 +56,7 @@ public:
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  virtual void Shutdown() MOZ_OVERRIDE;
+  virtual void Shutdown() override;
 };
 
 } // namespace a11y

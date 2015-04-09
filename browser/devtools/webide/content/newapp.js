@@ -15,9 +15,10 @@ XPCOMUtils.defineLazyModuleGetter(this, "Downloads", "resource://gre/modules/Dow
 const {require} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
 const {FileUtils} = Cu.import("resource://gre/modules/FileUtils.jsm");
 const {AppProjects} = require("devtools/app-manager/app-projects");
-const APP_CREATOR_LIST = "devtools.webide.templatesURL";
 const {AppManager} = require("devtools/webide/app-manager");
-const {GetTemplatesJSON} = require("devtools/webide/remote-resources");
+const {getJSON} = require("devtools/shared/getjson");
+
+const TEMPLATES_URL = "devtools.webide.templatesURL";
 
 let gTemplateList = null;
 
@@ -30,11 +31,11 @@ window.addEventListener("load", function onLoad() {
   window.removeEventListener("load", onLoad);
   let projectNameNode = document.querySelector("#project-name");
   projectNameNode.addEventListener("input", canValidate, true);
-  getJSON();
+  getTemplatesJSON();
 }, true);
 
-function getJSON() {
-  GetTemplatesJSON().then(list => {
+function getTemplatesJSON() {
+  getJSON(TEMPLATES_URL).then(list => {
     if (!Array.isArray(list)) {
       throw new Error("JSON response not an array");
     }
@@ -127,7 +128,7 @@ function doOK() {
   }
 
   // Create subfolder with fs-friendly name of project
-  let subfolder = projectName.replace(/\W/g, '').toLowerCase();
+  let subfolder = projectName.replace(/[\\/:*?"<>|]/g, '').toLowerCase();
   folder.append(subfolder);
 
   try {
@@ -153,11 +154,11 @@ function doOK() {
     target.remove(false);
     AppProjects.addPackaged(folder).then((project) => {
       window.arguments[0].location = project.location;
-      AppManager.validateProject(project).then(() => {
+      AppManager.validateAndUpdateProject(project).then(() => {
         if (project.manifest) {
           project.manifest.name = projectName;
           AppManager.writeManifest(project).then(() => {
-            AppManager.validateProject(project).then(
+            AppManager.validateAndUpdateProject(project).then(
               () => {window.close()}, bail)
           }, bail)
         } else {

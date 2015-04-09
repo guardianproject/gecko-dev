@@ -9,6 +9,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/ipc/Transport.h"
 
+class nsIDOMBlob;
 class nsIIPCBackgroundChildCreateCallback;
 
 namespace mozilla {
@@ -16,6 +17,7 @@ namespace dom {
 
 class ContentChild;
 class ContentParent;
+class PBlobChild;
 
 } // namespace dom
 
@@ -44,7 +46,7 @@ class PBackgroundChild;
 //
 // The PBackgroundChild actor and all its sub-protocol actors will be
 // automatically destroyed when its designated thread completes.
-class BackgroundChild MOZ_FINAL
+class BackgroundChild final
 {
   friend class mozilla::dom::ContentChild;
   friend class mozilla::dom::ContentParent;
@@ -60,6 +62,10 @@ public:
   // See above.
   static bool
   GetOrCreateForCurrentThread(nsIIPCBackgroundChildCreateCallback* aCallback);
+
+  static mozilla::dom::PBlobChild*
+  GetOrCreateActorForBlob(PBackgroundChild* aBackgroundActor,
+                          nsIDOMBlob* aBlob);
 
   // See above.
   static void

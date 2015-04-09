@@ -26,10 +26,10 @@ class nsXBLMaybeCompiled
 public:
   nsXBLMaybeCompiled() : mUncompiled(BIT_UNCOMPILED) {}
 
-  nsXBLMaybeCompiled(UncompiledT* uncompiled)
+  explicit nsXBLMaybeCompiled(UncompiledT* uncompiled)
     : mUncompiled(reinterpret_cast<uintptr_t>(uncompiled) | BIT_UNCOMPILED) {}
 
-  nsXBLMaybeCompiled(JSObject* compiled) : mCompiled(compiled) {}
+  explicit nsXBLMaybeCompiled(JSObject* compiled) : mCompiled(compiled) {}
 
   bool IsCompiled() const
   {
@@ -91,17 +91,11 @@ struct GCMethods<nsXBLMaybeCompiled<UncompiledT> >
 
   static nsXBLMaybeCompiled<UncompiledT> initial() { return nsXBLMaybeCompiled<UncompiledT>(); }
 
-  static bool poisoned(nsXBLMaybeCompiled<UncompiledT> function)
-  {
-    return function.IsCompiled() && Base::poisoned(function.GetJSFunction());
-  }
-
   static bool needsPostBarrier(nsXBLMaybeCompiled<UncompiledT> function)
   {
     return function.IsCompiled() && Base::needsPostBarrier(function.GetJSFunction());
   }
 
-#ifdef JSGC_GENERATIONAL
   static void postBarrier(nsXBLMaybeCompiled<UncompiledT>* functionp)
   {
     Base::postBarrier(&functionp->UnsafeGetJSFunction());
@@ -111,7 +105,6 @@ struct GCMethods<nsXBLMaybeCompiled<UncompiledT> >
   {
     Base::relocate(&functionp->UnsafeGetJSFunction());
   }
-#endif
 };
 
 template <class UncompiledT>
@@ -140,11 +133,11 @@ public:
   JSObject* GetJSFunctionPreserveColor() const { return extract()->GetJSFunctionPreserveColor(); }
 
   void SetUncompiled(UncompiledT* source) {
-    wrapper().set(nsXBLMaybeCompiled<UncompiledT>(source));
+    wrapper() = nsXBLMaybeCompiled<UncompiledT>(source);
   }
 
   void SetJSFunction(JSObject* function) {
-    wrapper().set(nsXBLMaybeCompiled<UncompiledT>(function));
+    wrapper() = nsXBLMaybeCompiled<UncompiledT>(function);
   }
 
   JS::Heap<JSObject*>& AsHeapObject()

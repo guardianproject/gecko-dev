@@ -11,7 +11,9 @@
 
 #include "NSSErrorsService.h"
 #include "mozilla/Likely.h"
+#ifndef MOZ_NO_MOZALLOC
 #include "mozilla/mozalloc_oom.h"
+#endif
 #include "mozilla/Scoped.h"
 #include "nsError.h"
 #include "nsDebug.h"
@@ -21,6 +23,7 @@
 #include "keyhi.h"
 #include "cryptohi.h"
 #include "pk11pub.h"
+#include "pkcs12.h"
 #include "sechash.h"
 #include "secpkcs7.h"
 #include "secport.h"
@@ -90,6 +93,9 @@ MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedCERTCertList,
 MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedCERTName,
                                           CERTName,
                                           CERT_DestroyName)
+MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedCERTOidSequence,
+                                          CERTOidSequence,
+                                          CERT_DestroyOidSequence)
 MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedCERTCertNicknames,
                                           CERTCertNicknames,
                                           CERT_FreeNicknames)
@@ -227,11 +233,17 @@ MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedPK11SlotList,
 MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedPK11SymKey,
                                           PK11SymKey,
                                           PK11_FreeSymKey)
+MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedPK11GenericObject,
+                                          PK11GenericObject,
+                                          PK11_DestroyGenericObject)
 
 MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedSEC_PKCS7ContentInfo,
                                           SEC_PKCS7ContentInfo,
                                           SEC_PKCS7DestroyContentInfo)
 
+MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedSEC_PKCS12DecoderContext,
+                                          SEC_PKCS12DecoderContext,
+                                          SEC_PKCS12DecoderFinish)
 namespace internal {
 
 inline void
@@ -254,17 +266,20 @@ inline void
 SECITEM_AllocItem(SECItem & item, uint32_t len)
 {
   if (MOZ_UNLIKELY(!SECITEM_AllocItem(nullptr, &item, len))) {
+#ifndef MOZ_NO_MOZALLOC
     mozalloc_handle_oom(len);
-    if (MOZ_UNLIKELY(!SECITEM_AllocItem(nullptr, &item, len))) {
+    if (MOZ_UNLIKELY(!SECITEM_AllocItem(nullptr, &item, len)))
+#endif
+    {
       MOZ_CRASH();
     }
   }
 }
 
-class ScopedAutoSECItem MOZ_FINAL : public SECItem
+class ScopedAutoSECItem final : public SECItem
 {
 public:
-  ScopedAutoSECItem(uint32_t initialAllocatedLen = 0)
+  explicit ScopedAutoSECItem(uint32_t initialAllocatedLen = 0)
   {
     data = nullptr;
     len = 0;
@@ -296,6 +311,11 @@ inline void SECOID_DestroyAlgorithmID_true(SECAlgorithmID * a)
   return SECOID_DestroyAlgorithmID(a, true);
 }
 
+inline void SECKEYEncryptedPrivateKeyInfo_true(SECKEYEncryptedPrivateKeyInfo * epki)
+{
+  return SECKEY_DestroyEncryptedPrivateKeyInfo(epki, PR_TRUE);
+}
+
 } // namespace internal
 
 MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedSECItem,
@@ -305,6 +325,9 @@ MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedSECItem,
 MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedSECKEYPrivateKey,
                                           SECKEYPrivateKey,
                                           SECKEY_DestroyPrivateKey)
+MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedSECKEYEncryptedPrivateKeyInfo,
+                                          SECKEYEncryptedPrivateKeyInfo,
+                                          internal::SECKEYEncryptedPrivateKeyInfo_true)
 MOZ_TYPE_SPECIFIC_SCOPED_POINTER_TEMPLATE(ScopedSECKEYPublicKey,
                                           SECKEYPublicKey,
                                           SECKEY_DestroyPublicKey)

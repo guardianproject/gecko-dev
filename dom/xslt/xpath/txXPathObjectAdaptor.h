@@ -18,7 +18,7 @@
 class txXPathObjectAdaptor : public txIXPathObject
 {
 public:
-    txXPathObjectAdaptor(txAExprResult *aValue) : mValue(aValue)
+    explicit txXPathObjectAdaptor(txAExprResult* aValue) : mValue(aValue)
     {
         NS_ASSERTION(aValue,
                      "Don't create a txXPathObjectAdaptor if you don't have a "
@@ -27,7 +27,7 @@ public:
 
     NS_DECL_ISUPPORTS
 
-    NS_IMETHODIMP_(txAExprResult*) GetResult()
+    NS_IMETHODIMP_(txAExprResult*) GetResult() override
     {
         return mValue;
     }

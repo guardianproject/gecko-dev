@@ -10,10 +10,13 @@ const SAMPLE_SIZE = 50; // no of lines
 const INDENT_COUNT_THRESHOLD = 5; // percentage
 const CHARACTER_LIMIT = 250; // line character limit
 
-// Maps known URLs to friendly source group names
+// Maps known URLs to friendly source group names and put them at the
+// bottom of source list.
 const KNOWN_SOURCE_GROUPS = {
   "Add-on SDK": "resource://gre/modules/commonjs/",
 };
+
+KNOWN_SOURCE_GROUPS[L10N.getStr("evalGroupLabel")] = "eval";
 
 /**
  * Functions handling the sources UI.
@@ -37,6 +40,8 @@ function SourcesView() {
   this._onConditionalPopupShown = this._onConditionalPopupShown.bind(this);
   this._onConditionalPopupHiding = this._onConditionalPopupHiding.bind(this);
   this._onConditionalTextboxKeyPress = this._onConditionalTextboxKeyPress.bind(this);
+  this._onCopyUrlCommand = this._onCopyUrlCommand.bind(this);
+  this._onNewTabCommand = this._onNewTabCommand.bind(this);
 }
 
 SourcesView.prototype = Heritage.extend(WidgetMethods, {
@@ -47,6 +52,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     dumpn("Initializing the SourcesView");
 
     this.widget = new SideMenuWidget(document.getElementById("sources"), {
+      contextMenu: document.getElementById("debuggerSourcesContextMenu"),
       showArrows: true
     });
 
@@ -62,6 +68,8 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     this._stopBlackBoxButton = document.getElementById("black-boxed-message-button");
     this._prettyPrintButton = document.getElementById("pretty-print");
     this._toggleBreakpointsButton = document.getElementById("toggle-breakpoints");
+    this._newTabMenuItem = document.getElementById("debugger-sources-context-newtab");
+    this._copyUrlMenuItem = document.getElementById("debugger-sources-context-copyurl");
 
     if (Prefs.prettyPrintEnabled) {
       this._prettyPrintButton.removeAttribute("hidden");
@@ -75,7 +83,10 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     this._cbPanel.addEventListener("popupshown", this._onConditionalPopupShown, false);
     this._cbPanel.addEventListener("popuphiding", this._onConditionalPopupHiding, false);
     this._cbTextbox.addEventListener("keypress", this._onConditionalTextboxKeyPress, false);
+    this._copyUrlMenuItem.addEventListener("command", this._onCopyUrlCommand, false);
+    this._newTabMenuItem.addEventListener("command", this._onNewTabCommand, false);
 
+    this.allowFocusOnRightClick = true;
     this.autoFocusOnSelection = false;
 
     // Sort the contents by the displayed label.
@@ -91,6 +102,8 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
       }
       return (a in KNOWN_SOURCE_GROUPS) ? 1 : -1;
     };
+
+    this._addCommands();
   },
 
   /**
@@ -107,6 +120,24 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     this._cbPanel.removeEventListener("popupshowing", this._onConditionalPopupShown, false);
     this._cbPanel.removeEventListener("popuphiding", this._onConditionalPopupHiding, false);
     this._cbTextbox.removeEventListener("keypress", this._onConditionalTextboxKeyPress, false);
+    this._copyUrlMenuItem.removeEventListener("command", this._onCopyUrlCommand, false);
+    this._newTabMenuItem.removeEventListener("command", this._onNewTabCommand, false);
+  },
+
+  /**
+   * Add commands that XUL can fire.
+   */
+  _addCommands: function() {
+    utils.addCommands(this._commandset, {
+      addBreakpointCommand: e => this._onCmdAddBreakpoint(e),
+      addConditionalBreakpointCommand: e => this._onCmdAddConditionalBreakpoint(e),
+      blackBoxCommand: () => this.toggleBlackBoxing(),
+      unBlackBoxButton: () => this._onStopBlackBoxing(),
+      prettyPrintCommand: () => this.togglePrettyPrint(),
+      toggleBreakpointsCommand: () =>this.toggleBreakpoints(),
+      nextSourceCommand: () => this.selectNextItem(),
+      prevSourceCommand: () => this.selectPrevItem()
+    });
   },
 
   /**
@@ -133,11 +164,12 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    *        - staged: true to stage the item to be appended later
    */
   addSource: function(aSource, aOptions = {}) {
-    let fullUrl = aSource.url;
-    let url = fullUrl.split(" -> ").pop();
-    let label = aSource.addonPath ? aSource.addonPath : SourceUtils.getSourceLabel(url);
-    let group = aSource.addonID ? aSource.addonID : SourceUtils.getSourceGroup(url);
-    let unicodeUrl = NetworkHelper.convertToUnicode(unescape(fullUrl));
+    if (!aSource.url) {
+      // We don't show any unnamed eval scripts yet (see bug 1124106)
+      return;
+    }
+
+    let { label, group, unicodeUrl } = this._parseUrl(aSource);
 
     let contents = document.createElement("label");
     contents.className = "plain dbg-source-item";
@@ -146,8 +178,13 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     contents.setAttribute("flex", "1");
     contents.setAttribute("tooltiptext", unicodeUrl);
 
+    // If the source is blackboxed, apply the appropriate style.
+    if (gThreadClient.source(aSource).isBlackBoxed) {
+      contents.classList.add("black-boxed");
+    }
+
     // Append a source item to this container.
-    const item = this.push([contents, fullUrl], {
+    this.push([contents, aSource.actor], {
       staged: aOptions.staged, /* stage the item to be appended later? */
       attachment: {
         label: label,
@@ -157,27 +194,31 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
         source: aSource
       }
     });
+  },
 
-    // If source is blackboxed, apply appropriate style
-    if (gThreadClient.source(aSource).isBlackBoxed) {
-      item.target.classList.add("black-boxed");
-    }
+  _parseUrl: function(aSource) {
+    let fullUrl = aSource.url;
+    let url = fullUrl.split(" -> ").pop();
+    let label = aSource.addonPath ? aSource.addonPath : SourceUtils.getSourceLabel(url);
+    let group = aSource.addonID ? aSource.addonID : SourceUtils.getSourceGroup(url);
+
+    return {
+      label: label,
+      group: group,
+      unicodeUrl: NetworkHelper.convertToUnicode(unescape(fullUrl))
+    };
   },
 
   /**
    * Adds a breakpoint to this sources container.
    *
-   * @param object aBreakpointData
-   *        Information about the breakpoint to be shown.
-   *        This object must have the following properties:
-   *          - location: the breakpoint's source location and line number
-   *          - disabled: the breakpoint's disabled state, boolean
-   *          - text: the breakpoint's line text to be displayed
+   * @param object aBreakpointClient
+   *               See Breakpoints.prototype._showBreakpoint
    * @param object aOptions [optional]
    *        @see DebuggerController.Breakpoints.addBreakpoint
    */
-  addBreakpoint: function(aBreakpointData, aOptions = {}) {
-    let { location, disabled } = aBreakpointData;
+  addBreakpoint: function(aBreakpointClient, aOptions = {}) {
+    let { location, disabled } = aBreakpointClient;
 
     // Make sure we're not duplicating anything. If a breakpoint at the
     // specified source url and line already exists, just toggle it.
@@ -187,17 +228,17 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     }
 
     // Get the source item to which the breakpoint should be attached.
-    let sourceItem = this.getItemByValue(location.url);
+    let sourceItem = this.getItemByValue(this.getActorForLocation(location));
 
     // Create the element node and menu popup for the breakpoint item.
-    let breakpointArgs = Heritage.extend(aBreakpointData, aOptions);
+    let breakpointArgs = Heritage.extend(aBreakpointClient, aOptions);
     let breakpointView = this._createBreakpointView.call(this, breakpointArgs);
     let contextMenu = this._createContextMenu.call(this, breakpointArgs);
 
     // Append a breakpoint child item to the corresponding source item.
     sourceItem.append(breakpointView.container, {
       attachment: Heritage.extend(breakpointArgs, {
-        url: location.url,
+        actor: location.actor,
         line: location.line,
         view: breakpointView,
         popup: contextMenu
@@ -210,7 +251,8 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
       finalize: this._onBreakpointRemoved
     });
 
-    // Highlight the newly appended breakpoint child item if necessary.
+    // Highlight the newly appended breakpoint child item if
+    // necessary.
     if (aOptions.openPopup || !aOptions.noEditorUpdate) {
       this.highlightBreakpoint(location, aOptions);
     }
@@ -228,7 +270,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
   removeBreakpoint: function(aLocation) {
     // When a parent source item is removed, all the child breakpoint items are
     // also automagically removed.
-    let sourceItem = this.getItemByValue(aLocation.url);
+    let sourceItem = this.getItemByValue(aLocation.actor);
     if (!sourceItem) {
       return;
     }
@@ -253,7 +295,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    */
   getBreakpoint: function(aLocation) {
     return this.getItemForPredicate(aItem =>
-      aItem.attachment.url == aLocation.url &&
+      aItem.attachment.actor == aLocation.actor &&
       aItem.attachment.line == aLocation.line);
   },
 
@@ -280,8 +322,8 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
   getOtherBreakpoints: function(aLocation = {}, aStore = []) {
     for (let source of this) {
       for (let breakpointItem of source) {
-        let { url, line } = breakpointItem.attachment;
-        if (url != aLocation.url || line != aLocation.line) {
+        let { actor, line } = breakpointItem.attachment;
+        if (actor != aLocation.actor || line != aLocation.line) {
           aStore.push(breakpointItem);
         }
       }
@@ -404,7 +446,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
 
     // Update the editor location if necessary.
     if (!aOptions.noEditorUpdate) {
-      DebuggerView.setEditorLocation(aLocation.url, aLocation.line, { noDebug: true });
+      DebuggerView.setEditorLocation(aLocation.actor, aLocation.line, { noDebug: true });
     }
 
     // If the breakpoint requires a new conditional expression, display
@@ -421,9 +463,10 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    * if it exists.
    */
   highlightBreakpointAtCursor: function() {
-    let url = DebuggerView.Sources.selectedValue;
+    let actor = DebuggerView.Sources.selectedValue;
     let line = DebuggerView.editor.getCursor().line + 1;
-    let location = { url: url, line: line };
+
+    let location = { actor: actor, line: line };
     this.highlightBreakpoint(location, { noEditorUpdate: true });
   },
 
@@ -433,6 +476,19 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
   unhighlightBreakpoint: function() {
     this._hideConditionalPopup();
     this._unselectBreakpoint();
+  },
+
+  /**
+   * Display the message thrown on breakpoint condition
+   */
+  showBreakpointConditionThrownMessage: function(aLocation, aMessage = "") {
+    let breakpointItem = this.getBreakpoint(aLocation);
+    if (!breakpointItem) {
+      return;
+    }
+    let attachment = breakpointItem.attachment;
+    attachment.view.container.classList.add("dbg-breakpoint-condition-thrown");
+    attachment.view.message.setAttribute("value", aMessage);
   },
 
   /**
@@ -466,10 +522,10 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
       return;
     }
 
-    const resetEditor = ([{ url }]) => {
+    const resetEditor = ([{ actor }]) => {
       // Only set the text when the source is still selected.
-      if (url == this.selectedValue) {
-        DebuggerView.setEditorLocation(url, 0, { force: true });
+      if (actor == this.selectedValue) {
+        DebuggerView.setEditorLocation(actor, 0, { force: true });
       }
     };
 
@@ -546,6 +602,49 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     }
   },
 
+  hidePrettyPrinting: function() {
+    this._prettyPrintButton.style.display = 'none';
+
+    if (this._blackBoxButton.style.display === 'none') {
+      let sep = document.querySelector('#sources-toolbar .devtools-separator');
+      sep.style.display = 'none';
+    }
+  },
+
+  hideBlackBoxing: function() {
+    this._blackBoxButton.style.display = 'none';
+
+    if (this._prettyPrintButton.style.display === 'none') {
+      let sep = document.querySelector('#sources-toolbar .devtools-separator');
+      sep.style.display = 'none';
+    }
+  },
+
+  /**
+   * Look up a source actor id for a location. This is necessary for
+   * backwards compatibility; otherwise we could just use the `actor`
+   * property. Older servers don't use the same actor ids for sources
+   * across reloads, so we resolve a url to the current actor if a url
+   * exists.
+   *
+   * @param object aLocation
+   *        An object with the following properties:
+   *        - actor: the source actor id
+   *        - url: a url (might be null)
+   */
+  getActorForLocation: function(aLocation) {
+    if (aLocation.url) {
+      for (var item of this) {
+        let source = item.attachment.source;
+
+        if (aLocation.url === source.url) {
+          return source.actor;
+        }
+      }
+    }
+    return aLocation.actor;
+  },
+
   /**
    * Marks a breakpoint as selected in this sources container.
    *
@@ -557,6 +656,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
       return;
     }
     this._unselectBreakpoint();
+
     this._selectedBreakpointItem = aItem;
     this._selectedBreakpointItem.target.classList.add("selected");
 
@@ -630,12 +730,13 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    *          - location: the breakpoint's source location and line number
    *          - disabled: the breakpoint's disabled state, boolean
    *          - text: the breakpoint's line text to be displayed
+   *          - message: thrown string when the breakpoint condition throws,
    * @return object
    *         An object containing the breakpoint container, checkbox,
    *         line number and line text nodes.
    */
   _createBreakpointView: function(aOptions) {
-    let { location, disabled, text } = aOptions;
+    let { location, disabled, text, message } = aOptions;
     let identifier = DebuggerController.Breakpoints.getIdentifier(location);
 
     let checkbox = document.createElement("checkbox");
@@ -652,8 +753,28 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     lineTextNode.setAttribute("crop", "end");
     lineTextNode.setAttribute("flex", "1");
 
-    let tooltip = text.substr(0, BREAKPOINT_LINE_TOOLTIP_MAX_LENGTH);
+    let tooltip = text ? text.substr(0, BREAKPOINT_LINE_TOOLTIP_MAX_LENGTH) : "";
     lineTextNode.setAttribute("tooltiptext", tooltip);
+
+    let thrownNode = document.createElement("label");
+    thrownNode.className = "plain dbg-breakpoint-condition-thrown-message dbg-breakpoint-text";
+    thrownNode.setAttribute("value", message);
+    thrownNode.setAttribute("crop", "end");
+    thrownNode.setAttribute("flex", "1");
+
+    let bpLineContainer = document.createElement("hbox");
+    bpLineContainer.className = "plain dbg-breakpoint-line-container";
+    bpLineContainer.setAttribute("flex", "1");
+
+    bpLineContainer.appendChild(lineNumberNode);
+    bpLineContainer.appendChild(lineTextNode);
+
+    let bpDetailContainer = document.createElement("vbox");
+    bpDetailContainer.className = "plain dbg-breakpoint-detail-container";
+    bpDetailContainer.setAttribute("flex", "1");
+
+    bpDetailContainer.appendChild(bpLineContainer);
+    bpDetailContainer.appendChild(thrownNode);
 
     let container = document.createElement("hbox");
     container.id = "breakpoint-" + identifier;
@@ -666,14 +787,14 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     checkbox.addEventListener("click", this._onBreakpointCheckboxClick, false);
 
     container.appendChild(checkbox);
-    container.appendChild(lineNumberNode);
-    container.appendChild(lineTextNode);
+    container.appendChild(bpDetailContainer);
 
     return {
       container: container,
       checkbox: checkbox,
       lineNumber: lineNumberNode,
-      lineText: lineTextNode
+      lineText: lineTextNode,
+      message: thrownNode
     };
   },
 
@@ -762,6 +883,26 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
   },
 
   /**
+   * Copy the source url from the currently selected item.
+   */
+  _onCopyUrlCommand: function() {
+    let selected = this.selectedItem && this.selectedItem.attachment;
+    if (!selected) {
+      return;
+    }
+    clipboardHelper.copyString(selected.source.url, document);
+  },
+
+  /**
+   * Opens selected item source in a new tab.
+   */
+  _onNewTabCommand: function() {
+    let win = Services.wm.getMostRecentWindow("navigator:browser");
+    let selected = this.selectedItem.attachment;
+    win.openUILinkIn(selected.source.url, "tab", { relatedToCurrent: true });
+  },
+
+  /**
    * Function called each time a breakpoint item is removed.
    *
    * @param object aItem
@@ -802,9 +943,9 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     let editor = DebuggerView.editor;
     let start  = editor.getCursor("start").line + 1;
     let end    = editor.getCursor().line + 1;
-    let url    = this.selectedValue;
+    let actor    = this.selectedValue;
 
-    let location = { url: url, line: start };
+    let location = { actor: actor, line: start };
 
     if (this.getBreakpoint(location) && start == end) {
       this.highlightBreakpoint(location, { noEditorUpdate: true });
@@ -836,7 +977,8 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
 
     // Set window title. No need to split the url by " -> " here, because it was
     // already sanitized when the source was added.
-    document.title = L10N.getFormatStr("DebuggerWindowScriptTitle", sourceItem.value);
+    document.title = L10N.getFormatStr("DebuggerWindowScriptTitle",
+                                       sourceItem.attachment.source.url);
 
     DebuggerView.maybeShowBlackBoxMessage();
     this.updateToolbarButtonsState();
@@ -932,7 +1074,7 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     let attachment = breakpointItem.attachment;
 
     // Check if this is an enabled conditional breakpoint, and if so,
-    // save the current conditional epression.
+    // save the current conditional expression.
     let breakpointPromise = DebuggerController.Breakpoints._getAdded(attachment);
     if (breakpointPromise) {
       let { location } = yield breakpointPromise;
@@ -956,11 +1098,11 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    * Called when the add breakpoint key sequence was pressed.
    */
   _onCmdAddBreakpoint: function(e) {
-    let url = DebuggerView.Sources.selectedValue;
+    let actor = DebuggerView.Sources.selectedValue;
     let line = (e && e.sourceEvent.target.tagName == 'menuitem' ?
                 DebuggerView.clickedLine + 1 :
                 DebuggerView.editor.getCursor().line + 1);
-    let location = { url: url, line: line };
+    let location = { actor, line };
     let breakpointItem = this.getBreakpoint(location);
 
     // If a breakpoint already existed, remove it now.
@@ -977,11 +1119,11 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
    * Called when the add conditional breakpoint key sequence was pressed.
    */
   _onCmdAddConditionalBreakpoint: function(e) {
-    let url =  DebuggerView.Sources.selectedValue;
+    let actor = DebuggerView.Sources.selectedValue;
     let line = (e && e.sourceEvent.target.tagName == 'menuitem' ?
                 DebuggerView.clickedLine + 1 :
                 DebuggerView.editor.getCursor().line + 1);
-    let location = { url: url, line: line };
+    let location = { actor, line };
     let breakpointItem = this.getBreakpoint(location);
 
     // If a breakpoint already existed or wasn't a conditional, morph it now.
@@ -1185,6 +1327,8 @@ TracerView.prototype = Heritage.extend(WidgetMethods, {
 
     this._traceButton.setAttribute("tooltiptext", this._startTooltip);
     this.emptyText = this._tracingNotStartedString;
+
+    this._addCommands();
   },
 
   /**
@@ -1201,6 +1345,17 @@ TracerView.prototype = Heritage.extend(WidgetMethods, {
     this.widget.removeEventListener("mouseover", this._onMouseOver, false);
     this.widget.removeEventListener("mouseout", this._unhighlightMatchingItems, false);
     this._search.removeEventListener("input", this._onSearch, false);
+  },
+
+  /**
+   * Add commands that XUL can fire.
+   */
+  _addCommands: function() {
+    utils.addCommands(document.getElementById('debuggerCommands'), {
+      toggleTracing: () => this._onToggleTracing(),
+      startTracing: () => this._onStartTracing(),
+      clearTraces: () => this._onClear()
+    });
   },
 
   /**
@@ -1295,7 +1450,11 @@ TracerView.prototype = Heritage.extend(WidgetMethods, {
 
     const data = traceItem.attachment.trace;
     const { location: { url, line } } = data;
-    DebuggerView.setEditorLocation(url, line, { noDebug: true });
+    DebuggerView.setEditorLocation(
+      DebuggerView.Sources.getActorForLocation({ url }),
+      line,
+      { noDebug: true }
+    );
 
     DebuggerView.Variables.empty();
     const scope = DebuggerView.Variables.addScope();
@@ -1437,10 +1596,11 @@ TracerView.prototype = Heritage.extend(WidgetMethods, {
    *         The network request view.
    */
   _createView: function(aTrace) {
-    let { type, name, location, depth, frameId } = aTrace;
+    let { type, name, location, blackBoxed, depth, frameId } = aTrace;
     let { parameterNames, returnVal, arguments: args } = aTrace;
     let fragment = document.createDocumentFragment();
 
+    this._templateItem.classList.toggle("black-boxed", blackBoxed);
     this._templateItem.setAttribute("tooltiptext", SourceUtils.trimUrl(location.url));
     this._templateItem.style.MozPaddingStart = depth + "em";
 
@@ -1519,7 +1679,7 @@ let SourceUtils = {
    *         True if the source is likely javascript.
    */
   isJavaScript: function(aUrl, aContentType = "") {
-    return /\.jsm?$/.test(this.trimUrlQuery(aUrl)) ||
+    return (aUrl && /\.jsm?$/.test(this.trimUrlQuery(aUrl))) ||
            aContentType.contains("javascript");
   },
 
@@ -2106,6 +2266,7 @@ WatchExpressionsView.prototype = Heritage.extend(WidgetMethods, {
     this.widget.addEventListener("click", this._onClick, false);
 
     this.headerText = L10N.getStr("addWatchExpressionText");
+    this._addCommands();
   },
 
   /**
@@ -2115,6 +2276,16 @@ WatchExpressionsView.prototype = Heritage.extend(WidgetMethods, {
     dumpn("Destroying the WatchExpressionsView");
 
     this.widget.removeEventListener("click", this._onClick, false);
+  },
+
+  /**
+   * Add commands that XUL can fire.
+   */
+  _addCommands: function() {
+    utils.addCommands(document.getElementById('debuggerCommands'), {
+      addWatchExpressionCommand: () => this._onCmdAddExpression(),
+      removeAllWatchExpressionsCommand: () => this._onCmdRemoveAllExpressions()
+    });
   },
 
   /**
@@ -2452,7 +2623,7 @@ EventListenersView.prototype = Heritage.extend(WidgetMethods, {
       "overflow", "resize", "scroll", "underflow", "zoom")) {
       group = L10N.getStr("displayEvents");
     } else if (starts("drag") || starts("drop")) {
-      group = L10N.getStr("Drag and dropEvents");
+      group = L10N.getStr("dragAndDropEvents");
     } else if (starts("gamepad")) {
       group = L10N.getStr("gamepadEvents");
     } else if (is("canplay", "canplaythrough", "durationchange", "emptied",
@@ -2476,7 +2647,7 @@ EventListenersView.prototype = Heritage.extend(WidgetMethods, {
       "visibilitychange")) {
       group = L10N.getStr("navigationEvents");
     } else if (is("pointerlockchange", "pointerlockerror")) {
-      group = L10N.getStr("Pointer lockEvents");
+      group = L10N.getStr("pointerLockEvents");
     } else if (is("compassneedscalibration", "userproximity")) {
       group = L10N.getStr("sensorEvents");
     } else if (starts("storage")) {
@@ -2725,8 +2896,8 @@ GlobalSearchView.prototype = Heritage.extend(WidgetMethods, {
     // Allow requests to settle down first.
     setNamedTimeout("global-search", delay, () => {
       // Start fetching as many sources as possible, then perform the search.
-      let urls = DebuggerView.Sources.values;
-      let sourcesFetched = DebuggerController.SourceScripts.getTextForSources(urls);
+      let actors = DebuggerView.Sources.values;
+      let sourcesFetched = DebuggerController.SourceScripts.getTextForSources(actors);
       sourcesFetched.then(aSources => this._doSearch(aToken, aSources));
     });
   },
@@ -2755,13 +2926,19 @@ GlobalSearchView.prototype = Heritage.extend(WidgetMethods, {
     let globalResults = new GlobalResults();
 
     // Search for the specified token in each source's text.
-    for (let [url, text] of aSources) {
+    for (let [actor, text] of aSources) {
+      let item = DebuggerView.Sources.getItemByValue(actor);
+      let url = item.attachment.source.url;
+      if (!url) {
+        continue;
+      }
+
       // Verify that the search token is found anywhere in the source.
       if (!text.toLowerCase().contains(lowerCaseToken)) {
         continue;
       }
       // ...and if so, create a Map containing search details for each line.
-      let sourceResults = new SourceResults(url, globalResults);
+      let sourceResults = new SourceResults(actor, globalResults);
 
       // Search for the specified token in each line's text.
       text.split("\n").forEach((aString, aLine) => {
@@ -2898,10 +3075,10 @@ GlobalSearchView.prototype = Heritage.extend(WidgetMethods, {
     this._scrollMatchIntoViewIfNeeded(target);
     this._bounceMatch(target);
 
-    let url = sourceResultsItem.instance.url;
+    let actor = sourceResultsItem.instance.actor;
     let line = lineResultsItem.instance.line;
 
-    DebuggerView.setEditorLocation(url, line + 1, { noDebug: true });
+    DebuggerView.setEditorLocation(actor, line + 1, { noDebug: true });
 
     let range = lineResultsItem.lineData.range;
     let cursor = DebuggerView.editor.getOffset({ line: line, ch: 0 });
@@ -2976,13 +3153,15 @@ GlobalResults.prototype = {
  * An object containing all the matched lines for a specific source.
  * Iterable via "for (let [lineNumber, lineResults] of sourceResults) { }".
  *
- * @param string aUrl
- *        The target source url.
+ * @param string aActor
+ *        The target source actor id.
  * @param GlobalResults aGlobalResults
  *        An object containing all source results, grouped by source location.
  */
-function SourceResults(aUrl, aGlobalResults) {
-  this.url = aUrl;
+function SourceResults(aActor, aGlobalResults) {
+  let item = DebuggerView.Sources.getItemByValue(aActor);
+  this.actor = aActor;
+  this.label = item.attachment.source.url;
   this._globalResults = aGlobalResults;
   this._store = [];
 }
@@ -3064,7 +3243,7 @@ SourceResults.prototype = {
 
     let locationNode = document.createElement("label");
     locationNode.className = "plain dbg-results-header-location";
-    locationNode.setAttribute("value", this.url);
+    locationNode.setAttribute("value", this.label);
 
     let matchCountNode = document.createElement("label");
     matchCountNode.className = "plain dbg-results-header-match-count";
@@ -3097,14 +3276,14 @@ SourceResults.prototype = {
     resultsBox.appendChild(resultsHeader);
     resultsBox.appendChild(resultsContainer);
 
-    aElementNode.id = "source-results-" + this.url;
+    aElementNode.id = "source-results-" + this.actor;
     aElementNode.className = "dbg-source-results";
     aElementNode.appendChild(resultsBox);
 
     SourceResults._itemsByElement.set(aElementNode, { instance: this });
   },
 
-  url: "",
+  actor: "",
   _globalResults: null,
   _store: null,
   _target: null,
@@ -3260,9 +3439,9 @@ LineResults.prototype = {
 /**
  * A generator-iterator over the global, source or line results.
  */
-GlobalResults.prototype["@@iterator"] =
-SourceResults.prototype["@@iterator"] =
-LineResults.prototype["@@iterator"] = function*() {
+GlobalResults.prototype[Symbol.iterator] =
+SourceResults.prototype[Symbol.iterator] =
+LineResults.prototype[Symbol.iterator] = function*() {
   yield* this._store;
 };
 

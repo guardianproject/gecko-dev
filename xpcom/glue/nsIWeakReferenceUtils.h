@@ -30,7 +30,7 @@ CallQueryReferent(T* aSource, DestinationType** aDestination)
 }
 
 
-class NS_COM_GLUE nsQueryReferent : public nsCOMPtr_helper
+class MOZ_STACK_CLASS nsQueryReferent : public nsCOMPtr_helper
 {
 public:
   nsQueryReferent(nsIWeakReference* aWeakPtr, nsresult* aError)
@@ -39,10 +39,11 @@ public:
   {
   }
 
-  virtual nsresult NS_FASTCALL operator()(const nsIID& aIID, void**) const;
+  virtual nsresult NS_FASTCALL operator()(const nsIID& aIID, void**) const
+    override;
 
 private:
-  nsIWeakReference*  mWeakPtr;
+  nsIWeakReference* MOZ_NON_OWNING_REF mWeakPtr;
   nsresult*          mErrorPtr;
 };
 
@@ -56,8 +57,8 @@ do_QueryReferent(nsIWeakReference* aRawPtr, nsresult* aError = 0)
 /**
  * Deprecated, use |do_GetWeakReference| instead.
  */
-extern NS_COM_GLUE nsIWeakReference* NS_GetWeakReference(nsISupports*,
-                                                         nsresult* aResult = 0);
+extern nsIWeakReference* NS_GetWeakReference(nsISupports*,
+                                             nsresult* aResult = 0);
 
 /**
  * |do_GetWeakReference| is a convenience function that bundles up all the work needed

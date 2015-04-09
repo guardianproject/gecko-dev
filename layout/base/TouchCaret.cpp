@@ -4,43 +4,57 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "prlog.h"
 #include "TouchCaret.h"
 
-#include "nsCOMPtr.h"
-#include "nsFrameSelection.h"
-#include "nsIFrame.h"
-#include "nsIScrollableFrame.h"
-#include "nsIDOMNode.h"
-#include "nsISelection.h"
-#include "nsISelectionPrivate.h"
-#include "nsIContent.h"
-#include "nsIPresShell.h"
-#include "nsCanvasFrame.h"
-#include "nsRenderingContext.h"
-#include "nsPresContext.h"
-#include "nsBlockFrame.h"
-#include "nsISelectionController.h"
-#include "mozilla/Preferences.h"
-#include "mozilla/BasicEvents.h"
-#include "nsIDOMWindow.h"
-#include "nsQueryContentEventResult.h"
-#include "nsIInterfaceRequestorUtils.h"
-#include "nsView.h"
-#include "nsDOMTokenList.h"
 #include <algorithm>
+
+#include "nsBlockFrame.h"
+#include "nsCanvasFrame.h"
+#include "nsCaret.h"
+#include "nsCOMPtr.h"
+#include "nsContentUtils.h"
+#include "nsDOMTokenList.h"
+#include "nsFrameSelection.h"
+#include "nsIContent.h"
+#include "nsIDOMNode.h"
+#include "nsIDOMWindow.h"
+#include "nsIFrame.h"
+#include "nsIInterfaceRequestorUtils.h"
+#include "nsIPresShell.h"
+#include "nsIScrollableFrame.h"
+#include "nsISelection.h"
+#include "nsISelectionController.h"
+#include "nsISelectionPrivate.h"
+#include "nsPresContext.h"
+#include "nsQueryContentEventResult.h"
+#include "nsView.h"
+#include "mozilla/dom/SelectionStateChangedEvent.h"
+#include "mozilla/dom/CustomEvent.h"
+#include "mozilla/BasicEvents.h"
+#include "mozilla/Preferences.h"
 
 using namespace mozilla;
 
-// To enable all the TOUCHCARET_LOG print statements, change the 0 to 1 in the
-// following #define.
-#define ENABLE_TOUCHCARET_LOG 0
+#ifdef PR_LOGGING
+static PRLogModuleInfo* gTouchCaretLog;
+static const char* kTouchCaretLogModuleName = "TouchCaret";
 
-#if ENABLE_TOUCHCARET_LOG
-  #define TOUCHCARET_LOG(message, ...) \
-    printf_stderr("TouchCaret (%p): %s:%d : " message "\n", this, __func__, __LINE__, ##__VA_ARGS__);
+// To enable all the TOUCHCARET_LOG print statements, set the environment
+// variable NSPR_LOG_MODULES=TouchCaret:5
+#define TOUCHCARET_LOG(message, ...)                                           \
+  PR_LOG(gTouchCaretLog, PR_LOG_DEBUG,                                         \
+         ("TouchCaret (%p): %s:%d : " message "\n", this, __FUNCTION__,        \
+          __LINE__, ##__VA_ARGS__));
+
+#define TOUCHCARET_LOG_STATIC(message, ...)                                    \
+  PR_LOG(gTouchCaretLog, PR_LOG_DEBUG,                                         \
+         ("TouchCaret: %s:%d : " message "\n", __FUNCTION__, __LINE__,         \
+          ##__VA_ARGS__));
 #else
-  #define TOUCHCARET_LOG(message, ...)
-#endif
+#define TOUCHCARET_LOG(message, ...)
+#define TOUCHCARET_LOG_STATIC(message, ...)
+#endif // #ifdef PR_LOGGING
 
 // Click on the boundary of input/textarea will place the caret at the
 // front/end of the content. To advoid this, we need to deflate the content
@@ -49,22 +63,30 @@ static const int32_t kBoundaryAppUnits = 61;
 
 NS_IMPL_ISUPPORTS(TouchCaret, nsISelectionListener)
 
-/*static*/ int32_t TouchCaret::sTouchCaretMaxDistance = 0;
+/*static*/ int32_t TouchCaret::sTouchCaretInflateSize = 0;
 /*static*/ int32_t TouchCaret::sTouchCaretExpirationTime = 0;
 
 TouchCaret::TouchCaret(nsIPresShell* aPresShell)
   : mState(TOUCHCARET_NONE),
     mActiveTouchId(-1),
     mCaretCenterToDownPointOffsetY(0),
-    mVisible(false)
+    mVisible(false),
+    mIsValidTap(false)
 {
-  TOUCHCARET_LOG("Constructor");
   MOZ_ASSERT(NS_IsMainThread());
+
+#ifdef PR_LOGGING
+  if (!gTouchCaretLog) {
+    gTouchCaretLog = PR_NewLogModule(kTouchCaretLogModuleName);
+  }
+#endif
+
+  TOUCHCARET_LOG("Constructor, PresShell=%p", aPresShell);
 
   static bool addedTouchCaretPref = false;
   if (!addedTouchCaretPref) {
-    Preferences::AddIntVarCache(&sTouchCaretMaxDistance,
-                                "touchcaret.distance.threshold");
+    Preferences::AddIntVarCache(&sTouchCaretInflateSize,
+                                "touchcaret.inflatesize.threshold");
     Preferences::AddIntVarCache(&sTouchCaretExpirationTime,
                                 "touchcaret.expiration.time");
     addedTouchCaretPref = true;
@@ -87,6 +109,29 @@ TouchCaret::~TouchCaret()
 }
 
 nsIFrame*
+TouchCaret::GetCaretFocusFrame(nsRect* aOutRect)
+{
+  nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
+  if (!presShell) {
+    return nullptr;
+  }
+
+  nsRefPtr<nsCaret> caret = presShell->GetCaret();
+  if (!caret) {
+    return nullptr;
+  }
+
+  nsRect rect;
+  nsIFrame* frame = caret->GetGeometry(&rect);
+
+  if (aOutRect) {
+    *aOutRect = rect;
+  }
+
+  return frame;
+}
+
+nsCanvasFrame*
 TouchCaret::GetCanvasFrame()
 {
   nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
@@ -96,40 +141,46 @@ TouchCaret::GetCanvasFrame()
   return presShell->GetCanvasFrame();
 }
 
+nsIFrame*
+TouchCaret::GetRootFrame()
+{
+  nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
+  if (!presShell) {
+    return nullptr;
+  }
+  return presShell->GetRootFrame();
+}
+
 void
 TouchCaret::SetVisibility(bool aVisible)
 {
   if (mVisible == aVisible) {
-    TOUCHCARET_LOG("Visibility not changed");
+    TOUCHCARET_LOG("Set visibility %s, same as the old one",
+                   (aVisible ? "shown" : "hidden"));
     return;
   }
-
-  mVisible = aVisible;
 
   nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
   if (!presShell) {
     return;
   }
+
   mozilla::dom::Element* touchCaretElement = presShell->GetTouchCaretElement();
   if (!touchCaretElement) {
     return;
   }
+
+  mVisible = aVisible;
 
   // Set touch caret visibility.
   ErrorResult err;
   touchCaretElement->ClassList()->Toggle(NS_LITERAL_STRING("hidden"),
                                          dom::Optional<bool>(!mVisible),
                                          err);
-  TOUCHCARET_LOG("Visibility %s", (mVisible ? "shown" : "hidden"));
+  TOUCHCARET_LOG("Set visibility %s", (mVisible ? "shown" : "hidden"));
 
   // Set touch caret expiration time.
   mVisible ? LaunchExpirationTimer() : CancelExpirationTimer();
-
-  // We must call SetHasTouchCaret() in order to get APZC to wait until the
-  // event has been round-tripped and check whether it has been handled,
-  // otherwise B2G will end up panning the document when the user tries to drag
-  // touch caret.
-  presShell->SetMayHaveTouchCaret(mVisible);
 }
 
 nsRect
@@ -141,33 +192,18 @@ TouchCaret::GetTouchFrameRect()
   }
 
   dom::Element* touchCaretElement = presShell->GetTouchCaretElement();
-  if (!touchCaretElement) {
-    return nsRect();
-  }
-
-  // Get touch caret position relative to canvas frame.
-  nsIFrame* touchCaretFrame = touchCaretElement->GetPrimaryFrame();
-  nsRect tcRect = touchCaretFrame->GetRectRelativeToSelf();
   nsIFrame* canvasFrame = GetCanvasFrame();
-
-  nsLayoutUtils::TransformResult rv =
-    nsLayoutUtils::TransformRect(touchCaretFrame, canvasFrame, tcRect);
-  return rv == nsLayoutUtils::TRANSFORM_SUCCEEDED ? tcRect : nsRect();
+  return nsLayoutUtils::GetRectRelativeToFrame(touchCaretElement, canvasFrame);
 }
 
 nsRect
 TouchCaret::GetContentBoundary()
 {
-  nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
-  if (!presShell) {
+  nsIFrame* focusFrame = GetCaretFocusFrame();
+  nsIFrame* canvasFrame = GetCanvasFrame();
+  if (!focusFrame || !canvasFrame) {
     return nsRect();
   }
-
-  nsRefPtr<nsCaret> caret = presShell->GetCaret();
-  nsISelection* caretSelection = caret->GetCaretDOMSelection();
-  nsRect focusRect;
-  nsIFrame* focusFrame = caret->GetGeometry(caretSelection, &focusRect);
-  nsIFrame* canvasFrame = GetCanvasFrame();
 
   // Get the editing host to determine the touch caret dragable boundary.
   dom::Element* editingHost = focusFrame->GetContent()->GetEditingHost();
@@ -203,17 +239,10 @@ TouchCaret::GetContentBoundary()
 nscoord
 TouchCaret::GetCaretYCenterPosition()
 {
-  nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
-  if (!presShell) {
-    return 0;
-  }
+  nsRect caretRect;
+  nsIFrame* focusFrame = GetCaretFocusFrame(&caretRect);
+  nsIFrame* canvasFrame = GetCanvasFrame();
 
-  nsRefPtr<nsCaret> caret = presShell->GetCaret();
-  nsISelection* caretSelection = caret->GetCaretDOMSelection();
-  nsRect focusRect;
-  nsIFrame* focusFrame = caret->GetGeometry(caretSelection, &focusRect);
-  nsRect caretRect = focusFrame->GetRectRelativeToSelf();
-  nsIFrame *canvasFrame = GetCanvasFrame();
   nsLayoutUtils::TransformRect(focusFrame, canvasFrame, caretRect);
 
   return (caretRect.y + caretRect.height / 2);
@@ -253,24 +282,15 @@ TouchCaret::SetTouchFramePos(const nsPoint& aOrigin)
 void
 TouchCaret::MoveCaret(const nsPoint& movePoint)
 {
-  nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
-  if (!presShell) {
+  nsIFrame* focusFrame = GetCaretFocusFrame();
+  nsIFrame* canvasFrame = GetCanvasFrame();
+  if (!focusFrame && !canvasFrame) {
     return;
   }
-
-  // Get scrollable frame.
-  nsRefPtr<nsCaret> caret = presShell->GetCaret();
-  nsISelection* caretSelection = caret->GetCaretDOMSelection();
-  nsRect focusRect;
-  nsIFrame* focusFrame = caret->GetGeometry(caretSelection, &focusRect);
   nsIFrame* scrollable =
     nsLayoutUtils::GetClosestFrameOfType(focusFrame, nsGkAtoms::scrollFrame);
 
   // Convert touch/mouse position to frame coordinates.
-  nsIFrame* canvasFrame = GetCanvasFrame();
-  if (!canvasFrame) {
-    return;
-  }
   nsPoint offsetToCanvasFrame = nsPoint(0,0);
   nsLayoutUtils::TransformPoint(scrollable, canvasFrame, offsetToCanvasFrame);
   nsPoint pt = movePoint - offsetToCanvasFrame;
@@ -286,7 +306,7 @@ TouchCaret::MoveCaret(const nsPoint& movePoint)
                   offsets.EndOffset(),
                   false,
                   false,
-                  offsets.associateWithNext);
+                  offsets.associate);
 
   if (!weakScrollable.IsAlive()) {
     return;
@@ -304,33 +324,16 @@ TouchCaret::MoveCaret(const nsPoint& movePoint)
 bool
 TouchCaret::IsOnTouchCaret(const nsPoint& aPoint)
 {
-  // Return false if touch caret is not visible.
-  if (!mVisible) {
-    return false;
-  }
-
-  nsRect tcRect = GetTouchFrameRect();
-
-  // Check if the click was in the bounding box of the touch caret.
-  int32_t distance;
-  if (tcRect.Contains(aPoint.x, aPoint.y)) {
-    distance = 0;
-  } else {
-    // If click is outside the bounding box of the touch caret, check the
-    // distance to the center of the touch caret.
-    int32_t posX = (tcRect.x + (tcRect.width / 2));
-    int32_t posY = (tcRect.y + (tcRect.height / 2));
-    int32_t dx = Abs(aPoint.x - posX);
-    int32_t dy = Abs(aPoint.y - posY);
-    distance = dx + dy;
-  }
-  return (distance <= TouchCaretMaxDistance());
+  return mVisible && nsLayoutUtils::ContainsPoint(GetTouchFrameRect(), aPoint,
+                                                  TouchCaretInflateSize());
 }
 
 nsresult
 TouchCaret::NotifySelectionChanged(nsIDOMDocument* aDoc, nsISelection* aSel,
-                                     int16_t aReason)
+                                   int16_t aReason)
 {
+  TOUCHCARET_LOG("aSel (%p), Reason=%d", aSel, aReason);
+
   // Hide touch caret while no caret exists.
   nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
   if (!presShell) {
@@ -348,75 +351,177 @@ TouchCaret::NotifySelectionChanged(nsIDOMDocument* aDoc, nsISelection* aSel,
   // multiple selections.
   // If this notification is for a selection that is not the one the
   // the caret is currently interested in , then there is nothing to do!
-  if (aSel != caret->GetCaretDOMSelection()) {
+  if (aSel != caret->GetSelection()) {
+    TOUCHCARET_LOG("Return for selection mismatch!");
     return NS_OK;
   }
 
   // Update touch caret position and visibility.
   // Hide touch caret while key event causes selection change.
-  if ((aReason == nsISelectionListener::NO_REASON) ||
-      (aReason & nsISelectionListener::KEYPRESS_REASON)) {
-    UpdateTouchCaret(false);
+  // Also hide touch caret when gecko or javascript collapse the selection.
+  if (aReason & nsISelectionListener::KEYPRESS_REASON ||
+      aReason & nsISelectionListener::COLLAPSETOSTART_REASON ||
+      aReason & nsISelectionListener::COLLAPSETOEND_REASON) {
+    TOUCHCARET_LOG("KEYPRESS_REASON");
+    SetVisibility(false);
   } else {
-    UpdateTouchCaret(true);
+    SyncVisibilityWithCaret();
   }
 
   return NS_OK;
 }
 
 void
-TouchCaret::UpdateTouchCaret(bool aVisible)
+TouchCaret::SyncVisibilityWithCaret()
 {
-  // Hide touch caret while no caret exists.
+  TOUCHCARET_LOG("SyncVisibilityWithCaret");
+
+  if (!IsDisplayable()) {
+    SetVisibility(false);
+    return;
+  }
+
+  SetVisibility(true);
+  if (mVisible) {
+    UpdatePosition();
+  }
+}
+
+void
+TouchCaret::UpdatePositionIfNeeded()
+{
+  TOUCHCARET_LOG("UpdatePositionIfNeeded");
+
+  if (!IsDisplayable()) {
+    SetVisibility(false);
+    return;
+  }
+
+  if (mVisible) {
+    UpdatePosition();
+  }
+}
+
+bool
+TouchCaret::IsDisplayable()
+{
   nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
   if (!presShell) {
-    return;
+    TOUCHCARET_LOG("PresShell is nullptr!");
+    return false;
   }
 
   nsRefPtr<nsCaret> caret = presShell->GetCaret();
   if (!caret) {
-    SetVisibility(false);
-    return;
+    TOUCHCARET_LOG("Caret is nullptr!");
+    return false;
   }
 
-  // Hide touch caret while caret is not visible.
-  bool caretVisible = false;
-  caret->GetCaretVisible(&caretVisible);
-  if (!caretVisible) {
-    TOUCHCARET_LOG("Caret is not visible");
-    SetVisibility(false);
-    return;
+  nsIFrame* canvasFrame = GetCanvasFrame();
+  if (!canvasFrame) {
+    TOUCHCARET_LOG("No canvas frame!");
+    return false;
   }
 
-  // Caret is visible and shown, update touch caret.
-  nsISelection* caretSelection = caret->GetCaretDOMSelection();
+  nsIFrame* rootFrame = GetRootFrame();
+  if (!rootFrame) {
+    TOUCHCARET_LOG("No root frame!");
+    return false;
+  }
+
+  dom::Element* touchCaretElement = presShell->GetTouchCaretElement();
+  if (!touchCaretElement) {
+    TOUCHCARET_LOG("No touch caret frame element!");
+    return false;
+  }
+
+  if (presShell->IsPaintingSuppressed()) {
+    TOUCHCARET_LOG("PresShell is suppressing painting!");
+    return false;
+  }
+
+  if (!caret->IsVisible()) {
+    TOUCHCARET_LOG("Caret is not visible!");
+    return false;
+  }
+
   nsRect focusRect;
-  nsIFrame* focusFrame = caret->GetGeometry(caretSelection, &focusRect);
-  if (!focusFrame || focusRect.IsEmpty()) {
-    TOUCHCARET_LOG("Focus frame not valid");
-    SetVisibility(false);
-    return;
+  nsIFrame* focusFrame = caret->GetGeometry(&focusRect);
+  if (!focusFrame) {
+    TOUCHCARET_LOG("Focus frame is not valid!");
+    return false;
   }
+  if (focusRect.IsEmpty()) {
+    TOUCHCARET_LOG("Focus rect is empty!");
+    return false;
+  }
+
+  dom::Element* editingHost = focusFrame->GetContent()->GetEditingHost();
+  if (!editingHost) {
+    TOUCHCARET_LOG("Cannot get editing host!");
+    return false;
+  }
+
+  if (!nsContentUtils::HasNonEmptyTextContent(
+         editingHost, nsContentUtils::eRecurseIntoChildren)) {
+    TOUCHCARET_LOG("The content is empty!");
+    return false;
+  }
+
+  if (mState != TOUCHCARET_TOUCHDRAG_ACTIVE &&
+        !nsLayoutUtils::IsRectVisibleInScrollFrames(focusFrame, focusRect)) {
+    TOUCHCARET_LOG("Caret does not show in the scrollable frame!");
+    return false;
+  }
+
+  TOUCHCARET_LOG("Touch caret is displayable!");
+  return true;
+}
+
+void
+TouchCaret::UpdatePosition()
+{
+  MOZ_ASSERT(mVisible);
+
+  nsPoint pos = GetTouchCaretPosition();
+  pos = ClampPositionToScrollFrame(pos);
+  SetTouchFramePos(pos);
+}
+
+nsPoint
+TouchCaret::GetTouchCaretPosition()
+{
+  nsRect focusRect;
+  nsIFrame* focusFrame = GetCaretFocusFrame(&focusRect);
+  nsIFrame* rootFrame = GetRootFrame();
 
   // Position of the touch caret relative to focusFrame.
   nsPoint pos = nsPoint(focusRect.x + (focusRect.width / 2),
                         focusRect.y + focusRect.height);
 
-  // Transform the position to make it relative to canvas frame.
-  nsIFrame* canvasFrame = GetCanvasFrame();
-  if (!canvasFrame) {
-    return;
-  }
-  nsLayoutUtils::TransformPoint(focusFrame, canvasFrame, pos);
+  // Transform the position to make it relative to root frame.
+  nsLayoutUtils::TransformPoint(focusFrame, rootFrame, pos);
+
+  return pos;
+}
+
+nsPoint
+TouchCaret::ClampPositionToScrollFrame(const nsPoint& aPosition)
+{
+  nsPoint pos = aPosition;
+  nsIFrame* focusFrame = GetCaretFocusFrame();
+  nsIFrame* rootFrame = GetRootFrame();
 
   // Clamp the touch caret position to the scrollframe boundary.
   nsIFrame* closestScrollFrame =
     nsLayoutUtils::GetClosestFrameOfType(focusFrame, nsGkAtoms::scrollFrame);
+
   while (closestScrollFrame) {
     nsIScrollableFrame* sf = do_QueryFrame(closestScrollFrame);
     nsRect visualRect = sf->GetScrollPortRect();
+
     // Clamp the touch caret in the scroll port.
-    nsLayoutUtils::TransformRect(closestScrollFrame, canvasFrame, visualRect);
+    nsLayoutUtils::TransformRect(closestScrollFrame, rootFrame, visualRect);
     pos = visualRect.ClampPoint(pos);
 
     // Get next ancestor scroll frame.
@@ -425,8 +530,7 @@ TouchCaret::UpdateTouchCaret(bool aVisible)
                                            nsGkAtoms::scrollFrame);
   }
 
-  SetTouchFramePos(pos);
-  SetVisibility(aVisible);
+  return pos;
 }
 
 /* static */void
@@ -465,17 +569,23 @@ TouchCaret::CancelExpirationTimer()
   }
 }
 
+void
+TouchCaret::SetSelectionDragState(bool aState)
+{
+  nsIFrame* caretFocusFrame = GetCaretFocusFrame();
+  if (!caretFocusFrame) {
+    return;
+  }
+
+  nsRefPtr<nsFrameSelection> fs = caretFocusFrame->GetFrameSelection();
+  fs->SetDragState(aState);
+}
+
 nsEventStatus
 TouchCaret::HandleEvent(WidgetEvent* aEvent)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
-  if (!presShell) {
-    return nsEventStatus_eIgnore;
-  }
-
-  mozilla::dom::Element* touchCaretElement = presShell->GetTouchCaretElement();
-  if (!touchCaretElement) {
+  if (!IsDisplayable()) {
     return nsEventStatus_eIgnore;
   }
 
@@ -491,7 +601,7 @@ TouchCaret::HandleEvent(WidgetEvent* aEvent)
     case NS_TOUCH_END:
       status = HandleTouchUpEvent(aEvent->AsTouchEvent());
       break;
-   case NS_MOUSE_BUTTON_UP:
+    case NS_MOUSE_BUTTON_UP:
       status = HandleMouseUpEvent(aEvent->AsMouseEvent());
       break;
     case NS_TOUCH_MOVE:
@@ -508,10 +618,18 @@ TouchCaret::HandleEvent(WidgetEvent* aEvent)
     case NS_KEY_UP:
     case NS_KEY_DOWN:
     case NS_KEY_PRESS:
-    case NS_WHEEL_EVENT_START:
+    case NS_WHEEL_WHEEL:
+    case NS_WHEEL_START:
+    case NS_WHEEL_STOP:
       // Disable touch caret while key/wheel event is received.
-      TOUCHCARET_LOG("Receive key/wheel event");
+      TOUCHCARET_LOG("Receive key/wheel event %d", aEvent->message);
       SetVisibility(false);
+      break;
+    case NS_MOUSE_MOZLONGTAP:
+      if (mState == TOUCHCARET_TOUCHDRAG_ACTIVE) {
+        // Disable long tap event from APZ while dragging the touch caret.
+        status = nsEventStatus_eConsumeNoDefault;
+      }
       break;
     default:
       break;
@@ -527,7 +645,7 @@ TouchCaret::GetEventPosition(WidgetTouchEvent* aEvent, int32_t aIdentifier)
     if (aEvent->touches[i]->mIdentifier == aIdentifier) {
       // Get event coordinate relative to canvas frame.
       nsIFrame* canvasFrame = GetCanvasFrame();
-      nsIntPoint touchIntPoint = aEvent->touches[i]->mRefPoint;
+      LayoutDeviceIntPoint touchIntPoint = aEvent->touches[i]->mRefPoint;
       return nsLayoutUtils::GetEventCoordinatesRelativeTo(aEvent,
                                                           touchIntPoint,
                                                           canvasFrame);
@@ -541,8 +659,7 @@ TouchCaret::GetEventPosition(WidgetMouseEvent* aEvent)
 {
   // Get event coordinate relative to canvas frame.
   nsIFrame* canvasFrame = GetCanvasFrame();
-  nsIntPoint mouseIntPoint =
-    LayoutDeviceIntPoint::ToUntyped(aEvent->AsGUIEvent()->refPoint);
+  LayoutDeviceIntPoint mouseIntPoint = aEvent->AsGUIEvent()->refPoint;
   return nsLayoutUtils::GetEventCoordinatesRelativeTo(aEvent,
                                                       mouseIntPoint,
                                                       canvasFrame);
@@ -566,6 +683,7 @@ TouchCaret::HandleMouseMoveEvent(WidgetMouseEvent* aEvent)
         movePoint = contentBoundary.ClampPoint(movePoint);
 
         MoveCaret(movePoint);
+        mIsValidTap = false;
         status = nsEventStatus_eConsumeNoDefault;
       }
       break;
@@ -603,6 +721,7 @@ TouchCaret::HandleTouchMoveEvent(WidgetTouchEvent* aEvent)
         movePoint = contentBoundary.ClampPoint(movePoint);
 
         MoveCaret(movePoint);
+        mIsValidTap = false;
         status = nsEventStatus_eConsumeNoDefault;
       }
       break;
@@ -628,6 +747,7 @@ TouchCaret::HandleMouseUpEvent(WidgetMouseEvent* aEvent)
 
     case TOUCHCARET_MOUSEDRAG_ACTIVE:
       if (aEvent->button == WidgetMouseEvent::eLeftButton) {
+        SetSelectionDragState(false);
         LaunchExpirationTimer();
         SetState(TOUCHCARET_NONE);
         status = nsEventStatus_eConsumeNoDefault;
@@ -672,6 +792,7 @@ TouchCaret::HandleTouchUpEvent(WidgetTouchEvent* aEvent)
 
     case TOUCHCARET_TOUCHDRAG_ACTIVE:
       if (mTouchesId.Length() == 0) {
+        SetSelectionDragState(false);
         // No more finger on the screen.
         SetState(TOUCHCARET_NONE);
         LaunchExpirationTimer();
@@ -717,6 +838,7 @@ TouchCaret::HandleMouseDownEvent(WidgetMouseEvent* aEvent)
       if (aEvent->button == WidgetMouseEvent::eLeftButton) {
         nsPoint point = GetEventPosition(aEvent);
         if (IsOnTouchCaret(point)) {
+          SetSelectionDragState(true);
           // Cache distence of the event point to the center of touch caret.
           mCaretCenterToDownPointOffsetY = GetCaretYCenterPosition() - point.y;
           // Enter TOUCHCARET_MOUSEDRAG_ACTIVE state and cancel the timer.
@@ -769,6 +891,7 @@ TouchCaret::HandleTouchDownEvent(WidgetTouchEvent* aEvent)
           int32_t touchId = aEvent->touches[i]->Identifier();
           nsPoint point = GetEventPosition(aEvent, touchId);
           if (IsOnTouchCaret(point)) {
+            SetSelectionDragState(true);
             // Touch start position is contained in touch caret.
             mActiveTouchId = touchId;
             // Cache distance of the event point to the center of touch caret.
@@ -810,6 +933,55 @@ TouchCaret::HandleTouchDownEvent(WidgetTouchEvent* aEvent)
 }
 
 void
+TouchCaret::DispatchTapEvent()
+{
+  nsCOMPtr<nsIPresShell> presShell = do_QueryReferent(mPresShell);
+  if (!presShell) {
+    return;
+  }
+
+  nsRefPtr<nsCaret> caret = presShell->GetCaret();
+  if (!caret) {
+    return;
+  }
+
+  dom::Selection* sel = static_cast<dom::Selection*>(caret->GetSelection());
+  if (!sel) {
+    return;
+  }
+
+  nsIDocument* doc = presShell->GetDocument();
+
+  MOZ_ASSERT(doc);
+
+  dom::SelectionStateChangedEventInit init;
+  init.mBubbles = true;
+
+  // XXX: Do we need to flush layout?
+  presShell->FlushPendingNotifications(Flush_Layout);
+  nsRect rect = nsContentUtils::GetSelectionBoundingRect(sel);
+  nsRefPtr<dom::DOMRect>domRect = new dom::DOMRect(ToSupports(doc));
+
+  domRect->SetLayoutRect(rect);
+  init.mBoundingClientRect = domRect;
+  init.mVisible = false;
+
+  sel->Stringify(init.mSelectedText);
+
+  dom::Sequence<dom::SelectionState> state;
+  state.AppendElement(dom::SelectionState::Taponcaret);
+  init.mStates = state;
+
+  nsRefPtr<dom::SelectionStateChangedEvent> event =
+    dom::SelectionStateChangedEvent::Constructor(doc, NS_LITERAL_STRING("mozselectionstatechanged"), init);
+
+  event->SetTrusted(true);
+  event->GetInternalNSEvent()->mFlags.mOnlyChromeDispatch = true;
+  bool ret;
+  doc->DispatchEvent(event, &ret);
+}
+
+void
 TouchCaret::SetState(TouchCaretState aState)
 {
   TOUCHCARET_LOG("state changed from %d to %d", mState, aState);
@@ -840,5 +1012,12 @@ TouchCaret::SetState(TouchCaretState aState)
   if (mState == TOUCHCARET_NONE) {
     mActiveTouchId = -1;
     mCaretCenterToDownPointOffsetY = 0;
+    if (mIsValidTap) {
+      DispatchTapEvent();
+      mIsValidTap = false;
+    }
+  } else if (mState == TOUCHCARET_TOUCHDRAG_ACTIVE ||
+             mState == TOUCHCARET_MOUSEDRAG_ACTIVE) {
+    mIsValidTap = true;
   }
 }

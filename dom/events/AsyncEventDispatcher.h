@@ -10,9 +10,10 @@
 #include "nsCOMPtr.h"
 #include "nsIDocument.h"
 #include "nsIDOMEvent.h"
-#include "nsINode.h"
 #include "nsString.h"
 #include "nsThreadUtils.h"
+
+class nsINode;
 
 namespace mozilla {
 
@@ -53,7 +54,7 @@ public:
 
   AsyncEventDispatcher(dom::EventTarget* aTarget, WidgetEvent& aEvent);
 
-  NS_IMETHOD Run() MOZ_OVERRIDE;
+  NS_IMETHOD Run() override;
   nsresult PostDOMEvent();
   void RunDOMEventWhenSafe();
 
@@ -64,7 +65,7 @@ public:
   bool                  mDispatchChromeOnly;
 };
 
-class LoadBlockingAsyncEventDispatcher MOZ_FINAL : public AsyncEventDispatcher
+class LoadBlockingAsyncEventDispatcher final : public AsyncEventDispatcher
 {
 public:
   LoadBlockingAsyncEventDispatcher(nsINode* aEventNode,

@@ -27,6 +27,7 @@ CompositorD3D9::CompositorD3D9(PCompositorParent* aParent, nsIWidget *aWidget)
   : Compositor(aParent)
   , mWidget(aWidget)
   , mDeviceResetCount(0)
+  , mFailedResetAttempts(0)
 {
   Compositor::SetBackend(LayersBackend::LAYERS_D3D9);
 }
@@ -103,6 +104,12 @@ TemporaryRef<CompositingRenderTarget>
 CompositorD3D9::CreateRenderTarget(const gfx::IntRect &aRect,
                                    SurfaceInitMode aInit)
 {
+  MOZ_ASSERT(aRect.width != 0 && aRect.height != 0, "Trying to create a render target of invalid size");
+
+  if (aRect.width * aRect.height == 0) {
+    return nullptr;
+  }
+
   if (!mDeviceManager) {
     return nullptr;
   }
@@ -129,6 +136,12 @@ CompositorD3D9::CreateRenderTargetFromSource(const gfx::IntRect &aRect,
                                              const CompositingRenderTarget *aSource,
                                              const gfx::IntPoint &aSourcePoint)
 {
+  MOZ_ASSERT(aRect.width != 0 && aRect.height != 0, "Trying to create a render target of invalid size");
+
+  if (aRect.width * aRect.height == 0) {
+    return nullptr;
+  }
+
   if (!mDeviceManager) {
     return nullptr;
   }
@@ -194,7 +207,7 @@ CompositorD3D9::SetRenderTarget(CompositingRenderTarget *aRenderTarget)
   RefPtr<CompositingRenderTargetD3D9> oldRT = mCurrentRT;
   mCurrentRT = static_cast<CompositingRenderTargetD3D9*>(aRenderTarget);
   mCurrentRT->BindRenderTarget(device());
-  PrepareViewport(mCurrentRT->GetSize(), Matrix());
+  PrepareViewport(mCurrentRT->GetSize());
 }
 
 static DeviceManagerD3D9::ShaderMode
@@ -489,7 +502,6 @@ CompositorD3D9::SetMask(const EffectChain &aEffectChain, uint32_t aMaskTexture)
 
   TextureSourceD3D9 *source = maskEffect->mMaskTexture->AsSourceD3D9();
 
-  MOZ_ASSERT(aMaskTexture >= 0);
   device()->SetTexture(aMaskTexture, source->GetD3D9Texture());
 
   const gfx::Matrix4x4& maskTransform = maskEffect->mMaskTransform;
@@ -547,6 +559,7 @@ CompositorD3D9::EnsureSwapChain()
   // We have a swap chain, lets initialise it
   DeviceManagerState state = mSwapChain->PrepareForRendering();
   if (state == DeviceOK) {
+    mFailedResetAttempts = 0;
     return true;
   }
   // Swap chain could not be initialised, handle the failure
@@ -574,7 +587,6 @@ CompositorD3D9::Ready()
     if (EnsureSwapChain()) {
       // We don't need to call VerifyReadyForRendering because that is
       // called by mSwapChain->PrepareForRendering() via EnsureSwapChain().
-
       CheckResetCount();
       return true;
     }
@@ -587,6 +599,7 @@ CompositorD3D9::Ready()
 
   mDeviceManager = gfxWindowsPlatform::GetPlatform()->GetD3D9DeviceManager();
   if (!mDeviceManager) {
+    FailedToResetDevice();
     mParent->SendInvalidateAll();
     return false;
   }
@@ -598,9 +611,18 @@ CompositorD3D9::Ready()
 }
 
 void
+CompositorD3D9::FailedToResetDevice() {
+  mFailedResetAttempts += 1;
+  // 10 is a totally arbitrary number that we may want to increase or decrease
+  // depending on how things behave in the wild.
+  if (mFailedResetAttempts > 10) {
+    MOZ_CRASH("Unable to get a working D3D9 Compositor");
+  }
+}
+
+void
 CompositorD3D9::BeginFrame(const nsIntRegion& aInvalidRegion,
                            const Rect *aClipRectIn,
-                           const gfx::Matrix& aTransform,
                            const Rect& aRenderBounds,
                            Rect *aClipRectOut,
                            Rect *aRenderBoundsOut)
@@ -663,8 +685,7 @@ CompositorD3D9::EndFrame()
 }
 
 void
-CompositorD3D9::PrepareViewport(const gfx::IntSize& aSize,
-                                const Matrix &aWorldTransform)
+CompositorD3D9::PrepareViewport(const gfx::IntSize& aSize)
 {
   Matrix4x4 viewMatrix;
   /*
@@ -675,8 +696,6 @@ CompositorD3D9::PrepareViewport(const gfx::IntSize& aSize,
   viewMatrix._22 = -2.0f / aSize.height;
   viewMatrix._41 = -1.0f;
   viewMatrix._42 = 1.0f;
-
-  viewMatrix = Matrix4x4::From2D(aWorldTransform) * viewMatrix;
 
   HRESULT hr = device()->SetVertexShaderConstantF(CBmProjection, &viewMatrix._11, 4);
 

@@ -2,14 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-%define WINDOWS_AERO
-%include browser.css
-%undef WINDOWS_AERO
-
 %define glassActiveBorderColor rgb(37, 44, 51)
 %define glassInactiveBorderColor rgb(102, 102, 102)
-
-%include downloads/indicator-aero.css
 
 @media not all and (-moz-windows-classic) {
   #main-window[sizemode="normal"] > #tab-view-deck > #browser-panel > #navigator-toolbox > #toolbar-menubar {
@@ -83,7 +77,7 @@
       background-color: @customToolbarColor@;
     }
 
-    .tab-background-middle[selected=true]:not(:-moz-lwtheme) {
+    .tab-background-middle[visuallyselected=true]:not(:-moz-lwtheme) {
       background-color: @customToolbarColor@;
     }
 
@@ -165,8 +159,11 @@
   }
 
   /* Vertical toolbar border */
-  #main-window[sizemode=normal] #navigator-toolbox::after,
-  #main-window[sizemode=normal] #navigator-toolbox > toolbar:not(#toolbar-menubar):not(#TabsToolbar) {
+  #main-window:not([customizing])[sizemode=normal] #navigator-toolbox:not(:-moz-lwtheme)::after,
+  #main-window:not([customizing])[sizemode=normal] #navigator-toolbox > toolbar:not(#toolbar-menubar):not(#TabsToolbar):not(:-moz-lwtheme),
+  #main-window:not([customizing])[sizemode=normal] #navigator-toolbox:-moz-lwtheme,
+  #main-window[customizing] #navigator-toolbox::after,
+  #main-window[customizing] #navigator-toolbox > toolbar:not(#toolbar-menubar):not(#TabsToolbar) {
     border-left: 1px solid @toolbarShadowColor@;
     border-right: 1px solid @toolbarShadowColor@;
     background-clip: padding-box;

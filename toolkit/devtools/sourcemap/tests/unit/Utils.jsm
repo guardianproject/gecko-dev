@@ -1,4 +1,4 @@
-/* -*- js-indent-level: 2; indent-tabs-mode: nil -*- */
+/* -*- Mode: js; js-indent-level: 2; -*- */
 /*
  * Copyright 2011 Mozilla Foundation and contributors
  * Licensed under the New BSD license. See LICENSE or:
@@ -111,11 +111,149 @@ define('test/source-map/util', ['require', 'exports', 'module' ,  'lib/source-ma
     sourceRoot: '/the/root',
     mappings: 'CAAC,IAAI,IAAM,SAAUA,GAClB,OAAOC,IAAID;CCDb,IAAI,IAAM,SAAUE,GAClB,OAAOA'
   };
+  exports.testMapNoSourceRoot = {
+    version: 3,
+    file: 'min.js',
+    names: ['bar', 'baz', 'n'],
+    sources: ['one.js', 'two.js'],
+    mappings: 'CAAC,IAAI,IAAM,SAAUA,GAClB,OAAOC,IAAID;CCDb,IAAI,IAAM,SAAUE,GAClB,OAAOA'
+  };
+  exports.testMapEmptySourceRoot = {
+    version: 3,
+    file: 'min.js',
+    names: ['bar', 'baz', 'n'],
+    sources: ['one.js', 'two.js'],
+    sourceRoot: '',
+    mappings: 'CAAC,IAAI,IAAM,SAAUA,GAClB,OAAOC,IAAID;CCDb,IAAI,IAAM,SAAUE,GAClB,OAAOA'
+  };
+  // This mapping is identical to above, but uses the indexed format instead.
+  exports.indexedTestMap = {
+    version: 3,
+    file: 'min.js',
+    sections: [
+      {
+        offset: {
+          line: 0,
+          column: 0
+        },
+        map: {
+          version: 3,
+          sources: [
+            "one.js"
+          ],
+          sourcesContent: [
+            ' ONE.foo = function (bar) {\n' +
+            '   return baz(bar);\n' +
+            ' };',
+          ],
+          names: [
+            "bar",
+            "baz"
+          ],
+          mappings: "CAAC,IAAI,IAAM,SAAUA,GAClB,OAAOC,IAAID",
+          file: "min.js",
+          sourceRoot: "/the/root"
+        }
+      },
+      {
+        offset: {
+          line: 1,
+          column: 0
+        },
+        map: {
+          version: 3,
+          sources: [
+            "two.js"
+          ],
+          sourcesContent: [
+            ' TWO.inc = function (n) {\n' +
+            '   return n + 1;\n' +
+            ' };'
+          ],
+          names: [
+            "n"
+          ],
+          mappings: "CAAC,IAAI,IAAM,SAAUA,GAClB,OAAOA",
+          file: "min.js",
+          sourceRoot: "/the/root"
+        }
+      }
+    ]
+  };
+  exports.indexedTestMapDifferentSourceRoots = {
+    version: 3,
+    file: 'min.js',
+    sections: [
+      {
+        offset: {
+          line: 0,
+          column: 0
+        },
+        map: {
+          version: 3,
+          sources: [
+            "one.js"
+          ],
+          sourcesContent: [
+            ' ONE.foo = function (bar) {\n' +
+            '   return baz(bar);\n' +
+            ' };',
+          ],
+          names: [
+            "bar",
+            "baz"
+          ],
+          mappings: "CAAC,IAAI,IAAM,SAAUA,GAClB,OAAOC,IAAID",
+          file: "min.js",
+          sourceRoot: "/the/root"
+        }
+      },
+      {
+        offset: {
+          line: 1,
+          column: 0
+        },
+        map: {
+          version: 3,
+          sources: [
+            "two.js"
+          ],
+          sourcesContent: [
+            ' TWO.inc = function (n) {\n' +
+            '   return n + 1;\n' +
+            ' };'
+          ],
+          names: [
+            "n"
+          ],
+          mappings: "CAAC,IAAI,IAAM,SAAUA,GAClB,OAAOA",
+          file: "min.js",
+          sourceRoot: "/different/root"
+        }
+      }
+    ]
+  };
   exports.testMapWithSourcesContent = {
     version: 3,
     file: 'min.js',
     names: ['bar', 'baz', 'n'],
     sources: ['one.js', 'two.js'],
+    sourcesContent: [
+      ' ONE.foo = function (bar) {\n' +
+      '   return baz(bar);\n' +
+      ' };',
+      ' TWO.inc = function (n) {\n' +
+      '   return n + 1;\n' +
+      ' };'
+    ],
+    sourceRoot: '/the/root',
+    mappings: 'CAAC,IAAI,IAAM,SAAUA,GAClB,OAAOC,IAAID;CCDb,IAAI,IAAM,SAAUE,GAClB,OAAOA'
+  };
+  exports.testMapRelativeSources = {
+    version: 3,
+    file: 'min.js',
+    names: ['bar', 'baz', 'n'],
+    sources: ['./one.js', './two.js'],
     sourcesContent: [
       ' ONE.foo = function (bar) {\n' +
       '   return baz(bar);\n' +
@@ -137,12 +275,13 @@ define('test/source-map/util', ['require', 'exports', 'module' ,  'lib/source-ma
 
 
   function assertMapping(generatedLine, generatedColumn, originalSource,
-                         originalLine, originalColumn, name, map, assert,
+                         originalLine, originalColumn, name, bias, map, assert,
                          dontTestGenerated, dontTestOriginal) {
     if (!dontTestOriginal) {
       var origMapping = map.originalPositionFor({
         line: generatedLine,
-        column: generatedColumn
+        column: generatedColumn,
+        bias: bias
       });
       assert.equal(origMapping.name, name,
                    'Incorrect name, expected ' + JSON.stringify(name)
@@ -175,7 +314,8 @@ define('test/source-map/util', ['require', 'exports', 'module' ,  'lib/source-ma
       var genMapping = map.generatedPositionFor({
         source: originalSource,
         line: originalLine,
-        column: originalColumn
+        column: originalColumn,
+        bias: bias
       });
       assert.equal(genMapping.line, generatedLine,
                    'Incorrect line, expected ' + JSON.stringify(generatedLine)
@@ -259,8 +399,8 @@ define('lib/source-map/util', ['require', 'exports', 'module' , ], function(requ
   }
   exports.getArg = getArg;
 
-  var urlRegexp = /([\w+\-.]+):\/\/((\w+:\w+)@)?([\w.]+)?(:(\d+))?(\S+)?/;
-  var dataUrlRegexp = /^data:.+\,.+/;
+  var urlRegexp = /^(?:([\w+\-.]+):)?\/\/(?:(\w+:\w+)@)?([\w.]*)(?::(\d+))?(\S*)$/;
+  var dataUrlRegexp = /^data:.+\,.+$/;
 
   function urlParse(aUrl) {
     var match = aUrl.match(urlRegexp);
@@ -269,18 +409,22 @@ define('lib/source-map/util', ['require', 'exports', 'module' , ], function(requ
     }
     return {
       scheme: match[1],
-      auth: match[3],
-      host: match[4],
-      port: match[6],
-      path: match[7]
+      auth: match[2],
+      host: match[3],
+      port: match[4],
+      path: match[5]
     };
   }
   exports.urlParse = urlParse;
 
   function urlGenerate(aParsedUrl) {
-    var url = aParsedUrl.scheme + "://";
+    var url = '';
+    if (aParsedUrl.scheme) {
+      url += aParsedUrl.scheme + ':';
+    }
+    url += '//';
     if (aParsedUrl.auth) {
-      url += aParsedUrl.auth + "@"
+      url += aParsedUrl.auth + '@';
     }
     if (aParsedUrl.host) {
       url += aParsedUrl.host;
@@ -295,21 +439,145 @@ define('lib/source-map/util', ['require', 'exports', 'module' , ], function(requ
   }
   exports.urlGenerate = urlGenerate;
 
-  function join(aRoot, aPath) {
-    var url;
+  /**
+   * Normalizes a path, or the path portion of a URL:
+   *
+   * - Replaces consequtive slashes with one slash.
+   * - Removes unnecessary '.' parts.
+   * - Removes unnecessary '<dir>/..' parts.
+   *
+   * Based on code in the Node.js 'path' core module.
+   *
+   * @param aPath The path or url to normalize.
+   */
+  function normalize(aPath) {
+    var path = aPath;
+    var url = urlParse(aPath);
+    if (url) {
+      if (!url.path) {
+        return aPath;
+      }
+      path = url.path;
+    }
+    var isAbsolute = (path.charAt(0) === '/');
 
-    if (aPath.match(urlRegexp) || aPath.match(dataUrlRegexp)) {
+    var parts = path.split(/\/+/);
+    for (var part, up = 0, i = parts.length - 1; i >= 0; i--) {
+      part = parts[i];
+      if (part === '.') {
+        parts.splice(i, 1);
+      } else if (part === '..') {
+        up++;
+      } else if (up > 0) {
+        if (part === '') {
+          // The first part is blank if the path is absolute. Trying to go
+          // above the root is a no-op. Therefore we can remove all '..' parts
+          // directly after the root.
+          parts.splice(i + 1, up);
+          up = 0;
+        } else {
+          parts.splice(i, 2);
+          up--;
+        }
+      }
+    }
+    path = parts.join('/');
+
+    if (path === '') {
+      path = isAbsolute ? '/' : '.';
+    }
+
+    if (url) {
+      url.path = path;
+      return urlGenerate(url);
+    }
+    return path;
+  }
+  exports.normalize = normalize;
+
+  /**
+   * Joins two paths/URLs.
+   *
+   * @param aRoot The root path or URL.
+   * @param aPath The path or URL to be joined with the root.
+   *
+   * - If aPath is a URL or a data URI, aPath is returned, unless aPath is a
+   *   scheme-relative URL: Then the scheme of aRoot, if any, is prepended
+   *   first.
+   * - Otherwise aPath is a path. If aRoot is a URL, then its path portion
+   *   is updated with the result and aRoot is returned. Otherwise the result
+   *   is returned.
+   *   - If aPath is absolute, the result is aPath.
+   *   - Otherwise the two paths are joined with a slash.
+   * - Joining for example 'http://' and 'www.example.com' is also supported.
+   */
+  function join(aRoot, aPath) {
+    if (aRoot === "") {
+      aRoot = ".";
+    }
+    if (aPath === "") {
+      aPath = ".";
+    }
+    var aPathUrl = urlParse(aPath);
+    var aRootUrl = urlParse(aRoot);
+    if (aRootUrl) {
+      aRoot = aRootUrl.path || '/';
+    }
+
+    // `join(foo, '//www.example.org')`
+    if (aPathUrl && !aPathUrl.scheme) {
+      if (aRootUrl) {
+        aPathUrl.scheme = aRootUrl.scheme;
+      }
+      return urlGenerate(aPathUrl);
+    }
+
+    if (aPathUrl || aPath.match(dataUrlRegexp)) {
       return aPath;
     }
 
-    if (aPath.charAt(0) === '/' && (url = urlParse(aRoot))) {
-      url.path = aPath;
-      return urlGenerate(url);
+    // `join('http://', 'www.example.com')`
+    if (aRootUrl && !aRootUrl.host && !aRootUrl.path) {
+      aRootUrl.host = aPath;
+      return urlGenerate(aRootUrl);
     }
 
-    return aRoot.replace(/\/$/, '') + '/' + aPath;
+    var joined = aPath.charAt(0) === '/'
+      ? aPath
+      : normalize(aRoot.replace(/\/+$/, '') + '/' + aPath);
+
+    if (aRootUrl) {
+      aRootUrl.path = joined;
+      return urlGenerate(aRootUrl);
+    }
+    return joined;
   }
   exports.join = join;
+
+  /**
+   * Make a path relative to a URL or another path.
+   *
+   * @param aRoot The root path or URL.
+   * @param aPath The path or URL to be made relative to aRoot.
+   */
+  function relative(aRoot, aPath) {
+    if (aRoot === "") {
+      aRoot = ".";
+    }
+
+    aRoot = aRoot.replace(/\/$/, '');
+
+    // XXX: It is possible to remove this block, and the tests still pass!
+    var url = urlParse(aRoot);
+    if (aPath.charAt(0) == "/" && url && url.path == "/") {
+      return aPath.slice(1);
+    }
+
+    return aPath.indexOf(aRoot + '/') === 0
+      ? aPath.substr(aRoot.length + 1)
+      : aPath;
+  }
+  exports.relative = relative;
 
   /**
    * Because behavior goes wacky when you set `__proto__` on objects, we
@@ -329,20 +597,6 @@ define('lib/source-map/util', ['require', 'exports', 'module' , ], function(requ
     return aStr.substr(1);
   }
   exports.fromSetString = fromSetString;
-
-  function relative(aRoot, aPath) {
-    aRoot = aRoot.replace(/\/$/, '');
-
-    var url = urlParse(aRoot);
-    if (aPath.charAt(0) == "/" && url && url.path == "/") {
-      return aPath.slice(1);
-    }
-
-    return aPath.indexOf(aRoot + '/') === 0
-      ? aPath.substr(aRoot.length + 1)
-      : aPath;
-  }
-  exports.relative = relative;
 
   function strcmp(aStr1, aStr2) {
     var s1 = aStr1 || "";
@@ -376,7 +630,7 @@ define('lib/source-map/util', ['require', 'exports', 'module' , ], function(requ
       return cmp;
     }
 
-    cmp = strcmp(mappingA.name, mappingB.name);
+    cmp = mappingA.generatedColumn - mappingB.generatedColumn;
     if (cmp) {
       return cmp;
     }
@@ -386,7 +640,7 @@ define('lib/source-map/util', ['require', 'exports', 'module' , ], function(requ
       return cmp;
     }
 
-    return mappingA.generatedColumn - mappingB.generatedColumn;
+    return strcmp(mappingA.name, mappingB.name);
   };
   exports.compareByOriginalPositions = compareByOriginalPositions;
 

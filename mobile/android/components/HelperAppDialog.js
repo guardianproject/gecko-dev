@@ -9,10 +9,11 @@ const APK_MIME_TYPE = "application/vnd.android.package-archive";
 const PREF_BD_USEDOWNLOADDIR = "browser.download.useDownloadDir";
 const URI_GENERIC_ICON_DOWNLOAD = "drawable://alert_download";
 
+Cu.import("resource://gre/modules/Downloads.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/HelperApps.jsm");
-Cu.import("resource://gre/modules/Prompt.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 // -----------------------------------------------------------------------
@@ -61,7 +62,12 @@ HelperAppLauncherDialog.prototype = {
     // For all other URIs, try to resolve them to an inner URI, and check that.
     if (!alreadyResolved) {
       let ioSvc = Cc["@mozilla.org/network/io-service;1"].getService(Components.interfaces.nsIIOService);
-      let innerURI = ioSvc.newChannelFromURI(url).URI;
+      let innerURI = ioSvc.newChannelFromURI2(url,
+                                              null,      // aLoadingNode
+                                              Services.scriptSecurityManager.getSystemPrincipal(),
+                                              null,      // aTriggeringPrincipal
+                                              Ci.nsILoadInfo.SEC_NORMAL,
+                                              Ci.nsIContentPolicy.TYPE_OTHER).URI;
       if (!url.equals(innerURI)) {
         return this._canDownload(innerURI, true);
       }
@@ -72,6 +78,10 @@ HelperAppLauncherDialog.prototype = {
       // want to do anything with it, including saving to disk or passing the
       // file to another application.
       let file = url.QueryInterface(Ci.nsIFileURL).file;
+
+      // Normalize the nsILocalFile in-place. This will ensure that paths
+      // can be correctly compared via `contains`, below.
+      file.normalize();
 
       // TODO: pref blacklist?
 
@@ -116,7 +126,7 @@ HelperAppLauncherDialog.prototype = {
 
       Services.console.logStringMessage("Refusing download of non-downloadable file.");
       let bundle = Services.strings.createBundle("chrome://browser/locale/handling.properties");
-      let failedText = bundle.GetStringFromName("protocol.failed");
+      let failedText = bundle.GetStringFromName("download.blocked");
       win.toast.show(failedText, "long");
 
       return;
@@ -143,6 +153,15 @@ HelperAppLauncherDialog.prototype = {
       }
     });
 
+    let callback = function(app) {
+      aLauncher.MIMEInfo.preferredAction = Ci.nsIMIMEInfo.useHelperApp;
+      if (!app.launch(aLauncher.source)) {
+        // Once the app is done we need to get rid of the temp file. This shouldn't
+        // get run in the saveToDisk case.
+        aLauncher.cancel(Cr.NS_BINDING_ABORTED);
+      }
+    }
+
     // See if the user already marked something as the default for this mimetype,
     // and if that app is still installed.
     let preferredApp = this._getPreferredApp(aLauncher);
@@ -152,15 +171,8 @@ HelperAppLauncherDialog.prototype = {
       });
 
       if (pref.length > 0) {
-        pref[0].launch(aLauncher.source);
+        callback(pref[0]);
         return;
-      }
-    }
-
-    let callback = function(app) {
-      aLauncher.MIMEInfo.preferredAction = Ci.nsIMIMEInfo.useHelperApp;
-      if (!app.launch(aLauncher.source)) {
-        aLauncher.cancel(Cr.NS_BINDING_ABORTED);
       }
     }
 
@@ -226,16 +238,19 @@ HelperAppLauncherDialog.prototype = {
       Services.prefs.clearUserPref(this._getPrefName(mime));
   },
 
-  promptForSaveToFile: function hald_promptForSaveToFile(aLauncher, aContext, aDefaultFile, aSuggestedFileExt, aForcePrompt) {
-    // Retrieve the user's default download directory
-    let dnldMgr = Cc["@mozilla.org/download-manager;1"].getService(Ci.nsIDownloadManager);
-    let defaultFolder = dnldMgr.userDownloadsDirectory;
-
-    try {
-      file = this.validateLeafName(defaultFolder, aDefaultFile, aSuggestedFileExt);
-    } catch (e) { }
-
-    return file;
+  promptForSaveToFileAsync: function (aLauncher, aContext, aDefaultFile,
+                                      aSuggestedFileExt, aForcePrompt) {
+    Task.spawn(function* () {
+      let file = null;
+      try {
+        let preferredDir = yield Downloads.getPreferredDownloadsDirectory();
+        file = this.validateLeafName(new FileUtils.File(preferredDir),
+                                     aDefaultFile, aSuggestedFileExt);
+      } finally {
+        // The file argument will be null in case any exception occurred.
+        aLauncher.saveDestinationAvailable(file);
+      }
+    }.bind(this)).catch(Cu.reportError);
   },
 
   validateLeafName: function hald_validateLeafName(aLocalFile, aLeafName, aFileExt) {

@@ -9,21 +9,22 @@
 
 #include "mozilla/DebugOnly.h"
 
+#include "gc/Heap.h"
 #include "js/GCAPI.h"
 #include "js/SliceBudget.h"
 #include "js/TracingAPI.h"
 
 namespace js {
+class BaseShape;
 class GCMarker;
-class ObjectImpl;
+class LazyScript;
+class NativeObject;
+class ObjectGroup;
 namespace gc {
 struct ArenaHeader;
 }
 namespace jit {
 class JitCode;
-}
-namespace types {
-struct TypeObject;
 }
 
 static const size_t NON_INCREMENTAL_MARK_STACK_BASE_CAPACITY = 4096;
@@ -45,9 +46,9 @@ class MarkStack
 {
     friend class GCMarker;
 
-    uintptr_t *stack_;
-    uintptr_t *tos_;
-    uintptr_t *end_;
+    uintptr_t* stack_;
+    uintptr_t* tos_;
+    uintptr_t* end_;
 
     // The capacity we start with and reset() to.
     size_t baseCapacity_;
@@ -70,7 +71,7 @@ class MarkStack
 
     ptrdiff_t position() const { return tos_ - stack_; }
 
-    void setStack(uintptr_t *stack, size_t tosIndex, size_t capacity) {
+    void setStack(uintptr_t* stack, size_t tosIndex, size_t capacity) {
         stack_ = stack;
         tos_ = stack + tosIndex;
         end_ = stack + capacity;
@@ -87,19 +88,19 @@ class MarkStack
             if (!enlarge(1))
                 return false;
         }
-        JS_ASSERT(tos_ < end_);
+        MOZ_ASSERT(tos_ < end_);
         *tos_++ = item;
         return true;
     }
 
     bool push(uintptr_t item1, uintptr_t item2, uintptr_t item3) {
-        uintptr_t *nextTos = tos_ + 3;
+        uintptr_t* nextTos = tos_ + 3;
         if (nextTos > end_) {
             if (!enlarge(3))
                 return false;
             nextTos = tos_ + 3;
         }
-        JS_ASSERT(nextTos <= end_);
+        MOZ_ASSERT(nextTos <= end_);
         tos_[0] = item1;
         tos_[1] = item2;
         tos_[2] = item3;
@@ -112,7 +113,7 @@ class MarkStack
     }
 
     uintptr_t pop() {
-        JS_ASSERT(!isEmpty());
+        MOZ_ASSERT(!isEmpty());
         return *--tos_;
     }
 
@@ -126,10 +127,27 @@ class MarkStack
     size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 };
 
+#ifdef DEBUG
+namespace gc {
+
+template <typename T>
+extern bool
+ZoneIsGCMarking(T* thing);
+
+template <typename T>
+extern bool
+ZoneIsAtomsZoneForString(JSRuntime* rt, T* thing);
+
+} /* namespace gc */
+#endif
+
+#define JS_COMPARTMENT_ASSERT(rt, thing) \
+    MOZ_ASSERT(gc::ZoneIsGCMarking((thing)) || gc::ZoneIsAtomsZoneForString((rt), (thing)))
+
 class GCMarker : public JSTracer
 {
   public:
-    explicit GCMarker(JSRuntime *rt);
+    explicit GCMarker(JSRuntime* rt);
     bool init(JSGCMode gcMode);
 
     void setMaxCapacity(size_t maxCap) { stack.setMaxCapacity(maxCap); }
@@ -139,21 +157,16 @@ class GCMarker : public JSTracer
     void stop();
     void reset();
 
-    void pushObject(ObjectImpl *obj) {
-        pushTaggedPtr(ObjectTag, obj);
-    }
-
-    void pushType(types::TypeObject *type) {
-        pushTaggedPtr(TypeTag, type);
-    }
-
-    void pushJitCode(jit::JitCode *code) {
-        pushTaggedPtr(JitCodeTag, code);
-    }
-
-    uint32_t getMarkColor() const {
-        return color;
-    }
+    // Mark the given GC thing and traverse its children at some point.
+    void traverse(JSObject* thing) { markAndPush(ObjectTag, thing); }
+    void traverse(ObjectGroup* thing) { markAndPush(GroupTag, thing); }
+    void traverse(jit::JitCode* thing) { markAndPush(JitCodeTag, thing); }
+    // The following traverse methods traverse immediately, go out-of-line to do so.
+    void traverse(JSScript* thing) { markAndTraverse(thing); }
+    void traverse(LazyScript* thing) { markAndTraverse(thing); }
+    // The other types are marked immediately and inline via a ScanFoo shared
+    // between PushMarkStack and the processMarkStackTop. Since ScanFoo is
+    // inline in Marking.cpp, we cannot inline it here, yet.
 
     /*
      * Care must be taken changing the mark color from gray to black. The cycle
@@ -163,21 +176,21 @@ class GCMarker : public JSTracer
      * objects that are still reachable.
      */
     void setMarkColorGray() {
-        JS_ASSERT(isDrained());
-        JS_ASSERT(color == gc::BLACK);
+        MOZ_ASSERT(isDrained());
+        MOZ_ASSERT(color == gc::BLACK);
         color = gc::GRAY;
     }
-
     void setMarkColorBlack() {
-        JS_ASSERT(isDrained());
-        JS_ASSERT(color == gc::GRAY);
+        MOZ_ASSERT(isDrained());
+        MOZ_ASSERT(color == gc::GRAY);
         color = gc::BLACK;
     }
+    uint32_t markColor() const { return color; }
 
-    inline void delayMarkingArena(gc::ArenaHeader *aheader);
-    void delayMarkingChildren(const void *thing);
-    void markDelayedChildren(gc::ArenaHeader *aheader);
-    bool markDelayedChildren(SliceBudget &budget);
+    void delayMarkingArena(gc::ArenaHeader* aheader);
+    void delayMarkingChildren(const void* thing);
+    void markDelayedChildren(gc::ArenaHeader* aheader);
+    bool markDelayedChildren(SliceBudget& budget);
     bool hasDelayedChildren() const {
         return !!unmarkedArenaStackTop;
     }
@@ -186,24 +199,7 @@ class GCMarker : public JSTracer
         return isMarkStackEmpty() && !unmarkedArenaStackTop;
     }
 
-    bool drainMarkStack(SliceBudget &budget);
-
-    /*
-     * Gray marking must be done after all black marking is complete. However,
-     * we do not have write barriers on XPConnect roots. Therefore, XPConnect
-     * roots must be accumulated in the first slice of incremental GC. We
-     * accumulate these roots in the each compartment's gcGrayRoots vector and
-     * then mark them later, after black marking is complete for each
-     * compartment. This accumulation can fail, but in that case we switch to
-     * non-incremental GC.
-     */
-    bool hasBufferedGrayRoots() const;
-    void startBufferingGrayRoots();
-    void endBufferingGrayRoots();
-    void resetBufferedGrayRoots();
-    void markBufferedGrayRoots(JS::Zone *zone);
-
-    static void GrayCallback(JSTracer *trc, void **thing, JSGCTraceKind kind);
+    bool drainMarkStack(SliceBudget& budget);
 
     void setGCMode(JSGCMode mode) { stack.setGCMode(mode); }
 
@@ -218,9 +214,9 @@ class GCMarker : public JSTracer
 
   private:
 #ifdef DEBUG
-    void checkZone(void *p);
+    void checkZone(void* p);
 #else
-    void checkZone(void *p) {}
+    void checkZone(void* p) {}
 #endif
 
     /*
@@ -231,8 +227,7 @@ class GCMarker : public JSTracer
     enum StackTag {
         ValueArrayTag,
         ObjectTag,
-        TypeTag,
-        XmlTag,
+        GroupTag,
         SavedValueArrayTag,
         JitCodeTag,
         LastTag = JitCodeTag
@@ -242,18 +237,49 @@ class GCMarker : public JSTracer
     static_assert(StackTagMask >= uintptr_t(LastTag), "The tag mask must subsume the tags.");
     static_assert(StackTagMask <= gc::CellMask, "The tag mask must be embeddable in a Cell*.");
 
-    void pushTaggedPtr(StackTag tag, void *ptr) {
+    // Push an object onto the stack for later tracing and assert that it has
+    // already been marked.
+    void repush(JSObject* obj) {
+        MOZ_ASSERT(gc::TenuredCell::fromPointer(obj)->isMarked(markColor()));
+        pushTaggedPtr(ObjectTag, obj);
+    }
+
+    template <typename T>
+    void markAndPush(StackTag tag, T* thing) {
+        if (mark(thing))
+            pushTaggedPtr(tag, thing);
+    }
+
+    template <typename T>
+    void markAndTraverse(T* thing) {
+        if (mark(thing))
+            markChildren(thing);
+    }
+
+    template <typename T>
+    void markChildren(T* thing);
+
+    // Mark the given GC thing, but do not trace its children. Return true
+    // if the thing became marked.
+    template <typename T>
+    bool mark(T* thing) {
+        JS_COMPARTMENT_ASSERT(runtime(), thing);
+        MOZ_ASSERT(!IsInsideNursery(gc::TenuredCell::fromPointer(thing)));
+        return gc::TenuredCell::fromPointer(thing)->markIfUnmarked(markColor());
+    }
+
+    void pushTaggedPtr(StackTag tag, void* ptr) {
         checkZone(ptr);
         uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
-        JS_ASSERT(!(addr & StackTagMask));
+        MOZ_ASSERT(!(addr & StackTagMask));
         if (!stack.push(addr | uintptr_t(tag)))
             delayMarkingChildren(ptr);
     }
 
-    void pushValueArray(JSObject *obj, void *start, void *end) {
+    void pushValueArray(JSObject* obj, void* start, void* end) {
         checkZone(obj);
 
-        JS_ASSERT(start <= end);
+        MOZ_ASSERT(start <= end);
         uintptr_t tagged = reinterpret_cast<uintptr_t>(obj) | GCMarker::ValueArrayTag;
         uintptr_t startAddr = reinterpret_cast<uintptr_t>(start);
         uintptr_t endAddr = reinterpret_cast<uintptr_t>(end);
@@ -270,28 +296,24 @@ class GCMarker : public JSTracer
         return stack.isEmpty();
     }
 
-    bool restoreValueArray(JSObject *obj, void **vpp, void **endp);
+    bool restoreValueArray(NativeObject* obj, void** vpp, void** endp);
     void saveValueRanges();
-    inline void processMarkStackTop(SliceBudget &budget);
+    inline void processMarkStackTop(SliceBudget& budget);
     void processMarkStackOther(uintptr_t tag, uintptr_t addr);
 
-    void appendGrayRoot(void *thing, JSGCTraceKind kind);
+    void markAndScanString(JSObject* source, JSString* str);
+    void markAndScanSymbol(JSObject* source, JS::Symbol* sym);
+
+    void appendGrayRoot(void* thing, JSGCTraceKind kind);
 
     /* The color is only applied to objects and functions. */
     uint32_t color;
 
     /* Pointer to the top of the stack of arenas we are delaying marking on. */
-    js::gc::ArenaHeader *unmarkedArenaStackTop;
+    js::gc::ArenaHeader* unmarkedArenaStackTop;
 
     /* Count of arenas that are currently in the stack. */
     mozilla::DebugOnly<size_t> markLaterArenas;
-
-    enum GrayBufferState {
-        GRAY_BUFFER_UNUSED,
-        GRAY_BUFFER_OK,
-        GRAY_BUFFER_FAILED
-    };
-    GrayBufferState grayBufferState;
 
     /* Assert that start and stop are called with correct ordering. */
     mozilla::DebugOnly<bool> started;
@@ -303,15 +325,39 @@ class GCMarker : public JSTracer
     mozilla::DebugOnly<bool> strictCompartmentChecking;
 };
 
+// Append traced things to a buffer on the zone for use later in the GC.
+// See the comment in GCRuntime.h above grayBufferState for details.
+class BufferGrayRootsTracer : public JS::CallbackTracer
+{
+    // Set to false if we OOM while buffering gray roots.
+    bool bufferingGrayRootsFailed;
+
+    void appendGrayRoot(void* thing, JSGCTraceKind kind);
+
+  public:
+    explicit BufferGrayRootsTracer(JSRuntime* rt)
+      : JS::CallbackTracer(rt, grayTraceCallback), bufferingGrayRootsFailed(false)
+    {}
+
+    static void grayTraceCallback(JS::CallbackTracer* trc, void** thingp, JSGCTraceKind kind) {
+        static_cast<BufferGrayRootsTracer*>(trc)->appendGrayRoot(*thingp, kind);
+    }
+
+    bool failed() const { return bufferingGrayRootsFailed; }
+};
+
 void
-SetMarkStackLimit(JSRuntime *rt, size_t limit);
+SetMarkStackLimit(JSRuntime* rt, size_t limit);
+
+// Return true if this trace is happening on behalf of gray buffering during
+// the marking phase of incremental GC.
+inline bool
+IsBufferingGrayRoots(JSTracer* trc)
+{
+    return trc->isCallbackTracer() &&
+           trc->asCallbackTracer()->hasCallback(BufferGrayRootsTracer::grayTraceCallback);
+}
 
 } /* namespace js */
-
-/*
- * Macro to test if a traversal is the marking phase of the GC.
- */
-#define IS_GC_MARKING_TRACER(trc) \
-    ((trc)->callback == nullptr || (trc)->callback == GCMarker::GrayCallback)
 
 #endif /* js_Tracer_h */

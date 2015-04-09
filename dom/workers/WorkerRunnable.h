@@ -99,6 +99,14 @@ protected:
   virtual ~WorkerRunnable()
   { }
 
+  // Returns true if this runnable should be dispatched to the debugger queue,
+  // and false otherwise.
+  virtual bool
+  IsDebuggerRunnable() const;
+
+  nsIGlobalObject*
+  DefaultGlobalObject() const;
+
   // By default asserts that Dispatch() is being called on the right thread
   // (ParentThread if |mTarget| is WorkerThread, or WorkerThread otherwise).
   // Also increments the busy count of |mWorkerPrivate| if targeting the
@@ -133,6 +141,38 @@ protected:
   NS_DECL_NSIRUNNABLE
 };
 
+// This runnable is used to send a message to a worker debugger.
+class WorkerDebuggerRunnable : public WorkerRunnable
+{
+protected:
+  explicit WorkerDebuggerRunnable(WorkerPrivate* aWorkerPrivate)
+  : WorkerRunnable(aWorkerPrivate, WorkerThreadUnchangedBusyCount)
+  {
+  }
+
+  virtual ~WorkerDebuggerRunnable()
+  { }
+
+private:
+  virtual bool
+  IsDebuggerRunnable() const override
+  {
+    return true;
+  }
+
+  virtual bool
+  PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
+  {
+    AssertIsOnMainThread();
+
+    return true;
+  }
+
+  virtual void
+  PostDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate,
+               bool aDispatchResult) override;
+};
+
 // This runnable is used to send a message directly to a worker's sync loop.
 class WorkerSyncRunnable : public WorkerRunnable
 {
@@ -151,7 +191,7 @@ protected:
 
 private:
   virtual bool
-  DispatchInternal() MOZ_OVERRIDE;
+  DispatchInternal() override;
 };
 
 // This runnable is identical to WorkerSyncRunnable except it is meant to be
@@ -180,7 +220,7 @@ protected:
 
 private:
   virtual bool
-  PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate) MOZ_OVERRIDE
+  PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
   {
     AssertIsOnMainThread();
     return true;
@@ -188,7 +228,7 @@ private:
 
   virtual void
   PostDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate,
-               bool aDispatchResult) MOZ_OVERRIDE;
+               bool aDispatchResult) override;
 };
 
 // This runnable is used to stop a sync loop . As sync loops keep the busy count
@@ -220,10 +260,10 @@ protected:
 
 private:
   virtual bool
-  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) MOZ_OVERRIDE;
+  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override;
 
   virtual bool
-  DispatchInternal() MOZ_OVERRIDE;
+  DispatchInternal() override;
 };
 
 // This runnable is identical to StopSyncLoopRunnable except it is meant to be
@@ -247,7 +287,7 @@ protected:
 
 private:
   virtual bool
-  PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate) MOZ_OVERRIDE
+  PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
   {
     AssertIsOnMainThread();
     return true;
@@ -255,7 +295,7 @@ private:
 
   virtual void
   PostDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate,
-               bool aDispatchResult) MOZ_OVERRIDE;
+               bool aDispatchResult) override;
 };
 
 // This runnable is processed as soon as it is received by the worker,
@@ -285,7 +325,7 @@ public:
 
 private:
   virtual bool
-  DispatchInternal() MOZ_OVERRIDE;
+  DispatchInternal() override;
 
   // Should only be called by WorkerPrivate::DoRunLoop.
   using WorkerRunnable::Cancel;
@@ -296,7 +336,7 @@ private:
 class MainThreadWorkerControlRunnable : public WorkerControlRunnable
 {
 protected:
-  MainThreadWorkerControlRunnable(WorkerPrivate* aWorkerPrivate)
+  explicit MainThreadWorkerControlRunnable(WorkerPrivate* aWorkerPrivate)
   : WorkerControlRunnable(aWorkerPrivate, WorkerThreadUnchangedBusyCount)
   { }
 
@@ -304,7 +344,7 @@ protected:
   { }
 
   virtual bool
-  PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate) MOZ_OVERRIDE
+  PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
   {
     AssertIsOnMainThread();
     return true;
@@ -312,7 +352,7 @@ protected:
 
   virtual void
   PostDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate,
-               bool aDispatchResult) MOZ_OVERRIDE;
+               bool aDispatchResult) override;
 };
 
 // A WorkerRunnable that should be dispatched from the worker to itself for
@@ -324,7 +364,7 @@ protected:
 class WorkerSameThreadRunnable : public WorkerRunnable
 {
 protected:
-  WorkerSameThreadRunnable(WorkerPrivate* aWorkerPrivate)
+  explicit WorkerSameThreadRunnable(WorkerPrivate* aWorkerPrivate)
   : WorkerRunnable(aWorkerPrivate, WorkerThreadModifyBusyCount)
   { }
 
@@ -332,15 +372,15 @@ protected:
   { }
 
   virtual bool
-  PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate) MOZ_OVERRIDE;
+  PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override;
 
   virtual void
   PostDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate,
-               bool aDispatchResult) MOZ_OVERRIDE;
+               bool aDispatchResult) override;
 
   virtual void
   PostRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate,
-          bool aRunResult) MOZ_OVERRIDE;
+          bool aRunResult) override;
 };
 
 // Base class for the runnable objects, which makes a synchronous call to
@@ -353,7 +393,7 @@ protected:
   WorkerPrivate* mWorkerPrivate;
   nsCOMPtr<nsIEventTarget> mSyncLoopTarget;
 
-  WorkerMainThreadRunnable(WorkerPrivate* aWorkerPrivate);
+  explicit WorkerMainThreadRunnable(WorkerPrivate* aWorkerPrivate);
   ~WorkerMainThreadRunnable() {}
 
   virtual bool MainThreadRun() = 0;
@@ -362,7 +402,7 @@ public:
   bool Dispatch(JSContext* aCx);
 
 private:
-  NS_IMETHOD Run() MOZ_OVERRIDE;  
+  NS_IMETHOD Run() override;  
 };
 
 END_WORKERS_NAMESPACE

@@ -20,7 +20,7 @@ struct nsXBLParameter {
   nsXBLParameter* mNext;
   char* mName;
 
-  nsXBLParameter(const nsAString& aName) {
+  explicit nsXBLParameter(const nsAString& aName) {
     MOZ_COUNT_CTOR(nsXBLParameter);
     mName = ToNewCString(aName);
     mNext = nullptr;
@@ -28,7 +28,7 @@ struct nsXBLParameter {
 
   ~nsXBLParameter() {
     MOZ_COUNT_DTOR(nsXBLParameter);
-    nsMemory::Free(mName);
+    free(mName);
     NS_CONTENT_DELETE_LIST_MEMBER(nsXBLParameter, this, mNext);
   }
 };
@@ -81,7 +81,7 @@ struct nsXBLUncompiledMethod {
 class nsXBLProtoImplMethod: public nsXBLProtoImplMember
 {
 public:
-  nsXBLProtoImplMethod(const char16_t* aName);
+  explicit nsXBLProtoImplMethod(const char16_t* aName);
   virtual ~nsXBLProtoImplMethod();
 
   void AppendBodyText(const nsAString& aBody);
@@ -90,14 +90,14 @@ public:
   void SetLineNumber(uint32_t aLineNumber);
   
   virtual nsresult InstallMember(JSContext* aCx,
-                                 JS::Handle<JSObject*> aTargetClassObject) MOZ_OVERRIDE;
-  virtual nsresult CompileMember(const nsCString& aClassStr,
-                                 JS::Handle<JSObject*> aClassObject) MOZ_OVERRIDE;
+                                 JS::Handle<JSObject*> aTargetClassObject) override;
+  virtual nsresult CompileMember(mozilla::dom::AutoJSAPI& jsapi, const nsString& aClassStr,
+                                 JS::Handle<JSObject*> aClassObject) override;
 
-  virtual void Trace(const TraceCallbacks& aCallbacks, void *aClosure) MOZ_OVERRIDE;
+  virtual void Trace(const TraceCallbacks& aCallbacks, void *aClosure) override;
 
   nsresult Read(nsIObjectInputStream* aStream);
-  virtual nsresult Write(nsIObjectOutputStream* aStream) MOZ_OVERRIDE;
+  virtual nsresult Write(nsIObjectOutputStream* aStream) override;
 
   bool IsCompiled() const
   {
@@ -135,7 +135,7 @@ protected:
 
 class nsXBLProtoImplAnonymousMethod : public nsXBLProtoImplMethod {
 public:
-  nsXBLProtoImplAnonymousMethod(const char16_t* aName) :
+  explicit nsXBLProtoImplAnonymousMethod(const char16_t* aName) :
     nsXBLProtoImplMethod(aName)
   {}
   
@@ -145,7 +145,7 @@ public:
   // binding instantiations (though they may hang out in mMembers on the
   // prototype implementation).
   virtual nsresult InstallMember(JSContext* aCx,
-                                 JS::Handle<JSObject*> aTargetClassObject) MOZ_OVERRIDE {
+                                 JS::Handle<JSObject*> aTargetClassObject) override {
     return NS_OK;
   }
 

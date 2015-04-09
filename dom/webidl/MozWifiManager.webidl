@@ -14,7 +14,7 @@ enum ConnectionStatus {
   "associated",
   "connected",
   "disconnected",
-  "wps-timeout",
+  "wps-timedout",
   "wps-failed",
   "wps-overlapped",
   "connectingfailed"
@@ -28,6 +28,8 @@ dictionary WifiWPSInfo {
 
 dictionary NetworkProperties {
   DOMString ssid;
+  long mode;
+  long frequency;
   sequence<DOMString>? security;
   sequence<DOMString>? capabilities;
   boolean known;
@@ -56,6 +58,7 @@ dictionary NetworkProperties {
   boolean dontConnect;
   DOMString serverCertificate;
   DOMString subjectMatch;
+  DOMString userCertificate;
 };
 
 [Constructor(optional NetworkProperties properties),
@@ -63,6 +66,8 @@ dictionary NetworkProperties {
  Func="Navigator::HasWifiManagerSupport"]
 interface MozWifiNetwork {
   readonly attribute DOMString ssid;
+  readonly attribute long mode;
+  readonly attribute long frequency;
   [Constant, Cached] readonly attribute sequence<DOMString>? security;
   [Constant, Cached] readonly attribute sequence<DOMString>? capabilities;
   readonly attribute boolean known;
@@ -92,6 +97,7 @@ interface MozWifiNetwork {
            attribute boolean? dontConnect;
            attribute DOMString? serverCertificate;
            attribute DOMString? subjectMatch;
+           attribute DOMString? userCertificate;
 };
 
 [JSImplementation="@mozilla.org/mozwificonnection;1",
@@ -122,8 +128,17 @@ dictionary IPConfiguration {
 
 [JSImplementation="@mozilla.org/wifimanager;1",
  NavigatorProperty="mozWifiManager",
- Func="Navigator::HasWifiManagerSupport"]
+ Func="Navigator::HasWifiManagerSupport",
+ UnsafeInPrerendering]
 interface MozWifiManager : EventTarget {
+  /**
+   * Turn on/off wifi functionality.
+   * @param enable true for enable, false for disable.
+   * onsuccess: Wifi enable/disable successfully, including no status change.
+   * onerror: Wifi enable/disable failed or prohibited.
+   */
+  DOMRequest setWifiEnabled(boolean enabled);
+
   /**
    * Returns the list of currently available networks.
    * onsuccess: We have obtained the current list of networks. request.value

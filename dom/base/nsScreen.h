@@ -122,9 +122,9 @@ public:
   bool MozLockOrientation(const mozilla::dom::Sequence<nsString>& aOrientations, ErrorResult& aRv);
   void MozUnlockOrientation();
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
-  void Notify(const mozilla::hal::ScreenConfiguration& aConfiguration);
+  void Notify(const mozilla::hal::ScreenConfiguration& aConfiguration) override;
 
 protected:
   nsDeviceContext* GetDeviceContext();
@@ -134,7 +134,7 @@ protected:
   mozilla::dom::ScreenOrientation mOrientation;
 
 private:
-  class FullScreenEventListener MOZ_FINAL : public nsIDOMEventListener
+  class FullScreenEventListener final : public nsIDOMEventListener
   {
     ~FullScreenEventListener() {}
   public:
@@ -144,7 +144,7 @@ private:
     NS_DECL_NSIDOMEVENTLISTENER
   };
 
-  nsScreen(nsPIDOMWindow* aWindow);
+  explicit nsScreen(nsPIDOMWindow* aWindow);
   virtual ~nsScreen();
 
   enum LockPermission {

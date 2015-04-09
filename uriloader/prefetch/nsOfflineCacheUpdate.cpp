@@ -3,10 +3,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#if defined(MOZ_LOGGING)
-#define FORCE_PR_LOG
-#endif
-
 #include "nsOfflineCacheUpdate.h"
 
 #include "nsCPrefetchService.h"
@@ -14,7 +10,6 @@
 #include "nsIApplicationCacheContainer.h"
 #include "nsIApplicationCacheChannel.h"
 #include "nsIApplicationCacheService.h"
-#include "nsICache.h"
 #include "nsICachingChannel.h"
 #include "nsIContent.h"
 #include "mozilla/dom/Element.h"
@@ -41,6 +36,7 @@
 #include "nsIAsyncVerifyRedirectCallback.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Attributes.h"
+#include "nsContentUtils.h"
 
 #include "nsXULAppAPI.h"
 
@@ -119,9 +115,9 @@ LogToConsole(const char * message, nsOfflineCacheUpdateItem * item = nullptr)
 // nsManifestCheck
 //-----------------------------------------------------------------------------
 
-class nsManifestCheck MOZ_FINAL : public nsIStreamListener
-                                , public nsIChannelEventSink
-                                , public nsIInterfaceRequestor
+class nsManifestCheck final : public nsIStreamListener
+                            , public nsIChannelEventSink
+                            , public nsIInterfaceRequestor
 {
 public:
     nsManifestCheck(nsOfflineCacheUpdate *aUpdate,
@@ -180,11 +176,15 @@ nsManifestCheck::Begin()
 
     rv = mManifestHash->Init(nsICryptoHash::MD5);
     NS_ENSURE_SUCCESS(rv, rv);
-
     rv = NS_NewChannel(getter_AddRefs(mChannel),
                        mURI,
-                       nullptr, nullptr, nullptr,
+                       nsContentUtils::GetSystemPrincipal(),
+                       nsILoadInfo::SEC_NORMAL,
+                       nsIContentPolicy::TYPE_OTHER,
+                       nullptr,   // loadGroup
+                       nullptr,   // aCallbacks
                        nsIRequest::LOAD_BYPASS_CACHE);
+
     NS_ENSURE_SUCCESS(rv, rv);
 
     // configure HTTP specific stuff
@@ -363,8 +363,7 @@ nsOfflineCacheUpdateItem::OpenChannel(nsOfflineCacheUpdate *aUpdate)
     NS_ENSURE_SUCCESS(rv, rv);
 
     uint32_t flags = nsIRequest::LOAD_BACKGROUND |
-                     nsICachingChannel::LOAD_ONLY_IF_MODIFIED |
-                     nsICachingChannel::LOAD_CHECK_OFFLINE_CACHE;
+                     nsICachingChannel::LOAD_ONLY_IF_MODIFIED;
 
     if (mApplicationCache == mPreviousApplicationCache) {
         // Same app cache to read from and to write to is used during
@@ -375,8 +374,13 @@ nsOfflineCacheUpdateItem::OpenChannel(nsOfflineCacheUpdate *aUpdate)
 
     rv = NS_NewChannel(getter_AddRefs(mChannel),
                        mURI,
-                       nullptr, nullptr, this,
+                       nsContentUtils::GetSystemPrincipal(),
+                       nsILoadInfo::SEC_NORMAL,
+                       nsIContentPolicy::TYPE_OTHER,
+                       nullptr,  // aLoadGroup
+                       this,     // aCallbacks
                        flags);
+
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIApplicationCacheChannel> appCacheChannel =
@@ -1985,13 +1989,27 @@ void
 nsOfflineCacheUpdate::SetOwner(nsOfflineCacheUpdateOwner *aOwner)
 {
     NS_ASSERTION(!mOwner, "Tried to set cache update owner twice.");
-    mOwner = aOwner->asWeakPtr();
+    mOwner = aOwner;
 }
 
 bool
 nsOfflineCacheUpdate::IsForGroupID(const nsCSubstring &groupID)
 {
     return mGroupID == groupID;
+}
+
+bool
+nsOfflineCacheUpdate::IsForProfile(nsIFile* aCustomProfileDir)
+{
+    if (!mCustomProfileDir && !aCustomProfileDir)
+        return true;
+    if (!mCustomProfileDir || !aCustomProfileDir)
+        return false;
+
+    bool equals;
+    nsresult rv = mCustomProfileDir->Equals(aCustomProfileDir, &equals);
+
+    return NS_SUCCEEDED(rv) && equals;
 }
 
 nsresult

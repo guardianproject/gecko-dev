@@ -4,42 +4,79 @@
 
 package org.mozilla.search.autocomplete;
 
+import java.util.List;
+
+import org.mozilla.gecko.R;
+import org.mozilla.search.AcceptsSearchQuery;
+import org.mozilla.search.autocomplete.SuggestionsFragment.Suggestion;
+
 import android.content.Context;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
+import android.widget.TextView;
 
 /**
  * The adapter that is used to populate the autocomplete rows.
  */
-class AutoCompleteAdapter extends ArrayAdapter<AutoCompleteModel> {
+class AutoCompleteAdapter extends ArrayAdapter<Suggestion> {
 
-    private final AcceptsJumpTaps acceptsJumpTaps;
+    private final AcceptsSearchQuery searchListener;
 
-    public AutoCompleteAdapter(Context context, AcceptsJumpTaps acceptsJumpTaps) {
+    private final LayoutInflater inflater;
+
+    public AutoCompleteAdapter(Context context) {
         // Uses '0' for the template id since we are overriding getView
         // and supplying our own view.
         super(context, 0);
-        this.acceptsJumpTaps = acceptsJumpTaps;
+
+        if (context instanceof AcceptsSearchQuery) {
+            searchListener = (AcceptsSearchQuery) context;
+        } else {
+            throw new ClassCastException(context.toString() + " must implement AcceptsSearchQuery.");
+        }
+
+        // Disable notifying on change. We will notify ourselves in update.
+        setNotifyOnChange(false);
+
+        inflater = LayoutInflater.from(context);
     }
 
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
-        AutoCompleteRowView view;
-
         if (convertView == null) {
-            view = new AutoCompleteRowView(getContext());
-        } else {
-            view = (AutoCompleteRowView) convertView;
+            convertView = inflater.inflate(R.layout.search_suggestions_row, null);
         }
 
-        view.setOnJumpListener(acceptsJumpTaps);
+        final Suggestion suggestion = getItem(position);
 
+        final TextView textView = (TextView) convertView.findViewById(R.id.auto_complete_row_text);
+        textView.setText(suggestion.display);
 
-        AutoCompleteModel model = getItem(position);
+        final View jumpButton = convertView.findViewById(R.id.auto_complete_row_jump_button);
+        jumpButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                searchListener.onSuggest(suggestion.value);
+            }
+        });
 
-        view.setMainText(model.getMainText());
+        return convertView;
+    }
 
-        return view;
+    /**
+     * Updates adapter content with new list of search suggestions.
+     *
+     * @param suggestions List of search suggestions.
+     */
+    public void update(List<Suggestion> suggestions) {
+        clear();
+        if (suggestions != null) {
+            for (Suggestion s : suggestions) {
+                add(s);
+            }
+        }
+        notifyDataSetChanged();
     }
 }

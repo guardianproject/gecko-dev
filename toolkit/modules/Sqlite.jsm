@@ -10,12 +10,14 @@ this.EXPORTED_SYMBOLS = [
 
 const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
+// The time to wait before considering a transaction stuck and rejecting it.
+const TRANSACTIONS_QUEUE_TIMEOUT_MS = 120000 // 2 minutes
+
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/Timer.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "AsyncShutdown",
                                   "resource://gre/modules/AsyncShutdown.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                  "resource://gre/modules/Promise.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                   "resource://gre/modules/Services.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
@@ -31,11 +33,20 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
 XPCOMUtils.defineLazyServiceGetter(this, "FinalizationWitnessService",
                                    "@mozilla.org/toolkit/finalizationwitness;1",
                                    "nsIFinalizationWitnessService");
-
+XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
+                                  "resource://gre/modules/PromiseUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "console",
+                                  "resource://gre/modules/devtools/Console.jsm");
 
 // Counts the number of created connections per database basename(). This is
 // used for logging to distinguish connection instances.
 let connectionCounters = new Map();
+
+// Tracks identifiers of wrapped connections, that are Storage connections
+// opened through mozStorage and then wrapped by Sqlite.jsm to use its syntactic
+// sugar API.  Since these connections have an unknown origin, we use this set
+// to differentiate their behavior.
+let wrappedConnections = new Set();
 
 /**
  * Once `true`, reject any attempt to open or close a database.
@@ -67,6 +78,20 @@ function logScriptError(message) {
 }
 
 /**
+ * Gets connection identifier from its database file path.
+ *
+ * @param path
+ *        A file string path pointing to a database file.
+ * @return the connection identifier.
+ */
+function getIdentifierByPath(path) {
+  let basename = OS.Path.basename(path);
+  let number = connectionCounters.get(basename) || 0;
+  connectionCounters.set(basename, number + 1);
+  return basename + "#" + number;
+}
+
+/**
  * Barriers used to ensure that Sqlite.jsm is shutdown after all
  * its clients.
  */
@@ -95,17 +120,17 @@ XPCOMUtils.defineLazyGetter(this, "Barriers", () => {
    * The observer is passed the connection identifier of the database
    * connection that is being finalized.
    */
-  let finalizationObserver = function (subject, topic, connectionIdentifier) {
-    let connectionData = ConnectionData.byId.get(connectionIdentifier);
+  let finalizationObserver = function (subject, topic, identifier) {
+    let connectionData = ConnectionData.byId.get(identifier);
 
     if (connectionData === undefined) {
       logScriptError("Error: Attempt to finalize unknown Sqlite connection: " +
-                     connectionIdentifier + "\n");
+                     identifier + "\n");
       return;
     }
 
-    ConnectionData.byId.delete(connectionIdentifier);
-    logScriptError("Warning: Sqlite connection '" + connectionIdentifier +
+    ConnectionData.byId.delete(identifier);
+    logScriptError("Warning: Sqlite connection '" + identifier +
                    "' was not properly closed. Auto-close triggered by garbage collection.\n");
     connectionData.close();
   };
@@ -139,14 +164,14 @@ XPCOMUtils.defineLazyGetter(this, "Barriers", () => {
         // We are waiting for the connections to close. The interesting
         // status is therefore the list of connections still pending.
         return { description: "Waiting for connections to close",
-                 status: Barriers.connections.status };
+                 state: Barriers.connections.state };
       }
 
       // We are still in the first stage: waiting for the barrier
       // to be lifted. The interesting status is therefore that of
       // the barrier.
       return { description: "Waiting for the barrier to be lifted",
-               status: Barriers.shutdown.status };
+               state: Barriers.shutdown.state };
   });
 
   return Barriers;
@@ -170,13 +195,17 @@ XPCOMUtils.defineLazyGetter(this, "Barriers", () => {
  * OpenedConnection needs to use the methods in this object, it will
  * dispatch its method calls here.
  */
-function ConnectionData(connection, basename, number, options) {
-  this._log = Log.repository.getLoggerWithMessagePrefix("Sqlite.Connection." + basename,
-                                                        "Conn #" + number + ": ");
+function ConnectionData(connection, identifier, options={}) {
+  this._log = Log.repository.getLoggerWithMessagePrefix("Sqlite.Connection",
+                                                        identifier + ": ");
   this._log.info("Opened");
 
   this._dbConn = connection;
-  this._connectionIdentifier = basename + " Conn #" + number;
+
+  // This is a unique identifier for the connection, generated through
+  // getIdentifierByPath.  It may be used for logging or as a key in Maps.
+  this._identifier = identifier;
+
   this._open = true;
 
   this._cachedStatements = new Map();
@@ -190,7 +219,10 @@ function ConnectionData(connection, basename, number, options) {
   // Increments for each executed statement for the life of the connection.
   this._statementCounter = 0;
 
-  this._inProgressTransaction = null;
+  this._hasInProgressTransaction = false;
+  // Manages a chain of transactions promises, so that new transactions
+  // always happen in queue to the previous ones.  It never rejects.
+  this._transactionQueue = Promise.resolve();
 
   this._idleShrinkMS = options.shrinkMemoryOnConnectionIdleMS;
   if (this._idleShrinkMS) {
@@ -200,17 +232,19 @@ function ConnectionData(connection, basename, number, options) {
     // shrinking now would not do anything.
   }
 
-  this._deferredClose = Promise.defer();
+  // Deferred whose promise is resolved when the connection closing procedure
+  // is complete.
+  this._deferredClose = PromiseUtils.defer();
   this._closeRequested = false;
 
   Barriers.connections.client.addBlocker(
-    this._connectionIdentifier + ": waiting for shutdown",
+    this._identifier + ": waiting for shutdown",
     this._deferredClose.promise,
     () =>  ({
-      identifier: this._connectionIdentifier,
+      identifier: this._identifier,
       isCloseRequested: this._closeRequested,
       hasDbConn: !!this._dbConn,
-      hasInProgressTransaction: !!this._inProgressTransaction,
+      hasInProgressTransaction: this._hasInProgressTransaction,
       pendingStatements: this._pendingStatements.size,
       statementCounter: this._statementCounter,
     })
@@ -224,7 +258,7 @@ function ConnectionData(connection, basename, number, options) {
  * database. Used by finalization witnesses to be able to close opened
  * connections on garbage collection.
  *
- * Key: _connectionIdentifier of ConnectionData
+ * Key: _identifier of ConnectionData
  * Value: ConnectionData object
  */
 ConnectionData.byId = new Map();
@@ -244,23 +278,16 @@ ConnectionData.prototype = Object.freeze({
     //
     // If we don't have a transaction in progress, we can proceed with shutdown
     // immediately.
-    if (!this._inProgressTransaction) {
-      this._finalize(this._deferredClose);
-      return this._deferredClose.promise;
+    if (!this._hasInProgressTransaction) {
+      return this._finalize();
     }
 
-    // Else if we do have a transaction in progress, we forcefully roll it
-    // back. This is an async task, so we wait on it to finish before
-    // performing finalization.
+    // If instead we do have a transaction in progress, it might be rollback-ed
+    // automaticall by closing the connection.  Regardless, we wait for its
+    // completion, next enqueued transactions will be rejected.
     this._log.warn("Transaction in progress at time of close. Rolling back.");
 
-    let onRollback = this._finalize.bind(this, this._deferredClose);
-
-    this.execute("ROLLBACK TRANSACTION").then(onRollback, onRollback);
-    this._inProgressTransaction.reject(new Error("Connection being closed."));
-    this._inProgressTransaction = null;
-
-    return this._deferredClose.promise;
+    return this._transactionQueue.then(() => this._finalize());
   },
 
   clone: function (readOnly=false) {
@@ -278,7 +305,7 @@ ConnectionData.prototype = Object.freeze({
     return cloneStorageConnection(options);
   },
 
-  _finalize: function (deferred) {
+  _finalize: function () {
     this._log.debug("Finalizing connection.");
     // Cancel any pending statements.
     for (let [k, statement] of this._pendingStatements) {
@@ -304,15 +331,24 @@ ConnectionData.prototype = Object.freeze({
     // function and asyncClose() finishing. See also bug 726990.
     this._open = false;
 
-    this._log.debug("Calling asyncClose().");
-    this._dbConn.asyncClose(() => {
+    // We must always close the connection at the Sqlite.jsm-level, not
+    // necessarily at the mozStorage-level.
+    let markAsClosed = () => {
       this._log.info("Closed");
       this._dbConn = null;
       // Now that the connection is closed, no need to keep
       // a blocker for Barriers.connections.
-      Barriers.connections.client.removeBlocker(deferred.promise);
-      deferred.resolve();
-    });
+      Barriers.connections.client.removeBlocker(this._deferredClose.promise);
+      this._deferredClose.resolve();
+    }
+    if (wrappedConnections.has(this._identifier)) {
+      wrappedConnections.delete(this._identifier);
+      markAsClosed();
+    } else {
+      this._log.debug("Calling asyncClose().");
+      this._dbConn.asyncClose(markAsClosed);
+    }
+    return this._deferredClose.promise;
   },
 
   executeCached: function (sql, params=null, onRow=null) {
@@ -330,25 +366,23 @@ ConnectionData.prototype = Object.freeze({
 
     this._clearIdleShrinkTimer();
 
-    let deferred = Promise.defer();
-
-    try {
-      this._executeStatement(sql, statement, params, onRow).then(
-        result => {
-          this._startIdleShrinkTimer();
-          deferred.resolve(result);
-        },
-        error => {
-          this._startIdleShrinkTimer();
-          deferred.reject(error);
-        }
-      );
-    } catch (ex) {
-      this._startIdleShrinkTimer();
-      throw ex;
-    }
-
-    return deferred.promise;
+    return new Promise((resolve, reject) => {
+      try {
+        this._executeStatement(sql, statement, params, onRow).then(
+          result => {
+            this._startIdleShrinkTimer();
+            resolve(result);
+          },
+          error => {
+            this._startIdleShrinkTimer();
+            reject(error);
+          }
+        );
+      } catch (ex) {
+        this._startIdleShrinkTimer();
+        throw ex;
+      }
+    });
   },
 
   execute: function (sql, params=null, onRow=null) {
@@ -370,103 +404,132 @@ ConnectionData.prototype = Object.freeze({
       this._startIdleShrinkTimer();
     };
 
-    let deferred = Promise.defer();
-
-    try {
-      this._executeStatement(sql, statement, params, onRow).then(
-        rows => {
-          onFinished();
-          deferred.resolve(rows);
-        },
-        error => {
-          onFinished();
-          deferred.reject(error);
-        }
-      );
-    } catch (ex) {
-      onFinished();
-      throw ex;
-    }
-
-    return deferred.promise;
+    return new Promise((resolve, reject) => {
+      try {
+        this._executeStatement(sql, statement, params, onRow).then(
+          rows => {
+            onFinished();
+            resolve(rows);
+          },
+          error => {
+            onFinished();
+            reject(error);
+          }
+        );
+      } catch (ex) {
+        onFinished();
+        throw ex;
+      }
+    });
   },
 
   get transactionInProgress() {
-    return this._open && !!this._inProgressTransaction;
+    return this._open && this._hasInProgressTransaction;
   },
 
   executeTransaction: function (func, type) {
     this.ensureOpen();
 
-    if (this._inProgressTransaction) {
-      throw new Error("A transaction is already active. Only one transaction " +
-                      "can be active at a time.");
-    }
-
     this._log.debug("Beginning transaction");
-    let deferred = Promise.defer();
-    this._inProgressTransaction = deferred;
-    Task.spawn(function doTransaction() {
-      // It's tempting to not yield here and rely on the implicit serial
-      // execution of issued statements. However, the yield serves an important
-      // purpose: catching errors in statement execution.
-      yield this.execute("BEGIN " + type + " TRANSACTION");
 
-      let result;
-      try {
-        result = yield Task.spawn(func);
-      } catch (ex) {
-        // It's possible that a request to close the connection caused the
-        // error.
-        // Assertion: close() will unset
-        // this._inProgressTransaction when called.
-        if (!this._inProgressTransaction) {
-          this._log.warn("Connection was closed while performing transaction. " +
-                         "Received error should be due to closed connection: " +
-                         CommonUtils.exceptionStr(ex));
-          throw ex;
+    let promise = this._transactionQueue.then(() => {
+      if (this._closeRequested) {
+        throw new Error("Transaction canceled due to a closed connection.");
+      }
+
+      let transactionPromise = Task.spawn(function* () {
+        // At this point we should never have an in progress transaction, since
+        // they are enqueued.
+        if (this._hasInProgressTransaction) {
+          console.error("Unexpected transaction in progress when trying to start a new one.");
         }
-
-        this._log.warn("Error during transaction. Rolling back: " +
-                       CommonUtils.exceptionStr(ex));
+        this._hasInProgressTransaction = true;
         try {
-          yield this.execute("ROLLBACK TRANSACTION");
-        } catch (inner) {
-          this._log.warn("Could not roll back transaction. This is weird: " +
-                         CommonUtils.exceptionStr(inner));
+          // We catch errors in statement execution to detect nested transactions.
+          try {
+            yield this.execute("BEGIN " + type + " TRANSACTION");
+          } catch (ex) {
+            // Unfortunately, if we are wrapping an existing connection, a
+            // transaction could have been started by a client of the same
+            // connection that doesn't use Sqlite.jsm (e.g. C++ consumer).
+            // The best we can do is proceed without a transaction and hope
+            // things won't break.
+            if (wrappedConnections.has(this._identifier)) {
+              this._log.warn("A new transaction could not be started cause the wrapped connection had one in progress: " +
+                             CommonUtils.exceptionStr(ex));
+              // Unmark the in progress transaction, since it's managed by
+              // some other non-Sqlite.jsm client.  See the comment above.
+              this._hasInProgressTransaction = false;
+            } else {
+              this._log.warn("A transaction was already in progress, likely a nested transaction: " +
+                             CommonUtils.exceptionStr(ex));
+              throw ex;
+            }
+          }
+
+          let result;
+          try {
+            result = yield Task.spawn(func);
+          } catch (ex) {
+            // It's possible that the exception has been caused by trying to
+            // close the connection in the middle of a transaction.
+            if (this._closeRequested) {
+              this._log.warn("Connection closed while performing a transaction: " +
+                             CommonUtils.exceptionStr(ex));
+            } else {
+              this._log.warn("Error during transaction. Rolling back: " +
+                             CommonUtils.exceptionStr(ex));
+              // If we began a transaction, we must rollback it.
+              if (this._hasInProgressTransaction) {
+                try {
+                  yield this.execute("ROLLBACK TRANSACTION");
+                } catch (inner) {
+                  this._log.warn("Could not roll back transaction: " +
+                                 CommonUtils.exceptionStr(inner));
+                }
+              }
+            }
+            // Rethrow the exception.
+            throw ex;
+          }
+
+          // See comment above about connection being closed during transaction.
+          if (this._closeRequested) {
+            this._log.warn("Connection closed before committing the transaction.");
+            throw new Error("Connection closed before committing the transaction.");
+          }
+
+          // If we began a transaction, we must commit it.
+          if (this._hasInProgressTransaction) {
+            try {
+              yield this.execute("COMMIT TRANSACTION");
+            } catch (ex) {
+              this._log.warn("Error committing transaction: " +
+                             CommonUtils.exceptionStr(ex));
+              throw ex;
+            }
+          }
+
+          return result;
+        } finally {
+          this._hasInProgressTransaction = false;
         }
+      }.bind(this));
 
-        throw ex;
-      }
-
-      // See comment above about connection being closed during transaction.
-      if (!this._inProgressTransaction) {
-        this._log.warn("Connection was closed while performing transaction. " +
-                       "Unable to commit.");
-        throw new Error("Connection closed before transaction committed.");
-      }
-
-      try {
-        yield this.execute("COMMIT TRANSACTION");
-      } catch (ex) {
-        this._log.warn("Error committing transaction: " +
-                       CommonUtils.exceptionStr(ex));
-        throw ex;
-      }
-
-      throw new Task.Result(result);
-    }.bind(this)).then(
-      function onSuccess(result) {
-        this._inProgressTransaction = null;
-        deferred.resolve(result);
-      }.bind(this),
-      function onError(error) {
-        this._inProgressTransaction = null;
-        deferred.reject(error);
-      }.bind(this)
-    );
-
-    return deferred.promise;
+      // If a transaction yields on a never resolved promise, or is mistakenly
+      // nested, it could hang the transactions queue forever.  Thus we timeout
+      // the execution after a meaningful amount of time, to ensure in any case
+      // we'll proceed after a while.
+      let timeoutPromise = new Promise((resolve, reject) => {
+        setTimeout(() => reject(new Error("Transaction timeout, most likely caused by unresolved pending work.")),
+                   TRANSACTIONS_QUEUE_TIMEOUT_MS);
+      });
+      return Promise.race([transactionPromise, timeoutPromise]);
+    });
+    // Atomically update the queue before anyone else has a chance to enqueue
+    // further transactions.
+    this._transactionQueue = promise.catch(ex => { console.error(ex) });
+    return promise;
   },
 
   shrinkMemory: function () {
@@ -543,10 +606,11 @@ ConnectionData.prototype = Object.freeze({
 
     let index = this._statementCounter++;
 
-    let deferred = Promise.defer();
+    let deferred = PromiseUtils.defer();
     let userCancelled = false;
     let errors = [];
     let rows = [];
+    let handledRow = false;
 
     // Don't incur overhead for serializing params unless the messages go
     // somewhere.
@@ -571,6 +635,8 @@ ConnectionData.prototype = Object.freeze({
             rows.push(row);
             continue;
           }
+
+          handledRow = true;
 
           try {
             onRow(row);
@@ -597,16 +663,17 @@ ConnectionData.prototype = Object.freeze({
 
         switch (reason) {
           case Ci.mozIStorageStatementCallback.REASON_FINISHED:
-            // If there is an onRow handler, we always resolve to null.
-            let result = onRow ? null : rows;
+            // If there is an onRow handler, we always instead resolve to a
+            // boolean indicating whether the onRow handler was called or not.
+            let result = onRow ? handledRow : rows;
             deferred.resolve(result);
             break;
 
-          case Ci.mozIStorageStatementCallback.REASON_CANCELLED:
+          case Ci.mozIStorageStatementCallback.REASON_CANCELED:
             // It is not an error if the user explicitly requested cancel via
             // the onRow handler.
             if (userCancelled) {
-              let result = onRow ? null : rows;
+              let result = onRow ? handledRow : rows;
               deferred.resolve(result);
             } else {
               deferred.reject(new Error("Statement was cancelled."));
@@ -615,7 +682,7 @@ ConnectionData.prototype = Object.freeze({
             break;
 
           case Ci.mozIStorageStatementCallback.REASON_ERROR:
-            let error = new Error("Error(s) encountered during statement execution.");
+            let error = new Error("Error(s) encountered during statement execution: " + [error.message for (error of errors)].join(", "));
             error.errors = errors;
             deferred.reject(error);
             break;
@@ -702,7 +769,6 @@ function openConnection(options) {
     throw new Error("Sqlite.jsm has been shutdown. Cannot open connection to: " + options.path);
   }
 
-
   // Retains absolute paths and normalizes relative as relative to profile.
   let path = OS.Path.join(OS.Constants.Path.profileDir, options.path);
 
@@ -722,43 +788,40 @@ function openConnection(options) {
   }
 
   let file = FileUtils.File(path);
-
-  let basename = OS.Path.basename(path);
-  let number = connectionCounters.get(basename) || 0;
-  connectionCounters.set(basename, number + 1);
-
-  let identifier = basename + "#" + number;
+  let identifier = getIdentifierByPath(path);
 
   log.info("Opening database: " + path + " (" + identifier + ")");
-  let deferred = Promise.defer();
-  let options = null;
-  if (!sharedMemoryCache) {
-    options = Cc["@mozilla.org/hash-property-bag;1"].
-      createInstance(Ci.nsIWritablePropertyBag);
-    options.setProperty("shared", false);
-  }
-  Services.storage.openAsyncDatabase(file, options, function(status, connection) {
-    if (!connection) {
-      log.warn("Could not open connection: " + status);
-      deferred.reject(new Error("Could not open connection: " + status));
+
+  return new Promise((resolve, reject) => {
+    let dbOptions = null;
+    if (!sharedMemoryCache) {
+      dbOptions = Cc["@mozilla.org/hash-property-bag;1"].
+        createInstance(Ci.nsIWritablePropertyBag);
+      dbOptions.setProperty("shared", false);
     }
-    log.info("Connection opened");
-    try {
-      deferred.resolve(
-        new OpenedConnection(connection.QueryInterface(Ci.mozIStorageAsyncConnection), basename, number,
-        openedOptions));
-    } catch (ex) {
-      log.warn("Could not open database: " + CommonUtils.exceptionStr(ex));
-      deferred.reject(ex);
-    }
+    Services.storage.openAsyncDatabase(file, dbOptions, (status, connection) => {
+      if (!connection) {
+        log.warn("Could not open connection: " + status);
+        reject(new Error("Could not open connection: " + status));
+        return;
+      }
+      log.info("Connection opened");
+      try {
+        resolve(
+          new OpenedConnection(connection.QueryInterface(Ci.mozIStorageAsyncConnection),
+                              identifier, openedOptions));
+      } catch (ex) {
+        log.warn("Could not open database: " + CommonUtils.exceptionStr(ex));
+        reject(ex);
+      }
+    });
   });
-  return deferred.promise;
 }
 
 /**
  * Creates a clone of an existing and open Storage connection.  The clone has
  * the same underlying characteristics of the original connection and is
- * returned in form of on OpenedConnection handle.
+ * returned in form of an OpenedConnection handle.
  *
  * The following parameters can control the cloned connection:
  *
@@ -811,30 +874,75 @@ function cloneStorageConnection(options) {
   }
 
   let path = source.databaseFile.path;
-  let basename = OS.Path.basename(path);
-  let number = connectionCounters.get(basename) || 0;
-  connectionCounters.set(basename, number + 1);
-  let identifier = basename + "#" + number;
+  let identifier = getIdentifierByPath(path);
 
   log.info("Cloning database: " + path + " (" + identifier + ")");
-  let deferred = Promise.defer();
 
-  source.asyncClone(!!options.readOnly, (status, connection) => {
-    if (!connection) {
-      log.warn("Could not clone connection: " + status);
-      deferred.reject(new Error("Could not clone connection: " + status));
-    }
-    log.info("Connection cloned");
+  return new Promise((resolve, reject) => {
+    source.asyncClone(!!options.readOnly, (status, connection) => {
+      if (!connection) {
+        log.warn("Could not clone connection: " + status);
+        reject(new Error("Could not clone connection: " + status));
+      }
+      log.info("Connection cloned");
+      try {
+        let conn = connection.QueryInterface(Ci.mozIStorageAsyncConnection);
+        resolve(new OpenedConnection(conn, identifier, openedOptions));
+      } catch (ex) {
+        log.warn("Could not clone database: " + CommonUtils.exceptionStr(ex));
+        reject(ex);
+      }
+    });
+  });
+}
+
+/**
+ * Wraps an existing and open Storage connection with Sqlite.jsm API.  The
+ * wrapped connection clone has the same underlying characteristics of the
+ * original connection and is returned in form of an OpenedConnection handle.
+ *
+ * Clients are responsible for closing both the Sqlite.jsm wrapper and the
+ * underlying mozStorage connection.
+ *
+ * The following parameters can control the wrapped connection:
+ *
+ *   connection -- (mozIStorageAsyncConnection) The original Storage connection
+ *       to wrap.
+ *
+ * @param options
+ *        (Object) Parameters to control connection and wrap options.
+ *
+ * @return Promise<OpenedConnection>
+ */
+function wrapStorageConnection(options) {
+  let log = Log.repository.getLogger("Sqlite.ConnectionWrapper");
+
+  let connection = options && options.connection;
+  if (!connection || !(connection instanceof Ci.mozIStorageAsyncConnection)) {
+    throw new TypeError("connection not specified or invalid.");
+  }
+
+  if (isClosed) {
+    throw new Error("Sqlite.jsm has been shutdown. Cannot wrap connection to: " + connection.database.path);
+  }
+
+  let path = connection.databaseFile.path;
+  let identifier = getIdentifierByPath(path);
+
+  log.info("Wrapping database: " + path + " (" + identifier + ")");
+  return new Promise(resolve => {
     try {
       let conn = connection.QueryInterface(Ci.mozIStorageAsyncConnection);
-      deferred.resolve(new OpenedConnection(conn, basename, number,
-                                            openedOptions));
+      let wrapper = new OpenedConnection(conn, identifier);
+      // We must not handle shutdown of a wrapped connection, since that is
+      // already handled by the opener.
+      wrappedConnections.add(identifier);
+      resolve(wrapper);
     } catch (ex) {
-      log.warn("Could not clone database: " + CommonUtils.exceptionStr(ex));
-      deferred.reject(ex);
+      log.warn("Could not wrap database: " + CommonUtils.exceptionStr(ex));
+      throw ex;
     }
   });
-  return deferred.promise;
 }
 
 /**
@@ -876,25 +984,24 @@ function cloneStorageConnection(options) {
  *
  * @param connection
  *        (mozIStorageConnection) Underlying SQLite connection.
- * @param basename
- *        (string) The basename of this database name. Used for logging.
- * @param number
- *        (Number) The connection number to this database.
- * @param options
+ * @param identifier
+ *        (string) The unique identifier of this database. It may be used for
+ *        logging or as a key in Maps.
+ * @param options [optional]
  *        (object) Options to control behavior of connection. See
  *        `openConnection`.
  */
-function OpenedConnection(connection, basename, number, options) {
+function OpenedConnection(connection, identifier, options={}) {
   // Store all connection data in a field distinct from the
   // witness. This enables us to store an additional reference to this
   // field without preventing garbage collection of
   // OpenedConnection. On garbage collection, we will still be able to
   // close the database using this extra reference.
-  this._connectionData = new ConnectionData(connection, basename, number, options);
+  this._connectionData = new ConnectionData(connection, identifier, options);
 
   // Store the extra reference in a map with connection identifier as
   // key.
-  ConnectionData.byId.set(this._connectionData._connectionIdentifier,
+  ConnectionData.byId.set(this._connectionData._identifier,
                           this._connectionData);
 
   // Make a finalization witness. If this object is garbage collected
@@ -903,7 +1010,7 @@ function OpenedConnection(connection, basename, number, options) {
   // connection identifier string of the database.
   this._witness = FinalizationWitnessService.make(
     "sqlite-finalization-witness",
-    this._connectionData._connectionIdentifier);
+    this._connectionData._identifier);
 }
 
 OpenedConnection.prototype = Object.freeze({
@@ -963,8 +1070,8 @@ OpenedConnection.prototype = Object.freeze({
     // Unless cleanup has already been done by a previous call to
     // `close`, delete the database entry from map and tell the
     // finalization witness to forget.
-    if (ConnectionData.byId.has(this._connectionData._connectionIdentifier)) {
-      ConnectionData.byId.delete(this._connectionData._connectionIdentifier);
+    if (ConnectionData.byId.has(this._connectionData._identifier)) {
+      ConnectionData.byId.delete(this._connectionData._identifier);
       this._witness.forget();
     }
     return this._connectionData.close();
@@ -1079,6 +1186,21 @@ OpenedConnection.prototype = Object.freeze({
   /**
    * Perform a transaction.
    *
+   * *****************************************************************************
+   * YOU SHOULD _NEVER_ NEST executeTransaction CALLS FOR ANY REASON, NOR
+   * DIRECTLY, NOR THROUGH OTHER PROMISES.
+   * FOR EXAMPLE, NEVER DO SOMETHING LIKE:
+   *   yield executeTransaction(function* () {
+   *     ...some_code...
+   *     yield executeTransaction(function* () { // WRONG!
+   *       ...some_code...
+   *     })
+   *     yield someCodeThatExecuteTransaction(); // WRONG!
+   *     yield neverResolvedPromise; // WRONG!
+   *   });
+   * NESTING CALLS WILL BLOCK ANY FUTURE TRANSACTION UNTIL A TIMEOUT KICKS IN.
+   * *****************************************************************************
+   *
    * A transaction is specified by a user-supplied function that is a
    * generator function which can be used by Task.jsm's Task.spawn(). The
    * function receives this connection instance as its argument.
@@ -1174,6 +1296,7 @@ OpenedConnection.prototype = Object.freeze({
 this.Sqlite = {
   openConnection: openConnection,
   cloneStorageConnection: cloneStorageConnection,
+  wrapStorageConnection: wrapStorageConnection,
   /**
    * Shutdown barrier client. May be used by clients to perform last-minute
    * cleanup prior to the shutdown of this module.

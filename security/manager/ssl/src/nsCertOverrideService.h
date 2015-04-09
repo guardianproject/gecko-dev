@@ -63,7 +63,7 @@ public:
 
 
 // hash entry class
-class nsCertOverrideEntry MOZ_FINAL : public PLDHashEntryHdr
+class nsCertOverrideEntry final : public PLDHashEntryHdr
 {
   public:
     // Hash methods
@@ -71,7 +71,7 @@ class nsCertOverrideEntry MOZ_FINAL : public PLDHashEntryHdr
     typedef const char* KeyTypePointer;
 
     // do nothing with aHost - we require mHead to be set before we're live!
-    nsCertOverrideEntry(KeyTypePointer aHostWithPortUTF8)
+    explicit nsCertOverrideEntry(KeyTypePointer aHostWithPortUTF8)
     {
     }
 
@@ -126,9 +126,9 @@ class nsCertOverrideEntry MOZ_FINAL : public PLDHashEntryHdr
     nsCString mHostWithPort;
 };
 
-class nsCertOverrideService MOZ_FINAL : public nsICertOverrideService
-                                      , public nsIObserver
-                                      , public nsSupportsWeakReference
+class nsCertOverrideService final : public nsICertOverrideService
+                                  , public nsIObserver
+                                  , public nsSupportsWeakReference
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -164,6 +164,8 @@ protected:
 
     SECOidTag mOidTagForStoringNewHashes;
     nsCString mDottedOidForStoringNewHashes;
+
+    void CountPermanentOverrideTelemetry();
 
     void RemoveAllFromMemory();
     nsresult Read();

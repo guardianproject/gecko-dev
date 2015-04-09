@@ -66,15 +66,18 @@ public:
 
   uint16_t mState;
   nsString mNumber;
-  bthf_call_direction_t mDirection; // 0: outgoing call; 1: incoming call
-  bthf_call_addrtype_t mType;
+  BluetoothHandsfreeCallDirection mDirection;
+  BluetoothHandsfreeCallAddressType mType;
 };
 
 class BluetoothHfpManager : public BluetoothHfpManagerBase
+                          , public BluetoothHandsfreeNotificationHandler
                           , public BatteryObserver
 {
 public:
   BT_DECL_HFP_MGR_BASE
+
+  static const int MAX_NUM_CLIENTS;
 
   void OnConnectError();
   void OnDisconnectError();
@@ -85,7 +88,6 @@ public:
   }
 
   static BluetoothHfpManager* Get();
-  virtual ~BluetoothHfpManager();
   static void InitHfpInterface(BluetoothProfileResultHandler* aRes);
   static void DeinitHfpInterface(BluetoothProfileResultHandler* aRes);
 
@@ -102,33 +104,65 @@ public:
   void HandleIccInfoChanged(uint32_t aClientId);
   void HandleVoiceConnectionChanged(uint32_t aClientId);
 
-  // Bluedroid hfp callback handlers
-  void ProcessConnectionState(bthf_connection_state_t aState, bt_bdaddr_t* aBdAddress);
-  void ProcessAudioState(bthf_audio_state_t aState, bt_bdaddr_t* aBdAddress);
-  void ProcessAnswerCall();
-  void ProcessHangupCall();
-  void ProcessVolumeControl(bthf_volume_type_t aType, int aVolume);
-  void ProcessDialCall(char *aNumber);
-  void ProcessDtmfCmd(char aDtmf);
-  void ProcessAtChld(bthf_chld_type_t aChld);
-  void ProcessAtCnum();
-  void ProcessAtCind();
-  void ProcessAtCops();
-  void ProcessAtClcc();
-  void ProcessUnknownAt(char *aAtString);
-  void ProcessKeyPressed();
-
   // CDMA-specific functions
   void UpdateSecondNumber(const nsAString& aNumber);
   void AnswerWaitingCall();
   void IgnoreWaitingCall();
   void ToggleCalls();
 
+  //
+  // Bluetooth notifications
+  //
+
+  void ConnectionStateNotification(BluetoothHandsfreeConnectionState aState,
+                                   const nsAString& aBdAddress) override;
+  void AudioStateNotification(BluetoothHandsfreeAudioState aState,
+                              const nsAString& aBdAddress) override;
+  void AnswerCallNotification(const nsAString& aBdAddress) override;
+  void HangupCallNotification(const nsAString& aBdAddress) override;
+  void VolumeNotification(BluetoothHandsfreeVolumeType aType,
+                          int aVolume,
+                          const nsAString& aBdAddress) override;
+  void DtmfNotification(char aDtmf,
+                        const nsAString& aBdAddress) override;
+  void CallHoldNotification(BluetoothHandsfreeCallHoldType aChld,
+                            const nsAString& aBdAddress) override;
+  void DialCallNotification(const nsAString& aNumber,
+                            const nsAString& aBdAddress) override;
+  void CnumNotification(const nsAString& aBdAddress) override;
+  void CindNotification(const nsAString& aBdAddress) override;
+  void CopsNotification(const nsAString& aBdAddress) override;
+  void ClccNotification(const nsAString& aBdAddress) override;
+  void UnknownAtNotification(const nsACString& aAtString,
+                             const nsAString& aBdAddress) override;
+  void KeyPressedNotification(const nsAString& aBdAddress) override;
+
+protected:
+  virtual ~BluetoothHfpManager();
+
 private:
-  class GetVolumeTask;
+  class AtResponseResultHandler;
+  class CindResponseResultHandler;
+  class ConnectAudioResultHandler;
+  class ConnectResultHandler;
+  class CopsResponseResultHandler;
+  class ClccResponseResultHandler;
+  class CleanupInitResultHandler;
+  class CleanupResultHandler;
+  class CloseScoRunnable;
   class CloseScoTask;
-  class RespondToBLDNTask;
+  class DeinitResultHandlerRunnable;
+  class DeviceStatusNotificationResultHandler;
+  class DisconnectAudioResultHandler;
+  class DisconnectResultHandler;
+  class FormattedAtResponseResultHandler;
+  class GetVolumeTask;
+  class InitResultHandlerRunnable;
   class MainThreadTask;
+  class OnErrorProfileResultHandlerRunnable;
+  class PhoneStateChangeResultHandler;
+  class RespondToBLDNTask;
+  class VolumeControlResultHandler;
 
   friend class BluetoothHfpManagerObserver;
   friend class GetVolumeTask;
@@ -141,7 +175,7 @@ private:
   void Cleanup();
 
   void HandleShutdown();
-  void HandleVolumeChanged(const nsAString& aData);
+  void HandleVolumeChanged(nsISupports* aSubject);
   void Notify(const hal::BatteryInformation& aBatteryInfo);
 
   void NotifyConnectionStateChanged(const nsAString& aType);
@@ -153,27 +187,29 @@ private:
   uint32_t GetNumberOfCalls(uint16_t aState);
   uint16_t GetCallSetupState();
   bool IsTransitionState(uint16_t aCallState, bool aIsConference);
-  bthf_call_state_t ConvertToBthfCallState(int aCallState);
+  BluetoothHandsfreeCallState
+    ConvertToBluetoothHandsfreeCallState(int aCallState) const;
 
   void UpdatePhoneCIND(uint32_t aCallIndex);
   void UpdateDeviceCIND();
   void SendCLCC(Call& aCall, int aIndex);
   void SendLine(const char* aMessage);
-  void SendResponse(bthf_at_response_t aResponseCode);
+  void SendResponse(BluetoothHandsfreeAtResponse aResponseCode);
 
-  int mConnectionState;
-  int mPrevConnectionState;
-  int mAudioState;
+  BluetoothHandsfreeConnectionState mConnectionState;
+  BluetoothHandsfreeConnectionState mPrevConnectionState;
+  BluetoothHandsfreeAudioState mAudioState;
   // Device CIND
   int mBattChg;
-  int mService;
-  int mRoam;
+  BluetoothHandsfreeNetworkState mService;
+  BluetoothHandsfreeServiceType mRoam;
   int mSignal;
 
   int mCurrentVgs;
   int mCurrentVgm;
   bool mReceiveVgsFlag;
   bool mDialingRequestProcessed;
+  bool mFirstCKPD;
   PhoneType mPhoneType;
   nsString mDeviceAddress;
   nsString mMsisdn;

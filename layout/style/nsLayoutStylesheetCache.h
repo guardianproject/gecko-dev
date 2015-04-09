@@ -24,7 +24,7 @@ class Loader;
 }
 }
 
-class nsLayoutStylesheetCache MOZ_FINAL
+class nsLayoutStylesheetCache final
  : public nsIObserver
  , public nsIMemoryReporter
 {
@@ -60,27 +60,32 @@ private:
   static void EnsureGlobal();
   void InitFromProfile();
   void InitMemoryReporter();
+  static void LoadSheetURL(const char* aURL,
+                           nsRefPtr<mozilla::CSSStyleSheet>& aSheet,
+                           bool aEnableUnsafeRules);
   static void LoadSheetFile(nsIFile* aFile,
                             nsRefPtr<mozilla::CSSStyleSheet>& aSheet);
   static void LoadSheet(nsIURI* aURI, nsRefPtr<mozilla::CSSStyleSheet>& aSheet,
                         bool aEnableUnsafeRules);
+  static void InvalidateSheet(nsRefPtr<mozilla::CSSStyleSheet>& aSheet);
+  static void DependentPrefChanged(const char* aPref, void* aData);
 
   static mozilla::StaticRefPtr<nsLayoutStylesheetCache> gStyleCache;
   static mozilla::css::Loader* gCSSLoader;
-  nsRefPtr<mozilla::CSSStyleSheet> mScrollbarsSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mFormsSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mNumberControlSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mUserContentSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mUserChromeSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mUASheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mHTMLSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mMinimalXULSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mXULSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mQuirkSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mFullScreenOverrideSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mSVGSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mMathMLSheet;
   nsRefPtr<mozilla::CSSStyleSheet> mCounterStylesSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mFormsSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mFullScreenOverrideSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mHTMLSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mMathMLSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mMinimalXULSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mNumberControlSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mQuirkSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mSVGSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mScrollbarsSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mUASheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mUserChromeSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mUserContentSheet;
+  nsRefPtr<mozilla::CSSStyleSheet> mXULSheet;
 };
 
 #endif

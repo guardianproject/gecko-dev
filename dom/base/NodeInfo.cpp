@@ -48,7 +48,7 @@ NodeInfo::NodeInfo(nsIAtom *aName, nsIAtom *aPrefix, int32_t aNamespaceID,
                    nsNodeInfoManager *aOwnerManager)
 {
   CheckValidNodeInfo(aNodeType, aName, aNamespaceID, aExtraName);
-  NS_ABORT_IF_FALSE(aOwnerManager, "Invalid aOwnerManager");
+  MOZ_ASSERT(aOwnerManager, "Invalid aOwnerManager");
 
   // Initialize mInner
   NS_ADDREF(mInner.mName = aName);
@@ -83,7 +83,7 @@ NodeInfo::NodeInfo(nsIAtom *aName, nsIAtom *aPrefix, int32_t aNamespaceID,
       // Correct the case for HTML
       if (aNodeType == nsIDOMNode::ELEMENT_NODE &&
           aNamespaceID == kNameSpaceID_XHTML && GetDocument() &&
-          GetDocument()->IsHTML()) {
+          GetDocument()->IsHTMLDocument()) {
         nsContentUtils::ASCIIToUpper(mQualifiedName, mNodeName);
       } else {
         mNodeName = mQualifiedName;
@@ -104,8 +104,7 @@ NodeInfo::NodeInfo(nsIAtom *aName, nsIAtom *aPrefix, int32_t aNamespaceID,
       SetDOMStringToNull(mLocalName);
       break;
     default:
-      NS_ABORT_IF_FALSE(aNodeType == UINT16_MAX,
-                        "Unknown node type");
+      MOZ_ASSERT(aNodeType == UINT16_MAX, "Unknown node type");
   }
 }
 

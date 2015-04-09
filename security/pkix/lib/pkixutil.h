@@ -22,61 +22,12 @@
  * limitations under the License.
  */
 
-#ifndef mozilla_pkix__pkixutil_h
-#define mozilla_pkix__pkixutil_h
+#ifndef mozilla_pkix_pkixutil_h
+#define mozilla_pkix_pkixutil_h
 
-#include "pkix/enumclass.h"
-#include "pkix/pkixtypes.h"
 #include "pkixder.h"
-#include "prerror.h"
-#include "seccomon.h"
-#include "secerr.h"
 
 namespace mozilla { namespace pkix {
-
-enum Result
-{
-  Success = 0,
-  FatalError = -1,      // An error was encountered that caused path building
-                        // to stop immediately. example: out-of-memory.
-  RecoverableError = -2 // an error that will cause path building to continue
-                        // searching for alternative paths. example: expired
-                        // certificate.
-};
-
-// When returning errors, use this function instead of calling PR_SetError
-// directly. This helps ensure that we always call PR_SetError when we return
-// an error code. This is a useful place to set a breakpoint when a debugging
-// a certificate verification failure.
-inline Result
-Fail(Result result, PRErrorCode errorCode)
-{
-  PR_ASSERT(result != Success);
-  PR_SetError(errorCode, 0);
-  return result;
-}
-
-inline Result
-MapSECStatus(SECStatus srv)
-{
-  if (srv == SECSuccess) {
-    return Success;
-  }
-
-  PRErrorCode error = PORT_GetError();
-  switch (error) {
-    case SEC_ERROR_EXTENSION_NOT_FOUND:
-      return RecoverableError;
-
-    case PR_INVALID_STATE_ERROR:
-    case SEC_ERROR_LIBRARY_FAILURE:
-    case SEC_ERROR_NO_MEMORY:
-      return FatalError;
-  }
-
-  // TODO: PORT_Assert(false); // we haven't classified the error yet
-  return RecoverableError;
-}
 
 // During path building and verification, we build a linked list of BackCerts
 // from the current cert toward the end-entity certificate. The linked list
@@ -87,11 +38,11 @@ MapSECStatus(SECStatus srv)
 // Each BackCert contains pointers to all the given certificate's extensions
 // so that we can parse the extension block once and then process the
 // extensions in an order that may be different than they appear in the cert.
-class BackCert
+class BackCert final
 {
 public:
   // certDER and childCert must be valid for the lifetime of BackCert.
-  BackCert(const SECItem& certDER, EndEntityOrCA endEntityOrCA,
+  BackCert(Input certDER, EndEntityOrCA endEntityOrCA,
            const BackCert* childCert)
     : der(certDER)
     , endEntityOrCA(endEntityOrCA)
@@ -101,102 +52,107 @@ public:
 
   Result Init();
 
-  const SECItem& GetDER() const { return der; }
-  const der::Version GetVersion() const { return version; }
-  const SignedDataWithSignature& GetSignedData() const { return signedData; }
-  const SECItem& GetIssuer() const { return issuer; }
+  const Input GetDER() const { return der; }
+  const der::SignedDataWithSignature& GetSignedData() const {
+    return signedData;
+  }
+
+  der::Version GetVersion() const { return version; }
+  const Input GetSerialNumber() const { return serialNumber; }
+  const Input GetSignature() const { return signature; }
+  const Input GetIssuer() const { return issuer; }
   // XXX: "validity" is a horrible name for the structure that holds
   // notBefore & notAfter, but that is the name used in RFC 5280 and we use the
   // RFC 5280 names for everything.
-  const SECItem& GetValidity() const { return validity; }
-  const SECItem& GetSerialNumber() const { return serialNumber; }
-  const SECItem& GetSubject() const { return subject; }
-  const SECItem& GetSubjectPublicKeyInfo() const
+  const Input GetValidity() const { return validity; }
+  const Input GetSubject() const { return subject; }
+  const Input GetSubjectPublicKeyInfo() const
   {
     return subjectPublicKeyInfo;
   }
-  const SECItem* GetAuthorityInfoAccess() const
+  const Input* GetAuthorityInfoAccess() const
   {
-    return MaybeSECItem(authorityInfoAccess);
+    return MaybeInput(authorityInfoAccess);
   }
-  const SECItem* GetBasicConstraints() const
+  const Input* GetBasicConstraints() const
   {
-    return MaybeSECItem(basicConstraints);
+    return MaybeInput(basicConstraints);
   }
-  const SECItem* GetCertificatePolicies() const
+  const Input* GetCertificatePolicies() const
   {
-    return MaybeSECItem(certificatePolicies);
+    return MaybeInput(certificatePolicies);
   }
-  const SECItem* GetExtKeyUsage() const { return MaybeSECItem(extKeyUsage); }
-  const SECItem* GetKeyUsage() const { return MaybeSECItem(keyUsage); }
-  const SECItem* GetInhibitAnyPolicy() const
+  const Input* GetExtKeyUsage() const
   {
-    return MaybeSECItem(inhibitAnyPolicy);
+    return MaybeInput(extKeyUsage);
   }
-  const SECItem* GetNameConstraints() const
+  const Input* GetKeyUsage() const
   {
-    return MaybeSECItem(nameConstraints);
+    return MaybeInput(keyUsage);
+  }
+  const Input* GetInhibitAnyPolicy() const
+  {
+    return MaybeInput(inhibitAnyPolicy);
+  }
+  const Input* GetNameConstraints() const
+  {
+    return MaybeInput(nameConstraints);
+  }
+  const Input* GetSubjectAltName() const
+  {
+    return MaybeInput(subjectAltName);
   }
 
 private:
-  const SECItem& der;
+  const Input der;
 
 public:
   const EndEntityOrCA endEntityOrCA;
   BackCert const* const childCert;
 
 private:
-  der::Version version;
-
   // When parsing certificates in BackCert::Init, we don't accept empty
   // extensions. Consequently, we don't have to store a distinction between
   // empty extensions and extensions that weren't included. However, when
   // *processing* extensions, we distinguish between whether an extension was
   // included or not based on whetehr the GetXXX function for the extension
   // returns nullptr.
-  static inline const SECItem* MaybeSECItem(const SECItem& item)
+  static inline const Input* MaybeInput(const Input& item)
   {
-    return item.len > 0 ? &item : nullptr;
+    return item.GetLength() > 0 ? &item : nullptr;
   }
 
-  // Helper classes to zero-initialize these fields on construction and to
-  // document that they contain non-owning pointers to the data they point
-  // to.
-  struct NonOwningSECItem : public SECItemStr {
-    NonOwningSECItem()
-    {
-      data = nullptr;
-      len = 0;
-    }
-  };
+  der::SignedDataWithSignature signedData;
 
-  SignedDataWithSignature signedData;
-  NonOwningSECItem issuer;
+  der::Version version;
+  Input serialNumber;
+  Input signature;
+  Input issuer;
   // XXX: "validity" is a horrible name for the structure that holds
   // notBefore & notAfter, but that is the name used in RFC 5280 and we use the
   // RFC 5280 names for everything.
-  NonOwningSECItem validity;
-  NonOwningSECItem serialNumber;
-  NonOwningSECItem subject;
-  NonOwningSECItem subjectPublicKeyInfo;
+  Input validity;
+  Input subject;
+  Input subjectPublicKeyInfo;
 
-  NonOwningSECItem authorityInfoAccess;
-  NonOwningSECItem basicConstraints;
-  NonOwningSECItem certificatePolicies;
-  NonOwningSECItem extKeyUsage;
-  NonOwningSECItem inhibitAnyPolicy;
-  NonOwningSECItem keyUsage;
-  NonOwningSECItem nameConstraints;
-  NonOwningSECItem subjectAltName;
+  Input authorityInfoAccess;
+  Input basicConstraints;
+  Input certificatePolicies;
+  Input extKeyUsage;
+  Input inhibitAnyPolicy;
+  Input keyUsage;
+  Input nameConstraints;
+  Input subjectAltName;
+  Input criticalNetscapeCertificateType;
 
-  der::Result RememberExtension(der::Input& extnID, const SECItem& extnValue,
-                                /*out*/ bool& understood);
+  Result RememberExtension(Reader& extnID, Input extnValue, bool critical,
+                           /*out*/ bool& understood);
 
-  BackCert(const BackCert&) /* = delete */;
-  void operator=(const BackCert&); /* = delete */;
+  BackCert(const BackCert&) = delete;
+  void operator=(const BackCert&) = delete;
 };
 
-class NonOwningDERArray : public DERArray
+class NonOwningDERArray final : public DERArray
 {
 public:
   NonOwningDERArray()
@@ -206,19 +162,22 @@ public:
     // numItems before accessing i.
   }
 
-  virtual size_t GetLength() const { return numItems; }
+  size_t GetLength() const override { return numItems; }
 
-  virtual const SECItem* GetDER(size_t i) const
+  const Input* GetDER(size_t i) const override
   {
-    return i < numItems ? items[i] : nullptr;
+    return i < numItems ? &items[i] : nullptr;
   }
 
-  Result Append(const SECItem& der)
+  Result Append(Input der)
   {
     if (numItems >= MAX_LENGTH) {
-      return Fail(RecoverableError, SEC_ERROR_INVALID_ARGS);
+      return Result::FATAL_ERROR_INVALID_ARGS;
     }
-    items[numItems] = &der;
+    Result rv = items[numItems].Init(der); // structure assignment
+    if (rv != Success) {
+      return rv;
+    }
     ++numItems;
     return Success;
   }
@@ -226,10 +185,83 @@ public:
   // Public so we can static_assert on this. Keep in sync with MAX_SUBCA_COUNT.
   static const size_t MAX_LENGTH = 8;
 private:
-  const SECItem* items[MAX_LENGTH]; // avoids any heap allocations
+  Input items[MAX_LENGTH]; // avoids any heap allocations
   size_t numItems;
+
+  NonOwningDERArray(const NonOwningDERArray&) = delete;
+  void operator=(const NonOwningDERArray&) = delete;
 };
+
+inline unsigned int
+DaysBeforeYear(unsigned int year)
+{
+  assert(year <= 9999);
+  return ((year - 1u) * 365u)
+       + ((year - 1u) / 4u)    // leap years are every 4 years,
+       - ((year - 1u) / 100u)  // except years divisible by 100,
+       + ((year - 1u) / 400u); // except years divisible by 400.
+}
+
+static const size_t MAX_DIGEST_SIZE_IN_BYTES = 512 / 8; // sha-512
+
+Result DigestSignedData(TrustDomain& trustDomain,
+                        const der::SignedDataWithSignature& signedData,
+                        /*out*/ uint8_t(&digestBuf)[MAX_DIGEST_SIZE_IN_BYTES],
+                        /*out*/ der::PublicKeyAlgorithm& publicKeyAlg,
+                        /*out*/ SignedDigest& signedDigest);
+
+Result VerifySignedDigest(TrustDomain& trustDomain,
+                          der::PublicKeyAlgorithm publicKeyAlg,
+                          const SignedDigest& signedDigest,
+                          Input signerSubjectPublicKeyInfo);
+
+// Combines DigestSignedData and VerifySignedDigest
+Result VerifySignedData(TrustDomain& trustDomain,
+                        const der::SignedDataWithSignature& signedData,
+                        Input signerSubjectPublicKeyInfo);
+
+// In a switch over an enum, sometimes some compilers are not satisfied that
+// all control flow paths have been considered unless there is a default case.
+// However, in our code, such a default case is almost always unreachable dead
+// code. That can be particularly problematic when the compiler wants the code
+// to choose a value, such as a return value, for the default case, but there's
+// no appropriate "impossible case" value to choose.
+//
+// MOZILLA_PKIX_UNREACHABLE_DEFAULT_ENUM accounts for this. Example:
+//
+//     // In xy.cpp
+//     #include "xt.h"
+//
+//     enum class XY { X, Y };
+//
+//     int func(XY xy) {
+//       switch (xy) {
+//         case XY::X: return 1;
+//         case XY::Y; return 2;
+//         MOZILLA_PKIX_UNREACHABLE_DEFAULT_ENUM
+//       }
+//     }
+#if defined(__clang__)
+// Clang will warn if not all cases are covered (-Wswitch-enum) AND it will
+// warn if a switch statement that covers every enum label has a default case
+// (-W-covered-switch-default). Versions prior to 3.5 warned about unreachable
+// code in such default cases (-Wunreachable-code) even when
+// -W-covered-switch-default was disabled, but that changed in Clang 3.5.
+#define MOZILLA_PKIX_UNREACHABLE_DEFAULT_ENUM // empty
+#elif defined(__GNUC__)
+// GCC will warn if not all cases are covered (-Wswitch-enum). It does not
+// assume that the default case is unreachable.
+#define MOZILLA_PKIX_UNREACHABLE_DEFAULT_ENUM \
+        default: assert(false); __builtin_unreachable();
+#elif defined(_MSC_VER)
+// MSVC will warn if not all cases are covered (C4061, level 4). It does not
+// assume that the default case is unreachable.
+#define MOZILLA_PKIX_UNREACHABLE_DEFAULT_ENUM \
+        default: assert(false); __assume(0);
+#else
+#error Unsupported compiler for MOZILLA_PKIX_UNREACHABLE_DEFAULT.
+#endif
 
 } } // namespace mozilla::pkix
 
-#endif // mozilla_pkix__pkixutil_h
+#endif // mozilla_pkix_pkixutil_h

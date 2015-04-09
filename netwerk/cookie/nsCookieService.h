@@ -66,7 +66,7 @@ public:
     , mInBrowserElement(inBrowser)
   {}
 
-  nsCookieKey(KeyTypePointer other)
+  explicit nsCookieKey(KeyTypePointer other)
     : mBaseDomain(other->mBaseDomain)
     , mAppId(other->mAppId)
     , mInBrowserElement(other->mInBrowserElement)
@@ -122,7 +122,7 @@ class nsCookieEntry : public nsCookieKey
     typedef nsTArray< nsRefPtr<nsCookie> > ArrayType;
     typedef ArrayType::index_type IndexType;
 
-    nsCookieEntry(KeyTypePointer aKey)
+    explicit nsCookieEntry(KeyTypePointer aKey)
      : nsCookieKey(aKey)
     {}
 
@@ -155,7 +155,7 @@ struct CookieDomainTuple
 
 // encapsulates in-memory and on-disk DB states, so we can
 // conveniently switch state when entering or exiting private browsing.
-struct DBState MOZ_FINAL
+struct DBState final
 {
   DBState() : cookieCount(0), cookieOldestTime(INT64_MAX), corruptFlag(OK)
   {
@@ -238,11 +238,11 @@ enum OpenDBResult
  * class declaration
  ******************************************************************************/
 
-class nsCookieService : public nsICookieService
-                      , public nsICookieManager2
-                      , public nsIObserver
-                      , public nsSupportsWeakReference
-                      , public nsIMemoryReporter
+class nsCookieService final : public nsICookieService
+                            , public nsICookieManager2
+                            , public nsIObserver
+                            , public nsSupportsWeakReference
+                            , public nsIMemoryReporter
 {
   private:
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;

@@ -107,7 +107,7 @@ public:
             NS_ASSERTION(item, "failed to find zip entry");
 
             uint32_t bufSize = item->RealSize();
-            mFontDataBuf = static_cast<uint8_t*>(moz_malloc(bufSize));
+            mFontDataBuf = static_cast<uint8_t*>(malloc(bufSize));
             if (mFontDataBuf) {
                 nsZipCursor cursor(item, reader, mFontDataBuf, bufSize);
                 cursor.Copy(&bufSize);
@@ -136,7 +136,7 @@ public:
         if (mFace && mOwnsFace) {
             FT_Done_Face(mFace);
             if (mFontDataBuf) {
-                moz_free(mFontDataBuf);
+                free(mFontDataBuf);
             }
         }
     }
@@ -196,13 +196,11 @@ FT2FontEntry::CreateScaledFont(const gfxFontStyle *aStyle)
             aStyle->allowSyntheticStyle;
 
     if (needsOblique) {
-        const double kSkewFactor = 0.25;
-
         cairo_matrix_t style;
         cairo_matrix_init(&style,
                           1,                //xx
                           0,                //yx
-                          -1 * kSkewFactor,  //xy
+                          -1 * OBLIQUE_SKEW_FACTOR, //xy
                           1,                //yy
                           0,                //x0
                           0);               //y0
@@ -253,8 +251,11 @@ FT2FontEntry::CreateFontInstance(const gfxFontStyle *aFontStyle, bool aNeedsBold
 
 /* static */
 FT2FontEntry*
-FT2FontEntry::CreateFontEntry(const gfxProxyFontEntry &aProxyEntry,
-                              const uint8_t *aFontData,
+FT2FontEntry::CreateFontEntry(const nsAString& aFontName,
+                              uint16_t aWeight,
+                              int16_t aStretch,
+                              bool aItalic,
+                              const uint8_t* aFontData,
                               uint32_t aLength)
 {
     // Ownership of aFontData is passed in here; the fontEntry must
@@ -273,16 +274,16 @@ FT2FontEntry::CreateFontEntry(const gfxProxyFontEntry &aProxyEntry,
         NS_Free((void*)aFontData);
         return nullptr;
     }
-    // Create our FT2FontEntry, which inherits the name of the proxy
+    // Create our FT2FontEntry, which inherits the name of the userfont entry
     // as it's not guaranteed that the face has valid names (bug 737315)
     FT2FontEntry* fe =
-        FT2FontEntry::CreateFontEntry(face, nullptr, 0, aProxyEntry.Name(),
+        FT2FontEntry::CreateFontEntry(face, nullptr, 0, aFontName,
                                       aFontData);
     if (fe) {
-        fe->mItalic = aProxyEntry.mItalic;
-        fe->mWeight = aProxyEntry.mWeight;
-        fe->mStretch = aProxyEntry.mStretch;
-        fe->mIsUserFont = true;
+        fe->mItalic = aItalic;
+        fe->mWeight = aWeight;
+        fe->mStretch = aStretch;
+        fe->mIsDataUserFont = true;
     }
     return fe;
 }
@@ -379,7 +380,7 @@ FT2FontEntry*
 FT2FontEntry::CreateFontEntry(FT_Face aFace,
                               const char* aFilename, uint8_t aIndex,
                               const nsAString& aName,
-                              const uint8_t *aFontData)
+                              const uint8_t* aFontData)
 {
     FT2FontEntry *fe = new FT2FontEntry(aName);
     fe->mItalic = FTFaceIsItalic(aFace);
@@ -621,20 +622,18 @@ public:
         : mWriteNeeded(false)
     {
         mOps = (PLDHashTableOps) {
-            PL_DHashAllocTable,
-            PL_DHashFreeTable,
             StringHash,
             HashMatchEntry,
             MoveEntry,
             PL_DHashClearEntryStub,
-            PL_DHashFinalizeStub,
             nullptr
         };
 
-        PL_DHashTableInit(&mMap, &mOps, nullptr, sizeof(FNCMapEntry), 0);
+        PL_DHashTableInit(&mMap, &mOps, sizeof(FNCMapEntry), 0);
 
-        NS_ABORT_IF_FALSE(XRE_GetProcessType() == GeckoProcessType_Default,
-                          "StartupCacheFontNameCache should only be used in chrome process");
+        MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default,
+                   "StartupCacheFontNameCache should only be used in chrome "
+                   "process");
         mCache = mozilla::scache::StartupCache::GetSingleton();
 
         Init();
@@ -642,7 +641,7 @@ public:
 
     ~FontNameCache()
     {
-        if (!mMap.ops) {
+        if (!mMap.IsInitialized()) {
             return;
         }
         if (!mWriteNeeded || !mCache) {
@@ -658,7 +657,7 @@ public:
 
     void Init()
     {
-        if (!mMap.ops || !mCache) {
+        if (!mMap.IsInitialized() || !mCache) {
             return;
         }
         uint32_t size;
@@ -689,9 +688,8 @@ public:
             }
             uint32_t filesize = strtoul(beginning, nullptr, 10);
 
-            FNCMapEntry* mapEntry =
-                static_cast<FNCMapEntry*>
-                (PL_DHashTableOperate(&mMap, filename.get(), PL_DHASH_ADD));
+            FNCMapEntry* mapEntry = static_cast<FNCMapEntry*>
+                (PL_DHashTableAdd(&mMap, filename.get(), fallible));
             if (mapEntry) {
                 mapEntry->mFilename.Assign(filename);
                 mapEntry->mTimestamp = timestamp;
@@ -714,16 +712,13 @@ public:
     GetInfoForFile(const nsCString& aFileName, nsCString& aFaceList,
                    uint32_t *aTimestamp, uint32_t *aFilesize)
     {
-        if (!mMap.ops) {
+        if (!mMap.IsInitialized()) {
             return;
         }
-        PLDHashEntryHdr *hdr =
-            PL_DHashTableOperate(&mMap, aFileName.get(), PL_DHASH_LOOKUP);
-        if (!hdr) {
-            return;
-        }
-        FNCMapEntry* entry = static_cast<FNCMapEntry*>(hdr);
-        if (entry && entry->mFilesize) {
+        FNCMapEntry *entry =
+            static_cast<FNCMapEntry*>(PL_DHashTableSearch(&mMap,
+                                                          aFileName.get()));
+        if (entry) {
             *aTimestamp = entry->mTimestamp;
             *aFilesize = entry->mFilesize;
             aFaceList.Assign(entry->mFaces);
@@ -738,12 +733,11 @@ public:
     CacheFileInfo(const nsCString& aFileName, const nsCString& aFaceList,
                   uint32_t aTimestamp, uint32_t aFilesize)
     {
-        if (!mMap.ops) {
+        if (!mMap.IsInitialized()) {
             return;
         }
-        FNCMapEntry* entry =
-            static_cast<FNCMapEntry*>
-            (PL_DHashTableOperate(&mMap, aFileName.get(), PL_DHASH_ADD));
+        FNCMapEntry* entry = static_cast<FNCMapEntry*>
+            (PL_DHashTableAdd(&mMap, aFileName.get(), fallible));
         if (entry) {
             entry->mFilename.Assign(aFileName);
             entry->mTimestamp = aTimestamp;
@@ -1101,7 +1095,6 @@ gfxFT2FontList::AppendFacesFromOmnijarEntry(nsZipArchive* aArchive,
     uint32_t bufSize = item->RealSize();
     // We use fallible allocation here; if there's not enough RAM, we'll simply
     // ignore the bundled fonts and fall back to the device's installed fonts.
-    static const fallible_t fallible = fallible_t();
     nsAutoArrayPtr<uint8_t> buf(new (fallible) uint8_t[bufSize]);
     if (!buf) {
         return;
@@ -1406,7 +1399,7 @@ PreloadAsUserFontFaces(nsStringHashKey::KeyType aKey,
 
         // XXX Should we move the i/o here off the main thread?
 
-        // Map the font data in fe->mFilename, so we can generate a data: URI.
+        // Map the font data in fe->mFilename, so we can calculate its CRC32.
         int fd = open(fe->mFilename.get(), O_RDONLY);
         if (fd < 0) {
             continue;
@@ -1423,36 +1416,22 @@ PreloadAsUserFontFaces(nsStringHashKey::KeyType aKey,
             continue;
         }
 
-        // First byte is sufficient to distinguish WOFF from uncompressed
-        // OpenType (either TrueType or CFF).
-        bool isWoff = (data[0] == 'w');
-
-        // Generate a corresponding data: URI that apps could use.
-        nsCString encodedData;
-        nsresult rv = Base64Encode(Substring(data, buf.st_size), encodedData);
+        // Calculate CRC32
+        uint32_t crc = crc32(0, nullptr, 0);
+        crc = crc32(crc, (Bytef*)data, buf.st_size);
         munmap(data, buf.st_size);
-        if (NS_FAILED(rv)) {
-            continue;
-        }
-        nsCString spec("data:font/");
-        spec.Append(isWoff ? "woff" : "opentype");
-        spec.Append(";base64,");
-        spec.Append(encodedData);
+
 #if 0
-        ALOG("\n**** Preloading family [%s] face [%s]:\n%s\n\n",
+        ALOG("\n**** Preloading family [%s] face [%s] CRC32 [0x%08x]",
              NS_ConvertUTF16toUTF8(family->Name()).get(),
              fe->mFilename.get(),
-             spec.get());
+             crc);
 #endif
 
-        // Record the URI in gfxUserFontData on the entry.
-        nsCOMPtr<nsIURI> uri;
-        if (NS_FAILED(NS_NewURI(getter_AddRefs(uri), spec))) {
-            continue;
-        }
         fe->mUserFontData = new gfxUserFontData;
-        fe->mUserFontData->mURI = uri;
         fe->mUserFontData->mRealName = fe->Name();
+        fe->mUserFontData->mCRC32 = crc;
+        fe->mUserFontData->mLength = buf.st_size;
 
         // Stash it persistently in the user-font cache.
         gfxUserFontSet::UserFontCache::CacheFont(
@@ -1523,8 +1502,10 @@ FindFullName(nsStringHashKey::KeyType aKey,
 }
 
 gfxFontEntry* 
-gfxFT2FontList::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                const nsAString& aFontName)
+gfxFT2FontList::LookupLocalFont(const nsAString& aFontName,
+                                uint16_t aWeight,
+                                int16_t aStretch,
+                                bool aItalic)
 {
     // walk over list of names
     FullFontNameSearch data(aFontName);
@@ -1538,7 +1519,7 @@ gfxFT2FontList::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
     }
 
     // Clone the font entry so that we can then set its style descriptors
-    // from the proxy rather than the actual font.
+    // from the userfont entry rather than the actual font.
 
     // Ensure existence of mFTFace in the original entry
     data.mFontEntry->CairoFontFace();
@@ -1552,10 +1533,10 @@ gfxFT2FontList::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
                                       data.mFontEntry->mFTFontIndex,
                                       data.mFontEntry->Name(), nullptr);
     if (fe) {
-        fe->mItalic = aProxyEntry->mItalic;
-        fe->mWeight = aProxyEntry->mWeight;
-        fe->mStretch = aProxyEntry->mStretch;
-        fe->mIsUserFont = fe->mIsLocalUserFont = true;
+        fe->mItalic = aItalic;
+        fe->mWeight = aWeight;
+        fe->mStretch = aStretch;
+        fe->mIsLocalUserFont = true;
     }
 
     return fe;
@@ -1578,14 +1559,18 @@ gfxFT2FontList::GetDefaultFont(const gfxFontStyle* aStyle)
 }
 
 gfxFontEntry*
-gfxFT2FontList::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                 const uint8_t *aFontData,
+gfxFT2FontList::MakePlatformFont(const nsAString& aFontName,
+                                 uint16_t aWeight,
+                                 int16_t aStretch,
+                                 bool aItalic,
+                                 const uint8_t* aFontData,
                                  uint32_t aLength)
 {
     // The FT2 font needs the font data to persist, so we do NOT free it here
     // but instead pass ownership to the font entry.
     // Deallocation will happen later, when the font face is destroyed.
-    return FT2FontEntry::CreateFontEntry(*aProxyEntry, aFontData, aLength);
+    return FT2FontEntry::CreateFontEntry(aFontName, aWeight, aStretch,
+                                         aItalic, aFontData, aLength);
 }
 
 static PLDHashOperator

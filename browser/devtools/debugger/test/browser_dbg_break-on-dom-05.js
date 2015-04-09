@@ -10,7 +10,7 @@
 const TAB_URL = EXAMPLE_URL + "doc_event-listeners-02.html";
 
 function test() {
-  initDebugger(TAB_URL).then(([aTab, aDebuggee, aPanel]) => {
+  initDebugger(TAB_URL).then(([aTab,, aPanel]) => {
     let gDebugger = aPanel.panelWin;
     let gView = gDebugger.DebuggerView;
     let gController = gDebugger.DebuggerController
@@ -46,7 +46,7 @@ function test() {
       testEventGroup("mouseEvents", false);
       testEventArrays("change,click,keydown,keyup", "change");
 
-      let updated = waitForDebuggerEvents(aPanel, gDebugger.EVENTS.EVENT_BREAKPOINTS_UPDATED);
+      updated = waitForDebuggerEvents(aPanel, gDebugger.EVENTS.EVENT_BREAKPOINTS_UPDATED);
       EventUtils.sendMouseEvent({ type: "click" }, getGroupCheckboxNode("interactionEvents"), gDebugger);
       yield updated;
 
@@ -59,7 +59,7 @@ function test() {
       testEventGroup("mouseEvents", false);
       testEventArrays("change,click,keydown,keyup", "");
 
-      let updated = waitForDebuggerEvents(aPanel, gDebugger.EVENTS.EVENT_BREAKPOINTS_UPDATED);
+      updated = waitForDebuggerEvents(aPanel, gDebugger.EVENTS.EVENT_BREAKPOINTS_UPDATED);
       EventUtils.sendMouseEvent({ type: "click" }, getGroupCheckboxNode("keyboardEvents"), gDebugger);
       yield updated;
 
@@ -72,7 +72,7 @@ function test() {
       testEventGroup("mouseEvents", false);
       testEventArrays("change,click,keydown,keyup", "keydown,keyup");
 
-      let updated = waitForDebuggerEvents(aPanel, gDebugger.EVENTS.EVENT_BREAKPOINTS_UPDATED);
+      updated = waitForDebuggerEvents(aPanel, gDebugger.EVENTS.EVENT_BREAKPOINTS_UPDATED);
       EventUtils.sendMouseEvent({ type: "click" }, getGroupCheckboxNode("keyboardEvents"), gDebugger);
       yield updated;
 

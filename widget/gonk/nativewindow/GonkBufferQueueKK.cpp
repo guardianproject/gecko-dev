@@ -61,7 +61,7 @@ GonkBufferQueue::GonkBufferQueue(bool allowSynchronousMode,
     mMaxAcquiredBufferCount(1),
     mDefaultMaxBufferCount(2),
     mOverrideMaxBufferCount(0),
-//    mSynchronousMode(true), // GonkBufferQueue always works in sync mode.
+    mSynchronousMode(true),
     mConsumerControlledByApp(false),
     mDequeueBufferCannotBlock(false),
     mUseAsyncBuffer(true),
@@ -445,6 +445,7 @@ status_t GonkBufferQueue::dequeueBuffer(int *outBuf, sp<Fence>* outFence, bool a
                                         gfx::SurfaceFormat::UNKNOWN,
                                         gfx::BackendType::NONE,
                                         TextureFlags::DEALLOCATE_CLIENT);
+        textureClient->SetIsOpaque(true);
         usage |= GraphicBuffer::USAGE_HW_TEXTURE;
         bool result = textureClient->AllocateGralloc(IntSize(w, h), format, usage);
         sp<GraphicBuffer> graphicBuffer = textureClient->GetGraphicBuffer();
@@ -475,6 +476,22 @@ status_t GonkBufferQueue::dequeueBuffer(int *outBuf, sp<Fence>* outFence, bool a
             mSlots[*outBuf].mGraphicBuffer->handle, returnFlags);
 
     return returnFlags;
+}
+
+status_t GonkBufferQueue::setSynchronousMode(bool enabled) {
+    ALOGV("setSynchronousMode: enabled=%d", enabled);
+    Mutex::Autolock lock(mMutex);
+
+    if (mAbandoned) {
+        ALOGE("setSynchronousMode: BufferQueue has been abandoned!");
+        return NO_INIT;
+    }
+
+    if (mSynchronousMode != enabled) {
+        mSynchronousMode = enabled;
+        mDequeueCondition.broadcast();
+    }
+    return OK;
 }
 
 status_t GonkBufferQueue::queueBuffer(int buf,
@@ -586,12 +603,11 @@ status_t GonkBufferQueue::queueBuffer(int buf,
             // when the queue is empty, we can ignore "mDequeueBufferCannotBlock", and
             // simply queue this buffer.
             mQueue.push_back(item);
-            listener = mConsumerListener;
         } else {
             // when the queue is not empty, we need to look at the front buffer
             // state and see if we need to replace it.
             Fifo::iterator front(mQueue.begin());
-            if (front->mIsDroppable) {
+            if (front->mIsDroppable || !mSynchronousMode) {
                 // buffer slot currently queued is marked free if still tracked
                 if (stillTracking(front)) {
                     mSlots[front->mBuf].mBufferState = BufferSlot::FREE;
@@ -603,9 +619,11 @@ status_t GonkBufferQueue::queueBuffer(int buf,
                 *front = item;
             } else {
                 mQueue.push_back(item);
-                listener = mConsumerListener;
             }
         }
+        // always signals that an additional frame should be consumed
+        // to handle max acquired buffer count reached case.
+        listener = mConsumerListener;
 
         mBufferHasBeenQueued = true;
         mDequeueCondition.broadcast();
@@ -774,7 +792,7 @@ status_t GonkBufferQueue::disconnect(int api) {
     return err;
 }
 
-void GonkBufferQueue::dump(String8& result, const char* prefix) const {
+void GonkBufferQueue::dumpToString(String8& result, const char* prefix) const {
     Mutex::Autolock _l(mMutex);
 
     String8 fifo;
@@ -1171,7 +1189,7 @@ int GonkBufferQueue::getMinUndequeuedBufferCount(bool async) const {
 
     // we're in async mode, or we want to prevent the app to
     // deadlock itself, we throw-in an extra buffer to guarantee it.
-    if (mDequeueBufferCannotBlock || async)
+    if (mDequeueBufferCannotBlock || async || !mSynchronousMode)
         return mMaxAcquiredBufferCount + 1;
 
     return mMaxAcquiredBufferCount;

@@ -13,6 +13,7 @@
 #include "Blur.h"
 #include <map>
 #include "FilterProcessing.h"
+#include "Logging.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/DebugOnly.h"
 
@@ -179,101 +180,16 @@ NS_lround(double x)
   return x >= 0.0 ? int32_t(x + 0.5) : int32_t(x - 0.5);
 }
 
-// This check is safe against integer overflow.
-static bool
-SurfaceContainsPoint(SourceSurface* aSurface, const IntPoint& aPoint)
-{
-  IntSize size = aSurface->GetSize();
-  return aPoint.x >= 0 && aPoint.x < size.width &&
-         aPoint.y >= 0 && aPoint.y < size.height;
-}
-
-static uint8_t*
-DataAtOffset(DataSourceSurface* aSurface, IntPoint aPoint)
-{
-  if (!SurfaceContainsPoint(aSurface, aPoint)) {
-    MOZ_CRASH("sample position needs to be inside surface!");
-  }
-
-  MOZ_ASSERT(Factory::CheckSurfaceSize(aSurface->GetSize()),
-             "surface size overflows - this should have been prevented when the surface was created");
-
-  uint8_t* data = aSurface->GetData() + aPoint.y * aSurface->Stride() +
-    aPoint.x * BytesPerPixel(aSurface->GetFormat());
-
-  if (data < aSurface->GetData()) {
-    MOZ_CRASH("out-of-range data access");
-  }
-
-  return data;
-}
-
-static bool
-IntRectOverflows(const IntRect& aRect)
-{
-  CheckedInt<int32_t> xMost = aRect.x;
-  xMost += aRect.width;
-  CheckedInt<int32_t> yMost = aRect.y;
-  yMost += aRect.height;
-  return !xMost.isValid() || !yMost.isValid();
-}
-
-/**
- * aSrcRect: Rect relative to the aSrc surface
- * aDestPoint: Point inside aDest surface
- */
-static void
-CopyRect(DataSourceSurface* aSrc, DataSourceSurface* aDest,
-         IntRect aSrcRect, IntPoint aDestPoint)
-{
-  if (IntRectOverflows(aSrcRect) ||
-      IntRectOverflows(IntRect(aDestPoint, aSrcRect.Size()))) {
-    MOZ_CRASH("we should never be getting invalid rects at this point");
-  }
-
-  MOZ_ASSERT(aSrc->GetFormat() == aDest->GetFormat(), "different surface formats");
-  MOZ_ASSERT(IntRect(IntPoint(), aSrc->GetSize()).Contains(aSrcRect), "source rect too big for source surface");
-  MOZ_ASSERT(IntRect(IntPoint(), aDest->GetSize()).Contains(aSrcRect - aSrcRect.TopLeft() + aDestPoint), "dest surface too small");
-
-  if (aSrcRect.IsEmpty()) {
-    return;
-  }
-
-  uint8_t* sourceData = DataAtOffset(aSrc, aSrcRect.TopLeft());
-  uint32_t sourceStride = aSrc->Stride();
-  uint8_t* destData = DataAtOffset(aDest, aDestPoint);
-  uint32_t destStride = aDest->Stride();
-
-  if (BytesPerPixel(aSrc->GetFormat()) == 4) {
-    for (int32_t y = 0; y < aSrcRect.height; y++) {
-      PodCopy((int32_t*)destData, (int32_t*)sourceData, aSrcRect.width);
-      sourceData += sourceStride;
-      destData += destStride;
-    }
-  } else if (BytesPerPixel(aSrc->GetFormat()) == 1) {
-    for (int32_t y = 0; y < aSrcRect.height; y++) {
-      PodCopy(destData, sourceData, aSrcRect.width);
-      sourceData += sourceStride;
-      destData += destStride;
-    }
-  }
-}
-
 TemporaryRef<DataSourceSurface>
 CloneAligned(DataSourceSurface* aSource)
 {
-  RefPtr<DataSourceSurface> copy =
-    Factory::CreateDataSourceSurface(aSource->GetSize(), aSource->GetFormat());
-  if (copy) {
-    CopyRect(aSource, copy, IntRect(IntPoint(), aSource->GetSize()), IntPoint());
-  }
-  return copy.forget();
+  return CreateDataSourceSurfaceByCloning(aSource);
 }
 
 static void
 FillRectWithPixel(DataSourceSurface *aSurface, const IntRect &aFillRect, IntPoint aPixelPos)
 {
-  MOZ_ASSERT(!IntRectOverflows(aFillRect));
+  MOZ_ASSERT(!aFillRect.Overflows());
   MOZ_ASSERT(IntRect(IntPoint(), aSurface->GetSize()).Contains(aFillRect),
              "aFillRect needs to be completely inside the surface");
   MOZ_ASSERT(SurfaceContainsPoint(aSurface, aPixelPos),
@@ -306,8 +222,8 @@ FillRectWithVerticallyRepeatingHorizontalStrip(DataSourceSurface *aSurface,
                                                const IntRect &aFillRect,
                                                const IntRect &aSampleRect)
 {
-  MOZ_ASSERT(!IntRectOverflows(aFillRect));
-  MOZ_ASSERT(!IntRectOverflows(aSampleRect));
+  MOZ_ASSERT(!aFillRect.Overflows());
+  MOZ_ASSERT(!aSampleRect.Overflows());
   MOZ_ASSERT(IntRect(IntPoint(), aSurface->GetSize()).Contains(aFillRect),
              "aFillRect needs to be completely inside the surface");
   MOZ_ASSERT(IntRect(IntPoint(), aSurface->GetSize()).Contains(aSampleRect),
@@ -334,8 +250,8 @@ FillRectWithHorizontallyRepeatingVerticalStrip(DataSourceSurface *aSurface,
                                                const IntRect &aFillRect,
                                                const IntRect &aSampleRect)
 {
-  MOZ_ASSERT(!IntRectOverflows(aFillRect));
-  MOZ_ASSERT(!IntRectOverflows(aSampleRect));
+  MOZ_ASSERT(!aFillRect.Overflows());
+  MOZ_ASSERT(!aSampleRect.Overflows());
   MOZ_ASSERT(IntRect(IntPoint(), aSurface->GetSize()).Contains(aFillRect),
              "aFillRect needs to be completely inside the surface");
   MOZ_ASSERT(IntRect(IntPoint(), aSurface->GetSize()).Contains(aSampleRect),
@@ -366,7 +282,7 @@ FillRectWithHorizontallyRepeatingVerticalStrip(DataSourceSurface *aSurface,
 static void
 DuplicateEdges(DataSourceSurface* aSurface, const IntRect &aFromRect)
 {
-  MOZ_ASSERT(!IntRectOverflows(aFromRect));
+  MOZ_ASSERT(!aFromRect.Overflows());
   MOZ_ASSERT(IntRect(IntPoint(), aSurface->GetSize()).Contains(aFromRect),
              "aFromRect needs to be completely inside the surface");
 
@@ -474,7 +390,7 @@ GetDataSurfaceInRect(SourceSurface *aSurface,
 {
   MOZ_ASSERT(aSurface ? aSurfaceRect.Size() == aSurface->GetSize() : aSurfaceRect.IsEmpty());
 
-  if (IntRectOverflows(aSurfaceRect) || IntRectOverflows(aDestRect)) {
+  if (aSurfaceRect.Overflows() || aDestRect.Overflows()) {
     // We can't rely on the intersection calculations below to make sense when
     // XMost() or YMost() overflow. Bail out.
     return nullptr;
@@ -492,14 +408,9 @@ GetDataSurfaceInRect(SourceSurface *aSurface,
   SurfaceFormat format = aSurface ? aSurface->GetFormat() : SurfaceFormat(SurfaceFormat::B8G8R8A8);
 
   RefPtr<DataSourceSurface> target =
-    Factory::CreateDataSourceSurface(aDestRect.Size(), format);
-
-  if (!target) {
+    Factory::CreateDataSourceSurface(aDestRect.Size(), format, true);
+  if (MOZ2D_WARN_IF(!target)) {
     return nullptr;
-  }
-
-  if (aEdgeMode == EDGE_MODE_NONE && !aSurfaceRect.Contains(aDestRect)) {
-    ClearDataSourceSurface(target);
   }
 
   if (!aSurface) {
@@ -633,7 +544,7 @@ FilterNodeSoftware::Draw(DrawTarget* aDrawTarget,
   }
 
   IntRect outputRect = GetOutputRectInRect(renderIntRect);
-  if (IntRectOverflows(outputRect)) {
+  if (outputRect.Overflows()) {
 #ifdef DEBUG_DUMP_SURFACES
     printf("output rect overflowed, not painting anything\n");
     printf("</pre>\n");
@@ -684,7 +595,7 @@ FilterNodeSoftware::GetOutput(const IntRect &aRect)
 {
   MOZ_ASSERT(GetOutputRectInRect(aRect).Contains(aRect));
 
-  if (IntRectOverflows(aRect)) {
+  if (aRect.Overflows()) {
     return nullptr;
   }
 
@@ -714,7 +625,7 @@ FilterNodeSoftware::RequestRect(const IntRect &aRect)
 void
 FilterNodeSoftware::RequestInputRect(uint32_t aInputEnumIndex, const IntRect &aRect)
 {
-  if (IntRectOverflows(aRect)) {
+  if (aRect.Overflows()) {
     return;
   }
 
@@ -747,7 +658,7 @@ FilterNodeSoftware::GetInputDataSourceSurface(uint32_t aInputEnumIndex,
                                               ConvolveMatrixEdgeMode aEdgeMode,
                                               const IntRect *aTransparencyPaddedSourceRect)
 {
-  if (IntRectOverflows(aRect)) {
+  if (aRect.Overflows()) {
     return nullptr;
   }
 
@@ -816,12 +727,25 @@ FilterNodeSoftware::GetInputDataSourceSurface(uint32_t aInputEnumIndex,
   RefPtr<DataSourceSurface> result =
     GetDataSurfaceInRect(surface, surfaceRect, aRect, aEdgeMode);
 
-  if (result &&
-      (result->Stride() != GetAlignedStride<16>(result->Stride()) ||
-       reinterpret_cast<uintptr_t>(result->GetData()) % 16 != 0)) {
-    // Align unaligned surface.
-    result = CloneAligned(result);
+  if (result) {
+    // TODO: This isn't safe since we don't have a guarantee
+    // that future Maps will have the same stride
+    DataSourceSurface::MappedSurface map;
+    if (result->Map(DataSourceSurface::READ, &map)) {
+       // Unmap immediately since CloneAligned hasn't been updated
+       // to use the Map API yet. We can still read the stride/data
+       // values as long as we don't try to dereference them.
+      result->Unmap();
+      if (map.mStride != GetAlignedStride<16>(map.mStride) ||
+          reinterpret_cast<uintptr_t>(map.mData) % 16 != 0) {
+        // Align unaligned surface.
+        result = CloneAligned(result);
+      }
+    } else {
+      result = nullptr;
+    }
   }
+
 
   if (!result) {
 #ifdef DEBUG_DUMP_SURFACES
@@ -849,7 +773,7 @@ IntRect
 FilterNodeSoftware::GetInputRectInRect(uint32_t aInputEnumIndex,
                                        const IntRect &aInRect)
 {
-  if (IntRectOverflows(aInRect)) {
+  if (aInRect.Overflows()) {
     return IntRect();
   }
 
@@ -922,7 +846,7 @@ FilterNodeSoftware::~FilterNodeSoftware()
 void
 FilterNodeSoftware::SetInput(uint32_t aIndex, FilterNode *aFilter)
 {
-  if (aFilter->GetBackendType() != FILTER_BACKEND_SOFTWARE) {
+  if (aFilter && aFilter->GetBackendType() != FILTER_BACKEND_SOFTWARE) {
     MOZ_ASSERT(false, "can only take software filters as inputs");
     return;
   }
@@ -945,10 +869,8 @@ FilterNodeSoftware::SetInput(uint32_t aInputEnumIndex,
     MOZ_CRASH();
     return;
   }
-  if ((uint32_t)inputIndex >= mInputSurfaces.size()) {
+  if ((uint32_t)inputIndex >= NumberOfSetInputs()) {
     mInputSurfaces.resize(inputIndex + 1);
-  }
-  if ((uint32_t)inputIndex >= mInputFilters.size()) {
     mInputFilters.resize(inputIndex + 1);
   }
   mInputSurfaces[inputIndex] = aSurface;
@@ -959,6 +881,10 @@ FilterNodeSoftware::SetInput(uint32_t aInputEnumIndex,
     aFilter->AddInvalidationListener(this);
   }
   mInputFilters[inputIndex] = aFilter;
+  if (!aSurface && !aFilter && (size_t)inputIndex == NumberOfSetInputs()) {
+    mInputSurfaces.resize(inputIndex);
+    mInputFilters.resize(inputIndex);
+  }
   Invalidate();
 }
 
@@ -984,6 +910,46 @@ FilterNodeBlendSoftware::SetAttribute(uint32_t aIndex, uint32_t aBlendMode)
   Invalidate();
 }
 
+static CompositionOp ToBlendOp(BlendMode aOp)
+{
+  switch (aOp) {
+  case BLEND_MODE_MULTIPLY:
+    return CompositionOp::OP_MULTIPLY;
+  case BLEND_MODE_SCREEN:
+    return CompositionOp::OP_SCREEN;
+  case BLEND_MODE_OVERLAY:
+    return CompositionOp::OP_OVERLAY;
+  case BLEND_MODE_DARKEN:
+    return CompositionOp::OP_DARKEN;
+  case BLEND_MODE_LIGHTEN:
+    return CompositionOp::OP_LIGHTEN;
+  case BLEND_MODE_COLOR_DODGE:
+    return CompositionOp::OP_COLOR_DODGE;
+  case BLEND_MODE_COLOR_BURN:
+    return CompositionOp::OP_COLOR_BURN;
+  case BLEND_MODE_HARD_LIGHT:
+    return CompositionOp::OP_HARD_LIGHT;
+  case BLEND_MODE_SOFT_LIGHT:
+    return CompositionOp::OP_SOFT_LIGHT;
+  case BLEND_MODE_DIFFERENCE:
+    return CompositionOp::OP_DIFFERENCE;
+  case BLEND_MODE_EXCLUSION:
+    return CompositionOp::OP_EXCLUSION;
+  case BLEND_MODE_HUE:
+    return CompositionOp::OP_HUE;
+  case BLEND_MODE_SATURATION:
+    return CompositionOp::OP_SATURATION;
+  case BLEND_MODE_COLOR:
+    return CompositionOp::OP_COLOR;
+  case BLEND_MODE_LUMINOSITY:
+    return CompositionOp::OP_LUMINOSITY;
+  default:
+    return CompositionOp::OP_OVER;
+  }
+
+  return CompositionOp::OP_OVER;
+}
+
 TemporaryRef<DataSourceSurface>
 FilterNodeBlendSoftware::Render(const IntRect& aRect)
 {
@@ -1000,14 +966,43 @@ FilterNodeBlendSoftware::Render(const IntRect& aRect)
     return nullptr;
   }
 
-  // Second case: both are non-transparent.
-  if (input1 && input2) {
-    // Apply normal filtering.
-    return FilterProcessing::ApplyBlending(input1, input2, mBlendMode);
+  // Second case: one of them is transparent. Return the non-transparent one.
+  if (!input1 || !input2) {
+    return input1 ? input1.forget() : input2.forget();
   }
 
-  // Third case: one of them is transparent. Return the non-transparent one.
-  return input1 ? input1.forget() : input2.forget();
+  // Third case: both are non-transparent.
+  // Apply normal filtering.
+  RefPtr<DataSourceSurface> target = FilterProcessing::ApplyBlending(input1, input2, mBlendMode);
+  if (target != nullptr) {
+    return target.forget();
+  }
+
+  IntSize size = input1->GetSize();
+  target =
+    Factory::CreateDataSourceSurface(size, SurfaceFormat::B8G8R8A8);
+  if (MOZ2D_WARN_IF(!target)) {
+    return nullptr;
+  }
+
+  CopyRect(input1, target, IntRect(IntPoint(), size), IntPoint());
+
+  RefPtr<DrawTarget> dt =
+	    Factory::CreateDrawTargetForData(BackendType::CAIRO,
+	                                     target->GetData(),
+	                                     target->GetSize(),
+	                                     target->Stride(),
+	                                     target->GetFormat());
+
+  if (!dt) {
+    gfxWarning() << "FilterNodeBlendSoftware::Render failed in CreateDrawTargetForData";
+    return nullptr;
+  }
+
+  Rect r(0, 0, size.width, size.height);
+  dt->DrawSurface(input2, r, r, DrawSurfaceOptions(), DrawOptions(1.0f, ToBlendOp(mBlendMode)));
+  dt->Flush();
+  return target.forget();
 }
 
 void
@@ -1080,7 +1075,7 @@ FilterNodeTransformSoftware::Render(const IntRect& aRect)
   IntRect srcRect = SourceRectForOutputRect(aRect);
 
   RefPtr<DataSourceSurface> input =
-    GetInputDataSourceSurface(IN_TRANSFORM_IN, srcRect, NEED_COLOR_CHANNELS);
+    GetInputDataSourceSurface(IN_TRANSFORM_IN, srcRect);
 
   if (!input) {
     return nullptr;
@@ -1092,9 +1087,24 @@ FilterNodeTransformSoftware::Render(const IntRect& aRect)
     return input.forget();
   }
 
+  RefPtr<DataSourceSurface> surf =
+    Factory::CreateDataSourceSurface(aRect.Size(), input->GetFormat(), true);
+
+  if (!surf) {
+    return nullptr;
+  }
+
+  DataSourceSurface::MappedSurface mapping;
+  surf->Map(DataSourceSurface::MapType::WRITE, &mapping);
+
   RefPtr<DrawTarget> dt =
-    Factory::CreateDrawTarget(BackendType::CAIRO, aRect.Size(), input->GetFormat());
+    Factory::CreateDrawTargetForData(BackendType::CAIRO,
+                                     mapping.mData,
+                                     surf->GetSize(),
+                                     mapping.mStride,
+                                     surf->GetFormat());
   if (!dt) {
+    gfxWarning() << "FilterNodeTransformSoftware::Render failed in CreateDrawTargetForData";
     return nullptr;
   }
 
@@ -1102,9 +1112,9 @@ FilterNodeTransformSoftware::Render(const IntRect& aRect)
   dt->SetTransform(transform);
   dt->DrawSurface(input, r, r, DrawSurfaceOptions(mFilter));
 
-  RefPtr<SourceSurface> result = dt->Snapshot();
-  RefPtr<DataSourceSurface> resultData = result->GetDataSurface();
-  return resultData.forget();
+  dt->Flush();
+  surf->Unmap();
+  return surf.forget();
 }
 
 void
@@ -1181,7 +1191,7 @@ ApplyMorphology(const IntRect& aSourceRect, DataSourceSurface* aInput,
     tmp = aInput;
   } else {
     tmp = Factory::CreateDataSourceSurface(tmpRect.Size(), SurfaceFormat::B8G8R8A8);
-    if (!tmp) {
+    if (MOZ2D_WARN_IF(!tmp)) {
       return nullptr;
     }
 
@@ -1200,7 +1210,7 @@ ApplyMorphology(const IntRect& aSourceRect, DataSourceSurface* aInput,
     dest = tmp;
   } else {
     dest = Factory::CreateDataSourceSurface(destRect.Size(), SurfaceFormat::B8G8R8A8);
-    if (!dest) {
+    if (MOZ2D_WARN_IF(!dest)) {
       return nullptr;
     }
 
@@ -1298,7 +1308,7 @@ Premultiply(DataSourceSurface* aSurface)
   IntSize size = aSurface->GetSize();
   RefPtr<DataSourceSurface> target =
     Factory::CreateDataSourceSurface(size, SurfaceFormat::B8G8R8A8);
-  if (!target) {
+  if (MOZ2D_WARN_IF(!target)) {
     return nullptr;
   }
 
@@ -1323,7 +1333,7 @@ Unpremultiply(DataSourceSurface* aSurface)
   IntSize size = aSurface->GetSize();
   RefPtr<DataSourceSurface> target =
     Factory::CreateDataSourceSurface(size, SurfaceFormat::B8G8R8A8);
-  if (!target) {
+  if (MOZ2D_WARN_IF(!target)) {
     return nullptr;
   }
 
@@ -1370,6 +1380,9 @@ FilterNodeColorMatrixSoftware::RequestFromInputsForRect(const IntRect &aRect)
 IntRect
 FilterNodeColorMatrixSoftware::GetOutputRectInRect(const IntRect& aRect)
 {
+  if (mMatrix._54 > 0.0f) {
+    return aRect;
+  }
   return GetInputRectInRect(IN_COLOR_MATRIX_IN, aRect);
 }
 
@@ -1410,7 +1423,7 @@ FilterNodeFloodSoftware::Render(const IntRect& aRect)
   SurfaceFormat format = FormatForColor(mColor);
   RefPtr<DataSourceSurface> target =
     Factory::CreateDataSourceSurface(aRect.Size(), format);
-  if (!target) {
+  if (MOZ2D_WARN_IF(!target)) {
     return nullptr;
   }
 
@@ -1539,11 +1552,20 @@ FilterNodeTileSoftware::Render(const IntRect& aRect)
         // same format as our input filter, and we do not actually know the
         // input format before we call GetInputDataSourceSurface.
         target = Factory::CreateDataSourceSurface(aRect.Size(), input->GetFormat());
-        if (!target) {
+        if (MOZ2D_WARN_IF(!target)) {
           return nullptr;
         }
       }
-      MOZ_ASSERT(input->GetFormat() == target->GetFormat(), "different surface formats from the same input?");
+
+      if (input->GetFormat() != target->GetFormat()) {
+        // Different rectangles of the input can have different formats. If
+        // that happens, just convert everything to B8G8R8A8.
+        target = FilterProcessing::ConvertToB8G8R8A8(target);
+        input = FilterProcessing::ConvertToB8G8R8A8(input);
+        if (MOZ2D_WARN_IF(!target) || MOZ2D_WARN_IF(!input)) {
+          return nullptr;
+        }
+      }
 
       CopyRect(input, target, srcRect - srcRect.TopLeft(), destRect.TopLeft() - aRect.TopLeft());
     }
@@ -1696,7 +1718,7 @@ FilterNodeComponentTransferSoftware::Render(const IntRect& aRect)
 
   RefPtr<DataSourceSurface> target =
     Factory::CreateDataSourceSurface(aRect.Size(), format);
-  if (!target) {
+  if (MOZ2D_WARN_IF(!target)) {
     return nullptr;
   }
 
@@ -1718,7 +1740,10 @@ FilterNodeComponentTransferSoftware::RequestFromInputsForRect(const IntRect &aRe
 IntRect
 FilterNodeComponentTransferSoftware::GetOutputRectInRect(const IntRect& aRect)
 {
-  return GetInputRectInRect(IN_TRANSFER_IN, aRect);
+  if (mDisableA) {
+    return GetInputRectInRect(IN_TRANSFER_IN, aRect);
+  }
+  return aRect;
 }
 
 int32_t
@@ -2151,7 +2176,7 @@ static uint8_t* sColorSamplingAccessControlEnd = nullptr;
 
 struct DebugOnlyAutoColorSamplingAccessControl
 {
-  DebugOnlyAutoColorSamplingAccessControl(DataSourceSurface* aSurface)
+  explicit DebugOnlyAutoColorSamplingAccessControl(DataSourceSurface* aSurface)
   {
     sColorSamplingAccessControlStart = aSurface->GetData();
     sColorSamplingAccessControlEnd = sColorSamplingAccessControlStart +
@@ -2358,11 +2383,10 @@ FilterNodeConvolveMatrixSoftware::DoRender(const IntRect& aRect,
   DebugOnlyAutoColorSamplingAccessControl accessControl(input);
 
   RefPtr<DataSourceSurface> target =
-    Factory::CreateDataSourceSurface(aRect.Size(), SurfaceFormat::B8G8R8A8);
-  if (!target) {
+    Factory::CreateDataSourceSurface(aRect.Size(), SurfaceFormat::B8G8R8A8, true);
+  if (MOZ2D_WARN_IF(!target)) {
     return nullptr;
   }
-  ClearDataSourceSurface(target);
 
   IntPoint offset = aRect.TopLeft() - srcRect.TopLeft();
 
@@ -2506,7 +2530,7 @@ FilterNodeDisplacementMapSoftware::Render(const IntRect& aRect)
     GetInputDataSourceSurface(IN_DISPLACEMENT_MAP_IN2, aRect, NEED_COLOR_CHANNELS);
   RefPtr<DataSourceSurface> target =
     Factory::CreateDataSourceSurface(aRect.Size(), SurfaceFormat::B8G8R8A8);
-  if (!input || !map || !target) {
+  if (MOZ2D_WARN_IF(!(input && map && target))) {
     return nullptr;
   }
 
@@ -2763,15 +2787,13 @@ FilterNodeCompositeSoftware::Render(const IntRect& aRect)
   RefPtr<DataSourceSurface> start =
     GetInputDataSourceSurface(IN_COMPOSITE_IN_START, aRect, NEED_COLOR_CHANNELS);
   RefPtr<DataSourceSurface> dest =
-    Factory::CreateDataSourceSurface(aRect.Size(), SurfaceFormat::B8G8R8A8);
-  if (!dest) {
+    Factory::CreateDataSourceSurface(aRect.Size(), SurfaceFormat::B8G8R8A8, true);
+  if (MOZ2D_WARN_IF(!dest)) {
     return nullptr;
   }
 
   if (start) {
     CopyRect(start, dest, aRect - aRect.TopLeft(), IntPoint());
-  } else {
-    ClearDataSourceSurface(dest);
   }
 
   for (size_t inputIndex = 1; inputIndex < NumberOfSetInputs(); inputIndex++) {
@@ -2857,12 +2879,18 @@ FilterNodeBlurXYSoftware::Render(const IntRect& aRect)
 
   if (input->GetFormat() == SurfaceFormat::A8) {
     target = Factory::CreateDataSourceSurface(srcRect.Size(), SurfaceFormat::A8);
+    if (MOZ2D_WARN_IF(!target)) {
+      return nullptr;
+    }
     CopyRect(input, target, IntRect(IntPoint(), input->GetSize()), IntPoint());
     AlphaBoxBlur blur(r, target->Stride(), sigmaXY.width, sigmaXY.height);
     blur.Blur(target->GetData());
   } else {
     RefPtr<DataSourceSurface> channel0, channel1, channel2, channel3;
     FilterProcessing::SeparateColorChannels(input, channel0, channel1, channel2, channel3);
+    if (MOZ2D_WARN_IF(!(channel0 && channel1 && channel2))) {
+      return nullptr;
+    }
     AlphaBoxBlur blur(r, channel0->Stride(), sigmaXY.width, sigmaXY.height);
     blur.Blur(channel0->GetData());
     blur.Blur(channel1->GetData());
@@ -2902,13 +2930,20 @@ FilterNodeGaussianBlurSoftware::FilterNodeGaussianBlurSoftware()
  : mStdDeviation(0)
 {}
 
+static float
+ClampStdDeviation(float aStdDeviation)
+{
+  // Cap software blur radius for performance reasons.
+  return std::min(std::max(0.0f, aStdDeviation), 100.0f);
+}
+
 void
 FilterNodeGaussianBlurSoftware::SetAttribute(uint32_t aIndex,
                                              float aStdDeviation)
 {
   switch (aIndex) {
     case ATT_GAUSSIAN_BLUR_STD_DEVIATION:
-      mStdDeviation = std::max(0.0f, aStdDeviation);
+      mStdDeviation = ClampStdDeviation(aStdDeviation);
       break;
     default:
       MOZ_CRASH();
@@ -2932,7 +2967,7 @@ FilterNodeDirectionalBlurSoftware::SetAttribute(uint32_t aIndex,
 {
   switch (aIndex) {
     case ATT_DIRECTIONAL_BLUR_STD_DEVIATION:
-      mStdDeviation = std::max(0.0f, aStdDeviation);
+      mStdDeviation = ClampStdDeviation(aStdDeviation);
       break;
     default:
       MOZ_CRASH();
@@ -3371,7 +3406,7 @@ FilterNodeLightingSoftware<LightType, LightingType>::DoRender(const IntRect& aRe
 
   RefPtr<DataSourceSurface> target =
     Factory::CreateDataSourceSurface(size, SurfaceFormat::B8G8R8A8);
-  if (!target) {
+  if (MOZ2D_WARN_IF(!target)) {
     return nullptr;
   }
 

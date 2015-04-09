@@ -43,7 +43,7 @@ UNIFIED_SOURCES += [
     'google/protobuf/wire_format_lite.cc',
 ]
 
-FINAL_LIBRARY = 'toolkitcomps'
+FINAL_LIBRARY = 'xul'
 
 DEFINES['GOOGLE_PROTOBUF_NO_RTTI'] = True
 
@@ -55,5 +55,9 @@ if CONFIG['GNU_CXX']:
     ]
 elif CONFIG['_MSC_VER']:
     CXXFLAGS += [
+        '-wd4005', # 'WIN32_LEAN_AND_MEAN' : macro redefinition
+        '-wd4018', # '<' : signed/unsigned mismatch
         '-wd4099', # mismatched class/struct tags
     ]
+
+CXXFLAGS += CONFIG['TK_CFLAGS']

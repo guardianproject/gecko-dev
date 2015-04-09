@@ -2,11 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+"use strict";
+
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/Services.jsm");
 
 const Ci = Components.interfaces;
 const Cc = Components.classes;
+const Cu = Components.utils;
 
 const POSITION_UNAVAILABLE = Ci.nsIDOMGeoPositionError.POSITION_UNAVAILABLE;
 const SETTINGS_DEBUG_ENABLED = "geolocation.debugging.enabled";
@@ -263,11 +266,13 @@ WifiGeoPositionProvider.prototype = {
     }
 
     try {
-      let setting = JSON.parse(aData);
-      if (setting.key == SETTINGS_DEBUG_ENABLED) {
-        gLoggingEnabled = setting.value;
-      } else if (setting.key == SETTINGS_WIFI_ENABLED) {
-        gWifiScanningEnabled = setting.value;
+      if ("wrappedJSObject" in aSubject) {
+        aSubject = aSubject.wrappedJSObject;
+      }
+      if (aSubject.key == SETTINGS_DEBUG_ENABLED) {
+        gLoggingEnabled = aSubject.value;
+      } else if (aSubject.key == SETTINGS_WIFI_ENABLED) {
+        gWifiScanningEnabled = aSubject.value;
       }
     } catch (e) {
     }
@@ -315,13 +320,12 @@ WifiGeoPositionProvider.prototype = {
       }
     };
 
-    try {
-      Services.obs.addObserver(this, SETTINGS_CHANGED_TOPIC, false);
-      let settings = Cc["@mozilla.org/settingsService;1"].getService(Ci.nsISettingsService);
+    Services.obs.addObserver(this, SETTINGS_CHANGED_TOPIC, false);
+    let settingsService = Cc["@mozilla.org/settingsService;1"];
+    if (settingsService) {
+      let settings = settingsService.getService(Ci.nsISettingsService);
       settings.createLock().get(SETTINGS_WIFI_ENABLED, settingsCallback);
       settings.createLock().get(SETTINGS_DEBUG_ENABLED, settingsCallback);
-    } catch(ex) {
-      // This platform doesn't have the settings interface, and that is just peachy
     }
 
     if (gWifiScanningEnabled && Cc["@mozilla.org/wifi/monitor;1"]) {
@@ -408,24 +412,41 @@ WifiGeoPositionProvider.prototype = {
     try {
       let radioService = Cc["@mozilla.org/ril;1"]
                     .getService(Ci.nsIRadioInterfaceLayer);
-      let numInterfaces = radioService.numRadioInterfaces;
-      let result = [];
-      for (let i = 0; i < numInterfaces; i++) {
-        LOG("Looking for SIM in slot:" + i + " of " + numInterfaces);
-        let radio = radioService.getRadioInterface(i);
-        let iccInfo = radio.rilContext.iccInfo;
-        let cell = radio.rilContext.voice.cell;
-        let type = radio.rilContext.voice.type;
+      let service = Cc["@mozilla.org/mobileconnection/mobileconnectionservice;1"]
+                    .getService(Ci.nsIMobileConnectionService);
 
-        if (iccInfo && cell && type) {
-          if (type === "gsm" || type === "gprs" || type === "edge") {
-            type = "gsm";
-          } else {
-            type = "wcdma";
-          }
-          result.push({ radio: type,
-                      mobileCountryCode: iccInfo.mcc,
-                      mobileNetworkCode: iccInfo.mnc,
+      let result = [];
+      for (let i = 0; i < service.numItems; i++) {
+        LOG("Looking for SIM in slot:" + i + " of " + service.numItems);
+        let connection = service.getItemByServiceId(i);
+        let voice = connection && connection.voice;
+        let cell = voice && voice.cell;
+        let type = voice && voice.type;
+        let network = voice && voice.network;
+
+        if (network && cell && type) {
+          let radioTechFamily;
+          switch (type) {
+            case "gsm":
+            case "gprs":
+            case "edge":
+              radioTechFamily = "gsm";
+              break;
+            case "umts":
+            case "hsdpa":
+            case "hsupa":
+            case "hspa":
+            case "hspa+":
+              radioTechFamily = "wcdma";
+              break;
+            case "lte":
+              radioTechFamily = "lte";
+              break;
+            // CDMA cases to be handled in bug 1010282
+          };
+          result.push({ radio: radioTechFamily,
+                      mobileCountryCode: voice.network.mcc,
+                      mobileNetworkCode: voice.network.mnc,
                       locationAreaCode: cell.gsmLocationAreaCode,
                       cellId: cell.gsmCellId });
         }
@@ -441,8 +462,8 @@ WifiGeoPositionProvider.prototype = {
   },
 
   sendLocationRequest: function (wifiData) {
-    let data = {};
-    if (wifiData) {
+    let data = { cellTowers: undefined, wifiAccessPoints: undefined };
+    if (wifiData && wifiData.length >= 2) {
       data.wifiAccessPoints = wifiData;
     }
 
@@ -460,38 +481,40 @@ WifiGeoPositionProvider.prototype = {
 
     if (useCached) {
       gCachedRequest.location.timestamp = Date.now();
-      this.listener.update(gCachedRequest.location);
+      this.notifyListener("update", [gCachedRequest.location]);
       return;
     }
 
     // From here on, do a network geolocation request //
     let url = Services.urlFormatter.formatURLPref("geo.wifi.uri");
-    let listener = this.listener;
-    LOG("Sending request: " + url + "\n");
+    LOG("Sending request");
 
     let xhr = Components.classes["@mozilla.org/xmlextras/xmlhttprequest;1"]
                         .createInstance(Ci.nsIXMLHttpRequest);
 
-    listener.locationUpdatePending();
+    this.notifyListener("locationUpdatePending");
 
     try {
       xhr.open("POST", url, true);
     } catch (e) {
-      listener.notifyError(POSITION_UNAVAILABLE);
+      this.notifyListener("notifyError",
+                          [POSITION_UNAVAILABLE]);
       return;
     }
     xhr.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
     xhr.responseType = "json";
     xhr.mozBackgroundRequest = true;
     xhr.channel.loadFlags = Ci.nsIChannel.LOAD_ANONYMOUS;
-    xhr.onerror = function() {
-      listener.notifyError(POSITION_UNAVAILABLE);
-    };
-    xhr.onload = function() {
-      LOG("gls returned status: " + xhr.status + " --> " +  JSON.stringify(xhr.response));
+    xhr.onerror = (function() {
+      this.notifyListener("notifyError",
+                          [POSITION_UNAVAILABLE]);
+    }).bind(this);
+    xhr.onload = (function() {
+      LOG("server returned status: " + xhr.status + " --> " +  JSON.stringify(xhr.response));
       if ((xhr.channel instanceof Ci.nsIHttpChannel && xhr.status != 200) ||
           !xhr.response || !xhr.response.location) {
-        listener.notifyError(POSITION_UNAVAILABLE);
+        this.notifyListener("notifyError",
+                            [POSITION_UNAVAILABLE]);
         return;
       }
 
@@ -499,14 +522,23 @@ WifiGeoPositionProvider.prototype = {
                                                   xhr.response.location.lng,
                                                   xhr.response.accuracy);
 
-      listener.update(newLocation);
+      this.notifyListener("update", [newLocation]);
       gCachedRequest = new CachedRequest(newLocation, data.cellTowers, data.wifiAccessPoints);
-    };
+    }).bind(this);
 
     var requestData = JSON.stringify(data);
     LOG("sending " + requestData);
     xhr.send(requestData);
   },
+
+  notifyListener: function(listenerFunc, args) {
+    args = args || [];
+    try {
+      this.listener[listenerFunc].apply(this.listener, args);
+    } catch(e) {
+      Cu.reportError(e);
+    }
+  }
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([WifiGeoPositionProvider]);

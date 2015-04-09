@@ -156,7 +156,13 @@ class DroidADB(DeviceManagerADB, DroidMixin):
 
     def getTopActivity(self):
         package = None
-        data = self.shellCheckOutput(["dumpsys", "window", "windows"])
+        data = None
+        try:
+            data = self.shellCheckOutput(["dumpsys", "window", "windows"])
+        except:
+            # dumpsys seems to intermittently fail (seen on 4.3 emulator), producing
+            # no output.
+            return ""
         # "dumpsys window windows" produces many lines of input. The top/foreground
         # activity is indicated by something like:
         #   mFocusedApp=AppWindowToken{483e6db0 token=HistoryRecord{484dcad8 com.mozilla.SUTAgentAndroid/.SUTAgentAndroid}}
@@ -173,7 +179,11 @@ class DroidADB(DeviceManagerADB, DroidMixin):
             if m:
                 package = m.group(1)
         if not package:
-            raise DMError("unable to find focused app")
+            # On some Android 4.4 devices, when the home screen is displayed,
+            # dumpsys reports "mFocusedApp=null". Guard against this case and
+            # others where the focused app can not be determined by returning
+            # an empty string -- same as sutagent.
+            package = ""
         return package
 
     def getAppRoot(self, packageName):

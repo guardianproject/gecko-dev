@@ -218,7 +218,6 @@
                 label="&lineNumbers.label;"
                 accesskey="&lineNumbers.accesskey;"
                 type="checkbox"
-                checked="true"
                 command="sp-cmd-line-numbers"/>
       <menuitem id="sp-menu-word-wrap"
                 label="&wordWrap.label;"
@@ -403,6 +402,7 @@
       <tabpanels flex="1"/>
     </tabbox>
   </hbox>
+  <toolbar id="statusbar-line-col" class="devtools-toolbar"/>
 </notificationbox>
 
 </window>

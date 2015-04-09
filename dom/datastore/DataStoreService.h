@@ -27,8 +27,8 @@ class Promise;
 class RetrieveRevisionsCounter;
 class RevisionAddedEnableStoreCallback;
 
-class DataStoreService MOZ_FINAL : public nsIDataStoreService
-                                 , public nsIObserver
+class DataStoreService final : public nsIDataStoreService
+                             , public nsIObserver
 {
   friend class ContentChild;
   friend class FirstRevisionIdCallback;
@@ -53,6 +53,7 @@ public:
   nsresult GenerateUUID(nsAString& aID);
 
   nsresult GetDataStoresFromIPC(const nsAString& aName,
+                                const nsAString& aOwner,
                                 nsIPrincipal* aPrincipal,
                                 nsTArray<DataStoreSetting>* aValue);
 
@@ -83,8 +84,8 @@ private:
   void GetDataStoresResolve(nsPIDOMWindow* aWindow, Promise* aPromise,
                             const nsTArray<DataStoreInfo>& aStores);
 
-  nsresult GetDataStoreInfos(const nsAString& aName, uint32_t aAppId,
-                             nsIPrincipal* aPrincipal,
+  nsresult GetDataStoreInfos(const nsAString& aName, const nsAString& aOwner,
+                             uint32_t aAppId, nsIPrincipal* aPrincipal,
                              nsTArray<DataStoreInfo>& aStores);
 
   void DeleteDataStores(uint32_t aAppId);

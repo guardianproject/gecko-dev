@@ -28,26 +28,30 @@
 #include "nsStyleChangeList.h"
 #include "nsStyleSet.h"
 #include "RestyleManager.h"
+#include "nsDOMMutationObserver.h"
 
 using mozilla::TimeStamp;
 using mozilla::TimeDuration;
+using mozilla::dom::AnimationPlayer;
+using mozilla::dom::Animation;
 
 using namespace mozilla;
 using namespace mozilla::layers;
 using namespace mozilla::css;
 
 double
-ElementPropertyTransition::ValuePortionFor(TimeStamp aRefreshTime) const
+ElementPropertyTransition::CurrentValuePortion() const
 {
   // It would be easy enough to handle finished transitions by using a time
   // fraction of 1 but currently we should not be called for finished
   // transitions.
   MOZ_ASSERT(!IsFinishedTransition(),
              "Getting the value portion of a finished transition");
+  MOZ_ASSERT(!GetLocalTime().IsNull(),
+             "Getting the value portion of an animation that's not being "
+             "sampled");
 
-  TimeDuration localTime = GetLocalTimeAt(aRefreshTime);
-
-  // Transitions use a fill mode of 'backwards' so GetComputedTimingAt will
+  // Transitions use a fill mode of 'backwards' so GetComputedTiming will
   // never return a null time fraction due to being *before* the animation
   // interval. However, it might be possible that we're behind on flushing
   // causing us to get called *after* the animation interval. So, just in
@@ -55,7 +59,7 @@ ElementPropertyTransition::ValuePortionFor(TimeStamp aRefreshTime) const
   // is never null.
   AnimationTiming timingToUse = mTiming;
   timingToUse.mFillMode = NS_STYLE_ANIMATION_FILL_MODE_BOTH;
-  ComputedTiming computedTiming = GetComputedTimingAt(localTime, timingToUse);
+  ComputedTiming computedTiming = GetComputedTiming(&timingToUse);
 
   MOZ_ASSERT(computedTiming.mTimeFraction != ComputedTiming::kNullTimeFraction,
              "Got a null time fraction for a fill mode of 'both'");
@@ -68,110 +72,80 @@ ElementPropertyTransition::ValuePortionFor(TimeStamp aRefreshTime) const
 }
 
 /*****************************************************************************
+ * CSSTransitionPlayer                                                       *
+ *****************************************************************************/
+
+mozilla::dom::AnimationPlayState
+CSSTransitionPlayer::PlayStateFromJS() const
+{
+  FlushStyle();
+  return AnimationPlayer::PlayStateFromJS();
+}
+
+void
+CSSTransitionPlayer::PlayFromJS()
+{
+  FlushStyle();
+  AnimationPlayer::PlayFromJS();
+}
+
+CommonAnimationManager*
+CSSTransitionPlayer::GetAnimationManager() const
+{
+  nsPresContext* context = GetPresContext();
+  if (!context) {
+    return nullptr;
+  }
+
+  return context->TransitionManager();
+}
+
+/*****************************************************************************
  * nsTransitionManager                                                       *
  *****************************************************************************/
 
 void
-nsTransitionManager::UpdateThrottledStylesForSubtree(nsIContent* aContent,
-                                                     nsStyleContext* aParentStyle,
-                                                     nsStyleChangeList& aChangeList)
-{
-  dom::Element* element;
-  if (aContent->IsElement()) {
-    element = aContent->AsElement();
-  } else {
-    element = nullptr;
-  }
-
-  nsRefPtr<nsStyleContext> newStyle;
-
-  ElementAnimationCollection* collection;
-  if (element &&
-      (collection =
-        GetElementTransitions(element,
-                              nsCSSPseudoElements::ePseudo_NotPseudoElement,
-                              false))) {
-    // re-resolve our style
-    newStyle = UpdateThrottledStyle(element, aParentStyle, aChangeList);
-    // remove the current transition from the working set
-    collection->mFlushGeneration =
-      mPresContext->RefreshDriver()->MostRecentRefresh();
-  } else {
-    newStyle = ReparentContent(aContent, aParentStyle);
-  }
-
-  // walk the children
-  if (newStyle) {
-    for (nsIContent *child = aContent->GetFirstChild(); child;
-         child = child->GetNextSibling()) {
-      UpdateThrottledStylesForSubtree(child, newStyle, aChangeList);
-    }
-  }
-}
-
-IMPL_UPDATE_ALL_THROTTLED_STYLES_INTERNAL(nsTransitionManager,
-                                          GetElementTransitions)
-
-void
-nsTransitionManager::UpdateAllThrottledStyles()
-{
-  if (PR_CLIST_IS_EMPTY(&mElementCollections)) {
-    // no throttled transitions, leave early
-    mPresContext->TickLastUpdateThrottledTransitionStyle();
-    return;
-  }
-
-  if (mPresContext->ThrottledTransitionStyleIsUpToDate()) {
-    // throttled transitions are up to date, leave early
-    return;
-  }
-
-  mPresContext->TickLastUpdateThrottledTransitionStyle();
-  UpdateAllThrottledStylesInternal();
-}
-
-void
-nsTransitionManager::ElementCollectionRemoved()
-{
-  // If we have no transitions or animations left, remove ourselves from
-  // the refresh driver.
-  if (PR_CLIST_IS_EMPTY(&mElementCollections)) {
-    mPresContext->RefreshDriver()->RemoveRefreshObserver(this, Flush_Style);
-  }
-}
-
-void
-nsTransitionManager::AddElementCollection(
-  ElementAnimationCollection* aCollection)
-{
-  if (PR_CLIST_IS_EMPTY(&mElementCollections)) {
-    // We need to observe the refresh driver.
-    nsRefreshDriver *rd = mPresContext->RefreshDriver();
-    rd->AddRefreshObserver(this, Flush_Style);
-  }
-
-  PR_INSERT_BEFORE(aCollection, &mElementCollections);
-}
-
-already_AddRefed<nsIStyleRule>
 nsTransitionManager::StyleContextChanged(dom::Element *aElement,
                                          nsStyleContext *aOldStyleContext,
-                                         nsStyleContext *aNewStyleContext)
+                                         nsRefPtr<nsStyleContext>* aNewStyleContext /* inout */)
 {
-  NS_PRECONDITION(aOldStyleContext->GetPseudo() ==
-                      aNewStyleContext->GetPseudo(),
+  nsStyleContext* newStyleContext = *aNewStyleContext;
+
+  NS_PRECONDITION(aOldStyleContext->GetPseudo() == newStyleContext->GetPseudo(),
                   "pseudo type mismatch");
-  // If we were called from ReparentStyleContext, this assertion would
-  // actually fire.  If we need to be called from there, we can probably
-  // just remove it; the condition probably isn't critical, although
-  // it's worth thinking about some more.
-  NS_PRECONDITION(aOldStyleContext->HasPseudoElementData() ==
-                      aNewStyleContext->HasPseudoElementData(),
-                  "pseudo type mismatch");
+
+  if (mInAnimationOnlyStyleUpdate) {
+    // If we're doing an animation-only style update, return, since the
+    // purpose of an animation-only style update is to update only the
+    // animation styles so that we don't consider style changes
+    // resulting from changes in the animation time for starting a
+    // transition.
+    return;
+  }
 
   if (!mPresContext->IsDynamic()) {
     // For print or print preview, ignore transitions.
-    return nullptr;
+    return;
+  }
+
+  if (aOldStyleContext->HasPseudoElementData() !=
+      newStyleContext->HasPseudoElementData()) {
+    // If the old style context and new style context differ in terms of
+    // whether they're inside ::first-letter, ::first-line, or similar,
+    // bail.  We can't hit this codepath for normal style changes
+    // involving moving frames around the boundaries of these
+    // pseudo-elements since we don't call StyleContextChanged from
+    // ReparentStyleContext.  However, we can hit this codepath during
+    // the handling of transitions that start across reframes.
+    //
+    // While there isn't an easy *perfect* way to handle this case, err
+    // on the side of missing some transitions that we ought to have
+    // rather than having bogus transitions that we shouldn't.
+    //
+    // We could consider changing this handling, although it's worth
+    // thinking about whether the code below could do anything weird in
+    // this case.
+    return;
   }
 
   // NOTE: Things in this function (and ConsiderStartingTransition)
@@ -180,18 +154,18 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
 
   // Return sooner (before the startedAny check below) for the most
   // common case: no transitions specified or running.
-  const nsStyleDisplay *disp = aNewStyleContext->StyleDisplay();
-  nsCSSPseudoElements::Type pseudoType = aNewStyleContext->GetPseudoType();
+  const nsStyleDisplay *disp = newStyleContext->StyleDisplay();
+  nsCSSPseudoElements::Type pseudoType = newStyleContext->GetPseudoType();
   if (pseudoType != nsCSSPseudoElements::ePseudo_NotPseudoElement) {
     if (pseudoType != nsCSSPseudoElements::ePseudo_before &&
         pseudoType != nsCSSPseudoElements::ePseudo_after) {
-      return nullptr;
+      return;
     }
 
     NS_ASSERTION((pseudoType == nsCSSPseudoElements::ePseudo_before &&
-                  aElement->Tag() == nsGkAtoms::mozgeneratedcontentbefore) ||
+                  aElement->NodeInfo()->NameAtom() == nsGkAtoms::mozgeneratedcontentbefore) ||
                  (pseudoType == nsCSSPseudoElements::ePseudo_after &&
-                  aElement->Tag() == nsGkAtoms::mozgeneratedcontentafter),
+                  aElement->NodeInfo()->NameAtom() == nsGkAtoms::mozgeneratedcontentafter),
                  "Unexpected aElement coming through");
 
     // Else the element we want to use from now on is the element the
@@ -199,31 +173,53 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
     aElement = aElement->GetParent()->AsElement();
   }
 
-  ElementAnimationCollection* collection =
-    GetElementTransitions(aElement, pseudoType, false);
+  AnimationPlayerCollection* collection =
+    GetAnimations(aElement, pseudoType, false);
   if (!collection &&
       disp->mTransitionPropertyCount == 1 &&
-      disp->mTransitions[0].GetDelay() == 0.0f &&
-      disp->mTransitions[0].GetDuration() == 0.0f) {
-    return nullptr;
+      disp->mTransitions[0].GetCombinedDuration() <= 0.0f) {
+    return;
   }
 
-
-  if (aNewStyleContext->PresContext()->IsProcessingAnimationStyleChange()) {
-    return nullptr;
+  if (collection &&
+      collection->mCheckGeneration ==
+        mPresContext->RestyleManager()->GetAnimationGeneration()) {
+    // When we start a new transition, we immediately post a restyle.
+    // If the animation generation on the collection is current, that
+    // means *this* is that restyle, since we bump the animation
+    // generation on the restyle manager whenever there's a real style
+    // change (i.e., one where mInAnimationOnlyStyleUpdate isn't true,
+    // which causes us to return above).  Thus we shouldn't do anything.
+    return;
   }
-
-  if (aNewStyleContext->GetParent() &&
-      aNewStyleContext->GetParent()->HasPseudoElementData()) {
+  if (newStyleContext->GetParent() &&
+      newStyleContext->GetParent()->HasPseudoElementData()) {
     // Ignore transitions on things that inherit properties from
     // pseudo-elements.
     // FIXME (Bug 522599): Add tests for this.
-    return nullptr;
+    return;
   }
 
   NS_WARN_IF_FALSE(!nsLayoutUtils::AreAsyncAnimationsEnabled() ||
-                     mPresContext->ThrottledTransitionStyleIsUpToDate(),
+                     mPresContext->RestyleManager()->
+                       ThrottledAnimationStyleIsUpToDate(),
                    "throttled animations not up to date");
+
+  // Compute what the css-transitions spec calls the "after-change
+  // style", which is the new style without any data from transitions,
+  // but still inheriting from data that contains transitions that are
+  // not stopping or starting right now.
+  nsRefPtr<nsStyleContext> afterChangeStyle;
+  if (collection) {
+    nsStyleSet* styleSet = mPresContext->StyleSet();
+    afterChangeStyle =
+      styleSet->ResolveStyleWithoutAnimation(aElement, newStyleContext,
+                                             eRestyle_CSSTransitions);
+  } else {
+    afterChangeStyle = newStyleContext;
+  }
+
+  nsAutoAnimationMutationBatch mb(aElement);
 
   // Per http://lists.w3.org/Archives/Public/www-style/2009Aug/0109.html
   // I'll consider only the transitions from the number of items in
@@ -233,9 +229,10 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
   nsCSSPropertySet whichStarted;
   for (uint32_t i = disp->mTransitionPropertyCount; i-- != 0; ) {
     const StyleTransition& t = disp->mTransitions[i];
-    // Check delay and duration first, since they default to zero, and
-    // when they're both zero, we can ignore the transition.
-    if (t.GetDelay() != 0.0f || t.GetDuration() != 0.0f) {
+    // Check the combined duration (combination of delay and duration)
+    // first, since it defaults to zero, which means we can ignore the
+    // transition.
+    if (t.GetCombinedDuration() > 0.0f) {
       // We might have something to transition.  See if any of the
       // properties in question changed and are animatable.
       // FIXME: Would be good to find a way to share code between this
@@ -250,28 +247,31 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
              p < eCSSProperty_COUNT_no_shorthands;
              p = nsCSSProperty(p + 1)) {
           ConsiderStartingTransition(p, t, aElement, collection,
-                                     aOldStyleContext, aNewStyleContext,
+                                     aOldStyleContext, afterChangeStyle,
                                      &startedAny, &whichStarted);
         }
       } else if (nsCSSProps::IsShorthand(property)) {
-        CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(subprop, property) {
+        CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(
+            subprop, property, nsCSSProps::eEnabledForAllContent) {
           ConsiderStartingTransition(*subprop, t, aElement, collection,
-                                     aOldStyleContext, aNewStyleContext,
+                                     aOldStyleContext, afterChangeStyle,
                                      &startedAny, &whichStarted);
         }
       } else {
         ConsiderStartingTransition(property, t, aElement, collection,
-                                   aOldStyleContext, aNewStyleContext,
+                                   aOldStyleContext, afterChangeStyle,
                                    &startedAny, &whichStarted);
       }
     }
   }
 
   // Stop any transitions for properties that are no longer in
-  // 'transition-property'.
-  // Also stop any transitions for properties that just changed (and are
-  // still in the set of properties to transition), but we didn't just
-  // start the transition because delay and duration are both zero.
+  // 'transition-property', including finished transitions.
+  // Also stop any transitions (and remove any finished transitions)
+  // for properties that just changed (and are still in the set of
+  // properties to transition), but for which we didn't just start the
+  // transition.  This can happen delay and duration are both zero, or
+  // because the new value is not interpolable.
   if (collection) {
     bool checkProperties =
       disp->mTransitions[0].GetProperty() != eCSSPropertyExtra_all_properties;
@@ -293,7 +293,8 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
             allTransitionProperties.AddProperty(p);
           }
         } else if (nsCSSProps::IsShorthand(property)) {
-          CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(subprop, property) {
+          CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(
+              subprop, property, nsCSSProps::eEnabledForAllContent) {
             allTransitionProperties.AddProperty(*subprop);
           }
         } else {
@@ -302,80 +303,70 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
       }
     }
 
-    ElementAnimationPtrArray& animations = collection->mAnimations;
-    uint32_t i = animations.Length();
-    NS_ABORT_IF_FALSE(i != 0, "empty transitions list?");
+    AnimationPlayerPtrArray& players = collection->mPlayers;
+    size_t i = players.Length();
+    MOZ_ASSERT(i != 0, "empty transitions list?");
     StyleAnimationValue currentValue;
     do {
       --i;
-      ElementAnimation* animation = animations[i];
-      MOZ_ASSERT(animation->mProperties.Length() == 1,
+      AnimationPlayer* player = players[i];
+      dom::Animation* anim = player->GetSource();
+      MOZ_ASSERT(anim && anim->Properties().Length() == 1,
                  "Should have one animation property for a transition");
-      MOZ_ASSERT(animation->mProperties[0].mSegments.Length() == 1,
+      MOZ_ASSERT(anim && anim->Properties()[0].mSegments.Length() == 1,
                  "Animation property should have one segment for a transition");
-      const AnimationProperty& prop = animation->mProperties[0];
+      const AnimationProperty& prop = anim->Properties()[0];
       const AnimationPropertySegment& segment = prop.mSegments[0];
           // properties no longer in 'transition-property'
       if ((checkProperties &&
            !allTransitionProperties.HasProperty(prop.mProperty)) ||
-          // properties whose computed values changed but delay and
-          // duration are both zero
-          !ExtractComputedValueForTransition(prop.mProperty, aNewStyleContext,
+          // properties whose computed values changed but for which we
+          // did not start a new transition (because delay and
+          // duration are both zero, or because the new value is not
+          // interpolable); a new transition would have segment.mToValue
+          // matching currentValue
+          !ExtractComputedValueForTransition(prop.mProperty, afterChangeStyle,
                                              currentValue) ||
           currentValue != segment.mToValue) {
         // stop the transition
-        animations.RemoveElementAt(i);
-        collection->UpdateAnimationGeneration(mPresContext);
+        if (!player->GetSource()->IsFinishedTransition()) {
+          player->Cancel();
+          collection->UpdateAnimationGeneration(mPresContext);
+        }
+        players.RemoveElementAt(i);
       }
     } while (i != 0);
 
-    if (animations.IsEmpty()) {
+    if (players.IsEmpty()) {
       collection->Destroy();
       collection = nullptr;
     }
   }
 
-  if (!startedAny) {
-    return nullptr;
+  MOZ_ASSERT(!startedAny || collection,
+             "must have element transitions if we started any transitions");
+
+  if (collection) {
+    UpdateCascadeResultsWithTransitions(collection);
+
+    // Set the style rule refresh time to null so that EnsureStyleRuleFor
+    // creates a new style rule if we started *or* stopped transitions.
+    collection->mStyleRuleRefreshTime = TimeStamp();
+    collection->UpdateCheckGeneration(mPresContext);
+    collection->mNeedsRefreshes = true;
+    TimeStamp now = mPresContext->RefreshDriver()->MostRecentRefresh();
+    collection->EnsureStyleRuleFor(now, EnsureStyleRule_IsNotThrottled);
   }
 
-  NS_ABORT_IF_FALSE(collection, "must have element transitions if we started "
-                                "any transitions");
-
-  // In the CSS working group discussion (2009 Jul 15 telecon,
-  // http://www.w3.org/mid/4A5E1470.4030904@inkedblade.net ) of
-  // http://lists.w3.org/Archives/Public/www-style/2009Jun/0121.html ,
-  // the working group decided that a transition property on an
-  // element should not cause any transitions if the property change
-  // is itself inheriting a value that is transitioning on an
-  // ancestor.  So, to get the correct behavior, we continue the
-  // restyle that caused this transition using a "covering" rule that
-  // covers up any changes on which we started transitions, so that
-  // descendants don't start their own transitions.  (In the case of
-  // negative transition delay, this covering rule produces different
-  // results than applying the transition rule immediately would).
-  // Our caller is responsible for restyling again using this covering
-  // rule.
-
-  nsRefPtr<css::AnimValuesStyleRule> coverRule = new css::AnimValuesStyleRule;
-
-  ElementAnimationPtrArray& animations = collection->mAnimations;
-  for (uint32_t i = 0, i_end = animations.Length(); i < i_end; ++i) {
-    ElementAnimation* animation = animations[i];
-    MOZ_ASSERT(animation->mProperties.Length() == 1,
-               "Should have one animation property for a transition");
-    MOZ_ASSERT(animation->mProperties[0].mSegments.Length() == 1,
-               "Animation property should have one segment for a transition");
-    AnimationProperty& prop = animation->mProperties[0];
-    AnimationPropertySegment& segment = prop.mSegments[0];
-    if (whichStarted.HasProperty(prop.mProperty)) {
-      coverRule->AddValue(prop.mProperty, segment.mFromValue);
-    }
+  // We want to replace the new style context with the after-change style.
+  *aNewStyleContext = afterChangeStyle;
+  if (collection) {
+    // Since we have transition styles, we have to undo this replacement.
+    // The check of collection->mCheckGeneration against the restyle
+    // manager's GetAnimationGeneration() will ensure that we don't go
+    // through the rest of this function again when we do.
+    collection->PostRestyleForAnimation(mPresContext);
   }
-
-  collection->mStyleRule = nullptr;
-
-  return coverRule.forget();
 }
 
 void
@@ -383,15 +374,15 @@ nsTransitionManager::ConsiderStartingTransition(
   nsCSSProperty aProperty,
   const StyleTransition& aTransition,
   dom::Element* aElement,
-  ElementAnimationCollection*& aElementTransitions,
+  AnimationPlayerCollection*& aElementTransitions,
   nsStyleContext* aOldStyleContext,
   nsStyleContext* aNewStyleContext,
   bool* aStartedAny,
   nsCSSPropertySet* aWhichStarted)
 {
   // IsShorthand itself will assert if aProperty is not a property.
-  NS_ABORT_IF_FALSE(!nsCSSProps::IsShorthand(aProperty),
-                    "property out of range");
+  MOZ_ASSERT(!nsCSSProps::IsShorthand(aProperty),
+             "property out of range");
   NS_ASSERTION(!aElementTransitions ||
                aElementTransitions->mElement == aElement, "Element mismatch");
 
@@ -407,7 +398,7 @@ nsTransitionManager::ConsiderStartingTransition(
     return;
   }
 
-  nsRefPtr<ElementPropertyTransition> pt = new ElementPropertyTransition();
+  dom::AnimationTimeline* timeline = aElement->OwnerDoc()->Timeline();
 
   StyleAnimationValue startValue, endValue, dummyValue;
   bool haveValues =
@@ -431,15 +422,15 @@ nsTransitionManager::ConsiderStartingTransition(
   size_t currentIndex = nsTArray<ElementPropertyTransition>::NoIndex;
   const ElementPropertyTransition *oldPT = nullptr;
   if (aElementTransitions) {
-    ElementAnimationPtrArray& animations = aElementTransitions->mAnimations;
-    for (size_t i = 0, i_end = animations.Length(); i < i_end; ++i) {
-      MOZ_ASSERT(animations[i]->mProperties.Length() == 1,
+    AnimationPlayerPtrArray& players = aElementTransitions->mPlayers;
+    for (size_t i = 0, i_end = players.Length(); i < i_end; ++i) {
+      MOZ_ASSERT(players[i]->GetSource() &&
+                 players[i]->GetSource()->Properties().Length() == 1,
                  "Should have one animation property for a transition");
-      if (animations[i]->mProperties[0].mProperty == aProperty) {
+      if (players[i]->GetSource()->Properties()[0].mProperty == aProperty) {
         haveCurrentTransition = true;
         currentIndex = i;
-        oldPT =
-          aElementTransitions->mAnimations[currentIndex]->AsTransition();
+        oldPT = players[currentIndex]->GetSource()->AsTransition();
         break;
       }
     }
@@ -454,40 +445,42 @@ nsTransitionManager::ConsiderStartingTransition(
   // this case, we'll end up with shouldAnimate as false (because
   // there's no value change), but we need to return early here rather
   // than cancel the running transition because shouldAnimate is false!
-  MOZ_ASSERT(!oldPT || oldPT->mProperties[0].mSegments.Length() == 1,
+  //
+  // Likewise, if we got a style change that changed the value to the
+  // endpoint of our finished transition, we also don't want to start
+  // a new transition for the reasons described in
+  // https://lists.w3.org/Archives/Public/www-style/2015Jan/0444.html .
+  MOZ_ASSERT(!oldPT || oldPT->Properties()[0].mSegments.Length() == 1,
              "Should have one animation property segment for a transition");
   if (haveCurrentTransition && haveValues &&
-      oldPT->mProperties[0].mSegments[0].mToValue == endValue) {
-    // WalkTransitionRule already called RestyleForAnimation.
+      oldPT->Properties()[0].mSegments[0].mToValue == endValue) {
+    // GetAnimationRule already called RestyleForAnimation.
     return;
   }
 
-  nsPresContext *presContext = aNewStyleContext->PresContext();
-
   if (!shouldAnimate) {
-    if (haveCurrentTransition) {
+    if (haveCurrentTransition && !oldPT->IsFinishedTransition()) {
       // We're in the middle of a transition, and just got a non-transition
       // style change to something that we can't animate.  This might happen
       // because we got a non-transition style change changing to the current
       // in-progress value (which is particularly easy to cause when we're
       // currently in the 'transition-delay').  It also might happen because we
       // just got a style change to a value that can't be interpolated.
-      ElementAnimationPtrArray& animations = aElementTransitions->mAnimations;
-      animations.RemoveElementAt(currentIndex);
+      AnimationPlayerPtrArray& players = aElementTransitions->mPlayers;
+      players[currentIndex]->Cancel();
+      oldPT = nullptr; // Clear pointer so it doesn't dangle
+      players.RemoveElementAt(currentIndex);
       aElementTransitions->UpdateAnimationGeneration(mPresContext);
 
-      if (animations.IsEmpty()) {
+      if (players.IsEmpty()) {
         aElementTransitions->Destroy();
         // |aElementTransitions| is now a dangling pointer!
         aElementTransitions = nullptr;
       }
-      // WalkTransitionRule already called RestyleForAnimation.
+      // GetAnimationRule already called RestyleForAnimation.
     }
     return;
   }
-
-  TimeStamp mostRecentRefresh =
-    presContext->RefreshDriver()->MostRecentRefresh();
 
   const nsTimingFunction &tf = aTransition.GetTimingFunction();
   float delay = aTransition.GetDelay();
@@ -496,8 +489,9 @@ nsTransitionManager::ConsiderStartingTransition(
     // The spec says a negative duration is treated as zero.
     duration = 0.0;
   }
-  pt->mStartForReversingTest = startValue;
-  pt->mReversePortion = 1.0;
+
+  StyleAnimationValue startForReversingTest = startValue;
+  double reversePortion = 1.0;
 
   // If the new transition reverses an existing one, we'll need to
   // handle the timing differently.
@@ -507,7 +501,7 @@ nsTransitionManager::ConsiderStartingTransition(
     // Compute the appropriate negative transition-delay such that right
     // now we'd end up at the current position.
     double valuePortion =
-      oldPT->ValuePortionFor(mostRecentRefresh) * oldPT->mReversePortion +
+      oldPT->CurrentValuePortion() * oldPT->mReversePortion +
       (1.0 - oldPT->mReversePortion);
     // A timing function with negative y1 (or y2!) might make
     // valuePortion negative.  In this case, we still want to apply our
@@ -534,12 +528,26 @@ nsTransitionManager::ConsiderStartingTransition(
 
     duration *= valuePortion;
 
-    pt->mStartForReversingTest = oldPT->mProperties[0].mSegments[0].mToValue;
-    pt->mReversePortion = valuePortion;
+    startForReversingTest = oldPT->Properties()[0].mSegments[0].mToValue;
+    reversePortion = valuePortion;
   }
 
-  AnimationProperty& prop = *pt->mProperties.AppendElement();
+  AnimationTiming timing;
+  timing.mIterationDuration = TimeDuration::FromMilliseconds(duration);
+  timing.mDelay = TimeDuration::FromMilliseconds(delay);
+  timing.mIterationCount = 1;
+  timing.mDirection = NS_STYLE_ANIMATION_DIRECTION_NORMAL;
+  timing.mFillMode = NS_STYLE_ANIMATION_FILL_MODE_BACKWARDS;
+
+  nsRefPtr<ElementPropertyTransition> pt =
+    new ElementPropertyTransition(aElement->OwnerDoc(), aElement,
+                                  aNewStyleContext->GetPseudoType(), timing);
+  pt->mStartForReversingTest = startForReversingTest;
+  pt->mReversePortion = reversePortion;
+
+  AnimationProperty& prop = *pt->Properties().AppendElement();
   prop.mProperty = aProperty;
+  prop.mWinsInCascade = true;
 
   AnimationPropertySegment& segment = *prop.mSegments.AppendElement();
   segment.mFromValue = startValue;
@@ -548,173 +556,155 @@ nsTransitionManager::ConsiderStartingTransition(
   segment.mToKey = 1;
   segment.mTimingFunction.Init(tf);
 
-  pt->mStartTime = mostRecentRefresh;
-  pt->mTiming.mIterationDuration = TimeDuration::FromMilliseconds(duration);
-  pt->mTiming.mDelay = TimeDuration::FromMilliseconds(delay);
-  pt->mTiming.mIterationCount = 1;
-  pt->mTiming.mDirection = NS_STYLE_ANIMATION_DIRECTION_NORMAL;
-  pt->mTiming.mFillMode = NS_STYLE_ANIMATION_FILL_MODE_BACKWARDS;
-  pt->mPlayState = NS_STYLE_ANIMATION_PLAY_STATE_RUNNING;
-  pt->mPauseStart = TimeStamp();
+  nsRefPtr<CSSTransitionPlayer> player = new CSSTransitionPlayer(timeline);
+  // The order of the following two calls is important since PlayFromStyle
+  // will add the player to the PendingPlayerTracker of its source content's
+  // document. When we come to make source writeable (bug 1049975) we should
+  // remove this dependency.
+  player->SetSource(pt);
+  player->PlayFromStyle();
 
   if (!aElementTransitions) {
     aElementTransitions =
-      GetElementTransitions(aElement, aNewStyleContext->GetPseudoType(),
-                            true);
+      GetAnimations(aElement, aNewStyleContext->GetPseudoType(), true);
     if (!aElementTransitions) {
       NS_WARNING("allocating CommonAnimationManager failed");
       return;
     }
   }
 
-  ElementAnimationPtrArray &animations = aElementTransitions->mAnimations;
+  AnimationPlayerPtrArray& players = aElementTransitions->mPlayers;
 #ifdef DEBUG
-  for (uint32_t i = 0, i_end = animations.Length(); i < i_end; ++i) {
-    NS_ABORT_IF_FALSE(animations[i]->mProperties.Length() == 1,
-                      "Should have one animation property for a transition");
-    NS_ABORT_IF_FALSE(i == currentIndex ||
-                      animations[i]->mProperties[0].mProperty != aProperty,
-                      "duplicate transitions for property");
+  for (size_t i = 0, i_end = players.Length(); i < i_end; ++i) {
+    MOZ_ASSERT(players[i]->GetSource() &&
+               players[i]->GetSource()->Properties().Length() == 1,
+               "Should have one animation property for a transition");
+    MOZ_ASSERT(
+      i == currentIndex ||
+      (players[i]->GetSource() &&
+       players[i]->GetSource()->Properties()[0].mProperty != aProperty),
+      "duplicate transitions for property");
   }
 #endif
   if (haveCurrentTransition) {
-    animations[currentIndex] = pt;
+    players[currentIndex]->Cancel();
+    oldPT = nullptr; // Clear pointer so it doesn't dangle
+    players[currentIndex] = player;
   } else {
-    if (!animations.AppendElement(pt)) {
+    if (!players.AppendElement(player)) {
       NS_WARNING("out of memory");
       return;
     }
   }
   aElementTransitions->UpdateAnimationGeneration(mPresContext);
-  aElementTransitions->PostRestyleForAnimation(presContext);
 
   *aStartedAny = true;
   aWhichStarted->AddProperty(aProperty);
 }
 
-ElementAnimationCollection*
-nsTransitionManager::GetElementTransitions(
-  dom::Element *aElement,
-  nsCSSPseudoElements::Type aPseudoType,
-  bool aCreateIfNeeded)
+void
+nsTransitionManager::UpdateCascadeResultsWithTransitions(
+                       AnimationPlayerCollection* aTransitions)
 {
-  if (!aCreateIfNeeded && PR_CLIST_IS_EMPTY(&mElementCollections)) {
-    // Early return for the most common case.
-    return nullptr;
+  AnimationPlayerCollection* animations =
+    mPresContext->AnimationManager()->
+      GetAnimations(aTransitions->mElement,
+                    aTransitions->PseudoElementType(), false);
+  UpdateCascadeResults(aTransitions, animations);
+}
+
+void
+nsTransitionManager::UpdateCascadeResultsWithAnimations(
+                       AnimationPlayerCollection* aAnimations)
+{
+  AnimationPlayerCollection* transitions =
+    mPresContext->TransitionManager()->
+      GetAnimations(aAnimations->mElement,
+                    aAnimations->PseudoElementType(), false);
+  UpdateCascadeResults(transitions, aAnimations);
+}
+
+void
+nsTransitionManager::UpdateCascadeResultsWithAnimationsToBeDestroyed(
+                       const AnimationPlayerCollection* aAnimations)
+{
+  // aAnimations is about to be destroyed.  So get transitions from it,
+  // but then don't pass it to UpdateCascadeResults, since it has
+  // information that may now be incorrect.
+  AnimationPlayerCollection* transitions =
+    mPresContext->TransitionManager()->
+      GetAnimations(aAnimations->mElement,
+                    aAnimations->PseudoElementType(), false);
+  UpdateCascadeResults(transitions, nullptr);
+}
+
+void
+nsTransitionManager::UpdateCascadeResults(
+                       AnimationPlayerCollection* aTransitions,
+                       AnimationPlayerCollection* aAnimations)
+{
+  if (!aTransitions) {
+    // Nothing to do.
+    return;
   }
 
-  nsIAtom *propName;
-  if (aPseudoType == nsCSSPseudoElements::ePseudo_NotPseudoElement) {
-    propName = nsGkAtoms::transitionsProperty;
-  } else if (aPseudoType == nsCSSPseudoElements::ePseudo_before) {
-    propName = nsGkAtoms::transitionsOfBeforeProperty;
-  } else if (aPseudoType == nsCSSPseudoElements::ePseudo_after) {
-    propName = nsGkAtoms::transitionsOfAfterProperty;
-  } else {
-    NS_ASSERTION(!aCreateIfNeeded,
-                 "should never try to create transitions for pseudo "
-                 "other than :before or :after");
-    return nullptr;
-  }
-  ElementAnimationCollection* collection =
-    static_cast<ElementAnimationCollection*>(aElement->GetProperty(propName));
-  if (!collection && aCreateIfNeeded) {
-    // FIXME: Consider arena-allocating?
-    collection = new ElementAnimationCollection(aElement, propName, this,
-      mPresContext->RefreshDriver()->MostRecentRefresh());
-    nsresult rv =
-      aElement->SetProperty(propName, collection,
-                            &ElementAnimationCollection::PropertyDtor, false);
-    if (NS_FAILED(rv)) {
-      NS_WARNING("SetProperty failed");
-      delete collection;
-      return nullptr;
+  nsCSSPropertySet propertiesUsed;
+#ifdef DEBUG
+  nsCSSPropertySet propertiesWithTransitions;
+#endif
+
+  // http://dev.w3.org/csswg/css-transitions/#application says that
+  // transitions do not apply when the same property has a CSS Animation
+  // on that element (even though animations are lower in the cascade).
+  if (aAnimations) {
+    TimeStamp now = mPresContext->RefreshDriver()->MostRecentRefresh();
+    // Passing EnsureStyleRule_IsThrottled is OK since we will
+    // unthrottle when animations are finishing.
+    aAnimations->EnsureStyleRuleFor(now, EnsureStyleRule_IsThrottled);
+
+    if (aAnimations->mStyleRule) {
+      aAnimations->mStyleRule->AddPropertiesToSet(propertiesUsed);
     }
-    if (propName == nsGkAtoms::transitionsProperty) {
-      aElement->SetMayHaveAnimations();
-    }
-
-    AddElementCollection(collection);
   }
 
-  return collection;
+  // Since we should never have more than one transition for the same
+  // property, it doesn't matter what order we iterate the transitions.
+  // But let's go the same way as animations.
+  bool changed = false;
+  AnimationPlayerPtrArray& players = aTransitions->mPlayers;
+  for (size_t playerIdx = players.Length(); playerIdx-- != 0; ) {
+    MOZ_ASSERT(players[playerIdx]->GetSource() &&
+               players[playerIdx]->GetSource()->Properties().Length() == 1,
+               "Should have one animation property for a transition");
+    AnimationProperty& prop = players[playerIdx]->GetSource()->Properties()[0];
+    bool newWinsInCascade = !propertiesUsed.HasProperty(prop.mProperty);
+    if (prop.mWinsInCascade != newWinsInCascade) {
+      changed = true;
+    }
+    prop.mWinsInCascade = newWinsInCascade;
+    // assert that we don't need to bother adding the transitioned
+    // properties into propertiesUsed
+#ifdef DEBUG
+    MOZ_ASSERT(!propertiesWithTransitions.HasProperty(prop.mProperty),
+               "we're assuming we have only one transition per property");
+    propertiesWithTransitions.AddProperty(prop.mProperty);
+#endif
+  }
+
+  if (changed) {
+    mPresContext->RestyleManager()->IncrementAnimationGeneration();
+    aTransitions->UpdateAnimationGeneration(mPresContext);
+    aTransitions->PostUpdateLayerAnimations();
+
+    // Invalidate our style rule.
+    aTransitions->mStyleRuleRefreshTime = TimeStamp();
+    aTransitions->mNeedsRefreshes = true;
+  }
 }
 
 /*
  * nsIStyleRuleProcessor implementation
  */
-
-void
-nsTransitionManager::WalkTransitionRule(
-  ElementDependentRuleProcessorData* aData,
-  nsCSSPseudoElements::Type aPseudoType)
-{
-  ElementAnimationCollection* collection =
-    GetElementTransitions(aData->mElement, aPseudoType, false);
-  if (!collection) {
-    return;
-  }
-
-  if (!mPresContext->IsDynamic()) {
-    // For print or print preview, ignore animations.
-    return;
-  }
-
-  if (aData->mPresContext->IsProcessingRestyles() &&
-      !aData->mPresContext->IsProcessingAnimationStyleChange()) {
-    // If we're processing a normal style change rather than one from
-    // animation, don't add the transition rule.  This allows us to
-    // compute the new style value rather than having the transition
-    // override it, so that we can start transitioning differently.
-
-    // We need to immediately restyle with animation
-    // after doing this.
-    collection->PostRestyleForAnimation(mPresContext);
-    return;
-  }
-
-  collection->mNeedsRefreshes = true;
-  collection->EnsureStyleRuleFor(
-    aData->mPresContext->RefreshDriver()->MostRecentRefresh(),
-    EnsureStyleRule_IsNotThrottled);
-
-  if (collection->mStyleRule) {
-    aData->mRuleWalker->Forward(collection->mStyleRule);
-  }
-}
-
-/* virtual */ void
-nsTransitionManager::RulesMatching(ElementRuleProcessorData* aData)
-{
-  NS_ABORT_IF_FALSE(aData->mPresContext == mPresContext,
-                    "pres context mismatch");
-  WalkTransitionRule(aData,
-                     nsCSSPseudoElements::ePseudo_NotPseudoElement);
-}
-
-/* virtual */ void
-nsTransitionManager::RulesMatching(PseudoElementRuleProcessorData* aData)
-{
-  NS_ABORT_IF_FALSE(aData->mPresContext == mPresContext,
-                    "pres context mismatch");
-
-  // Note:  If we're the only thing keeping a pseudo-element frame alive
-  // (per ProbePseudoStyleContext), we still want to keep it alive, so
-  // this is ok.
-  WalkTransitionRule(aData, aData->mPseudoType);
-}
-
-/* virtual */ void
-nsTransitionManager::RulesMatching(AnonBoxRuleProcessorData* aData)
-{
-}
-
-#ifdef MOZ_XUL
-/* virtual */ void
-nsTransitionManager::RulesMatching(XULTreeRuleProcessorData* aData)
-{
-}
-#endif
 
 /* virtual */ size_t
 nsTransitionManager::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
@@ -757,9 +747,9 @@ struct TransitionEventInfo {
 /* virtual */ void
 nsTransitionManager::WillRefresh(mozilla::TimeStamp aTime)
 {
-  NS_ABORT_IF_FALSE(mPresContext,
-                    "refresh driver should not notify additional observers "
-                    "after pres context has been destroyed");
+  MOZ_ASSERT(mPresContext,
+             "refresh driver should not notify additional observers "
+             "after pres context has been destroyed");
   if (!mPresContext->GetPresShell()) {
     // Someone might be keeping mPresContext alive past the point
     // where it has been torn down; don't bother doing anything in
@@ -788,50 +778,43 @@ nsTransitionManager::FlushTransitions(FlushFlags aFlags)
   {
     PRCList *next = PR_LIST_HEAD(&mElementCollections);
     while (next != &mElementCollections) {
-      ElementAnimationCollection* collection =
-        static_cast<ElementAnimationCollection*>(next);
+      AnimationPlayerCollection* collection =
+        static_cast<AnimationPlayerCollection*>(next);
       next = PR_NEXT_LINK(next);
 
+      nsAutoAnimationMutationBatch mb(collection->mElement);
+
+      collection->Tick();
       bool canThrottleTick = aFlags == Can_Throttle &&
         collection->CanPerformOnCompositorThread(
-          ElementAnimationCollection::CanAnimateFlags(0)) &&
+          AnimationPlayerCollection::CanAnimateFlags(0)) &&
         collection->CanThrottleAnimation(now);
 
-      NS_ABORT_IF_FALSE(collection->mElement->GetCrossShadowCurrentDoc() ==
-                          mPresContext->Document(),
-                        "Element::UnbindFromTree should have "
-                        "destroyed the element transitions object");
+      MOZ_ASSERT(collection->mElement->GetCrossShadowCurrentDoc() ==
+                   mPresContext->Document(),
+                 "Element::UnbindFromTree should have "
+                 "destroyed the element transitions object");
 
-      uint32_t i = collection->mAnimations.Length();
-      NS_ABORT_IF_FALSE(i != 0, "empty transitions list?");
+      size_t i = collection->mPlayers.Length();
+      MOZ_ASSERT(i != 0, "empty transitions list?");
       bool transitionStartedOrEnded = false;
       do {
         --i;
-        ElementAnimation* anim = collection->mAnimations[i];
-        if (anim->IsFinishedTransition()) {
-          // Actually remove transitions one throttle-able cycle after their
-          // completion. We only clear on a throttle-able cycle because that
-          // means it is a regular restyle tick and thus it is safe to discard
-          // the transition. If the flush is not throttle-able, we might still
-          // have new transitions left to process. See comment below.
-          if (aFlags == Can_Throttle) {
-            collection->mAnimations.RemoveElementAt(i);
-          }
-        } else {
-          TimeDuration localTime = anim->GetLocalTimeAt(now);
+        AnimationPlayer* player = collection->mPlayers[i];
+        if (!player->GetSource()->IsFinishedTransition()) {
+          MOZ_ASSERT(player->GetSource(),
+                     "Transitions should have source content");
           ComputedTiming computedTiming =
-            ElementAnimation::GetComputedTimingAt(localTime, anim->mTiming);
+            player->GetSource()->GetComputedTiming();
           if (computedTiming.mPhase == ComputedTiming::AnimationPhase_After) {
-            MOZ_ASSERT(anim->mProperties.Length() == 1,
+            MOZ_ASSERT(player->GetSource()->Properties().Length() == 1,
                        "Should have one animation property for a transition");
-            nsCSSProperty prop = anim->mProperties[0].mProperty;
-            if (nsCSSProps::PropHasFlags(prop, CSS_PROPERTY_REPORT_OTHER_NAME))
-            {
-              prop = nsCSSProps::OtherNameFor(prop);
-            }
+            nsCSSProperty prop = player->GetSource()->Properties()[0].mProperty;
+            TimeDuration duration =
+              player->GetSource()->Timing().mIterationDuration;
             events.AppendElement(
               TransitionEventInfo(collection->mElement, prop,
-                                  anim->mTiming.mIterationDuration,
+                                  duration,
                                   collection->PseudoElement()));
 
             // Leave this transition in the list for one more refresh
@@ -841,13 +824,13 @@ nsTransitionManager::FlushTransitions(FlushFlags aFlags)
             // a non-animation style change that would affect it, we need
             // to know not to start a new transition for the transition
             // from the almost-completed value to the final value.
-            anim->SetFinishedTransition();
+            player->GetSource()->SetIsFinishedTransition();
             collection->UpdateAnimationGeneration(mPresContext);
             transitionStartedOrEnded = true;
           } else if ((computedTiming.mPhase ==
                       ComputedTiming::AnimationPhase_Active) &&
                      canThrottleTick &&
-                    !anim->mIsRunningOnCompositor) {
+                     !player->IsRunningOnCompositor()) {
             // Start a transition with a delay where we should start the
             // transition proper.
             collection->UpdateAnimationGeneration(mPresContext);
@@ -871,7 +854,7 @@ nsTransitionManager::FlushTransitions(FlushFlags aFlags)
         didThrottle = true;
       }
 
-      if (collection->mAnimations.IsEmpty()) {
+      if (collection->mPlayers.IsEmpty()) {
         collection->Destroy();
         // |collection| is now a dangling pointer!
         collection = nullptr;
@@ -882,6 +865,8 @@ nsTransitionManager::FlushTransitions(FlushFlags aFlags)
   if (didThrottle) {
     mPresContext->Document()->SetNeedStyleFlush();
   }
+
+  MaybeStartOrStopObservingRefreshDriver();
 
   for (uint32_t i = 0, i_end = events.Length(); i < i_end; ++i) {
     TransitionEventInfo &info = events[i];

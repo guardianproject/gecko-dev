@@ -3,7 +3,15 @@
 
 const {Cc: Cc, Ci: Ci, Cr: Cr, Cu: Cu} = SpecialPowers;
 
-let Promise = Cu.import("resource://gre/modules/Promise.jsm").Promise;
+// Emulate Promise.jsm semantics.
+Promise.defer = function() { return new Deferred(); }
+function Deferred()  {
+  this.promise = new Promise(function(resolve, reject) {
+    this.resolve = resolve;
+    this.reject = reject;
+  }.bind(this));
+  Object.freeze(this);
+}
 
 /**
  * Push a list of preference settings. Never reject.
@@ -22,6 +30,7 @@ function pushPrefEnv(aPrefs) {
   let deferred = Promise.defer();
 
   SpecialPowers.pushPrefEnv(aPrefs, function() {
+    ok(true, "preferences pushed: " + JSON.stringify(aPrefs));
     deferred.resolve();
   });
 
@@ -102,33 +111,6 @@ function waitForManagerEvent(aEventName, aMatchFunc) {
 }
 
 /**
- * Wrap DOMRequest onsuccess/onerror events to Promise resolve/reject.
- *
- * Fulfill params: A DOMEvent.
- * Reject params: A DOMEvent.
- *
- * @param aRequest
- *        A DOMRequest instance.
- *
- * @return A deferred promise.
- */
-function wrapDomRequestAsPromise(aRequest) {
-  let deferred = Promise.defer();
-
-  ok(aRequest instanceof DOMRequest,
-     "aRequest is instanceof " + aRequest.constructor);
-
-  aRequest.addEventListener("success", function(aEvent) {
-    deferred.resolve(aEvent);
-  });
-  aRequest.addEventListener("error", function(aEvent) {
-    deferred.reject(aEvent);
-  });
-
-  return deferred.promise;
-}
-
-/**
  * Send a SMS message to a single receiver.  Resolve if it succeeds, reject
  * otherwise.
  *
@@ -144,10 +126,7 @@ function wrapDomRequestAsPromise(aRequest) {
  * @return A deferred promise.
  */
 function sendSmsWithSuccess(aReceiver, aText) {
-  let request = manager.send(aReceiver, aText);
-  return wrapDomRequestAsPromise(request)
-    .then((aEvent) => { return aEvent.target.result; },
-          (aEvent) => { throw aEvent.target.error; });
+  return manager.send(aReceiver, aText);
 }
 
 /**
@@ -171,11 +150,9 @@ function sendSmsWithFailure(aReceiver, aText) {
   let promises = [];
   promises.push(waitForManagerEvent("failed")
     .then((aEvent) => { return aEvent.message; }));
-
-  let request = manager.send(aReceiver, aText);
-  promises.push(wrapDomRequestAsPromise(request)
-    .then((aEvent) => { throw aEvent; },
-          (aEvent) => { return aEvent.target.error; }));
+  promises.push(manager.send(aReceiver, aText)
+    .then((aResult) => { throw aResult; },
+          (aError) => { return aError; }));
 
   return Promise.all(promises)
     .then((aResults) => { return { message: aResults[0],
@@ -204,11 +181,9 @@ function sendMmsWithFailure(aMmsParameters, aSendParameters) {
   let promises = [];
   promises.push(waitForManagerEvent("failed")
     .then((aEvent) => { return aEvent.message; }));
-
-  let request = manager.sendMMS(aMmsParameters, aSendParameters);
-  promises.push(wrapDomRequestAsPromise(request)
-    .then((aEvent) => { throw aEvent; },
-          (aEvent) => { return aEvent.target.error; }));
+  promises.push(manager.sendMMS(aMmsParameters, aSendParameters)
+    .then((aResult) => { throw aResult; },
+          (aError) => { return aError; }));
 
   return Promise.all(promises)
     .then((aResults) => { return { message: aResults[0],
@@ -228,9 +203,7 @@ function sendMmsWithFailure(aMmsParameters, aSendParameters) {
  * @return A deferred promise.
  */
 function getMessage(aId) {
-  let request = manager.getMessage(aId);
-  return wrapDomRequestAsPromise(request)
-    .then((aEvent) => { return aEvent.target.result; });
+  return manager.getMessage(aId);
 }
 
 /**
@@ -242,18 +215,17 @@ function getMessage(aId) {
  * Reject params:
  *   event -- a DOMEvent
  *
- * @param aFilter an optional MozSmsFilter instance.
- * @param aReverse a boolean value indicating whether the order of the messages
- *                 should be reversed.
+ * @param aFilter [optional]
+ *        A MobileMessageFilter object.
+ * @param aReverse [optional]
+ *        A boolean value indicating whether the order of the message should be
+ *        reversed. Default: false.
  *
  * @return A deferred promise.
  */
 function getMessages(aFilter, aReverse) {
   let deferred = Promise.defer();
 
-  if (!aFilter) {
-    aFilter = new MozSmsFilter;
-  }
   let messages = [];
   let cursor = manager.getMessages(aFilter, aReverse || false);
   cursor.onsuccess = function(aEvent) {
@@ -363,14 +335,12 @@ function deleteMessagesById(aMessageIds) {
 
   let promises = [];
   promises.push(waitForManagerEvent("deleted"));
-
-  let request = manager.delete(aMessageIds);
-  promises.push(wrapDomRequestAsPromise(request));
+  promises.push(manager.delete(aMessageIds));
 
   return Promise.all(promises)
     .then((aResults) => {
       return { deletedInfo: aResults[0],
-               deletedFlags: aResults[1].target.result };
+               deletedFlags: aResults[1] };
     });
 }
 
@@ -561,22 +531,12 @@ function compareSmsMessage(aFrom, aTo) {
 }
 
 /**
- * Flush permission settings and call |finish()|.
+ * Wait for pending emulator transactions and call |finish()|.
  */
 function cleanUp() {
   ok(true, ":: CLEANING UP ::");
 
-  waitFor(function() {
-    SpecialPowers.flushPermissions(function() {
-      ok(true, "permissions flushed");
-
-      SpecialPowers.flushPrefEnv(function() {
-        ok(true, "preferences flushed");
-
-        finish();
-      })
-    });
-  }, function() {
+  waitFor(finish, function() {
     return pendingEmulatorCmdCount === 0;
   });
 }

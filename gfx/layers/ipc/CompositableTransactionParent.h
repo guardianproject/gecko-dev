@@ -9,7 +9,7 @@
 #define MOZILLA_LAYERS_COMPOSITABLETRANSACTIONPARENT_H
 
 #include <vector>                       // for vector
-#include "mozilla/Attributes.h"         // for MOZ_OVERRIDE
+#include "mozilla/Attributes.h"         // for override
 #include "mozilla/layers/AsyncTransactionTracker.h" // for AsyncTransactionTracker
 #include "mozilla/layers/ISurfaceAllocator.h"  // for ISurfaceAllocator
 #include "mozilla/layers/LayersMessages.h"  // for EditReply, etc
@@ -30,11 +30,16 @@ class CompositableParentManager : public ISurfaceAllocator
                                 , public AsyncTransactionTrackersHolder
 {
 public:
+  virtual void SendFenceHandleIfPresent(PTextureParent* aTexture,
+                                        CompositableHost* aCompositableHost) = 0;
+
   virtual void SendFenceHandle(AsyncTransactionTracker* aTracker,
                                PTextureParent* aTexture,
                                const FenceHandle& aFence) = 0;
 
   virtual void SendAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessage) = 0;
+
+  void SendPendingAsyncMessges();
 
   /**
    * Get child side's process Id.
@@ -47,7 +52,7 @@ protected:
    */
   bool ReceiveCompositableUpdate(const CompositableOperation& aEdit,
                                  EditReplyVector& replyv);
-  bool IsOnCompositorSide() const MOZ_OVERRIDE { return true; }
+  bool IsOnCompositorSide() const override { return true; }
 
   /**
    * Return true if this protocol is asynchronous with respect to the content
@@ -57,6 +62,7 @@ protected:
 
   virtual void ReplyRemoveTexture(const OpReplyRemoveTexture& aReply) {}
 
+  std::vector<AsyncParentMessageData> mPendingAsyncMessage;
 };
 
 } // namespace

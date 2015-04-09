@@ -46,8 +46,8 @@ add_test(function test_reading_ad_and_parsing_mcc_mnc() {
 
     record.readAD();
 
-    do_check_eq(ril.iccInfo.mcc, expectedMcc);
-    do_check_eq(ril.iccInfo.mnc, expectedMnc);
+    equal(ril.iccInfo.mcc, expectedMcc);
+    equal(ril.iccInfo.mnc, expectedMnc);
   }
 
   do_test(undefined, "466923202422409", "466", "92" );
@@ -140,7 +140,7 @@ add_test(function test_reading_optional_efs() {
 
       if (testEf.length !== 0) {
         do_print("Un-handled EF: " + JSON.stringify(testEf));
-        do_check_true(false);
+        ok(false);
       }
     };
 
@@ -160,14 +160,14 @@ add_test(function test_reading_optional_efs() {
 /**
  * Verify fetchSimRecords.
  */
-add_test(function test_fetch_sim_recodes() {
+add_test(function test_fetch_sim_records() {
   let worker = newWorker();
   let context = worker.ContextPool._contexts[0];
   let RIL = context.RIL;
   let iccRecord = context.ICCRecordHelper;
   let simRecord = context.SimRecordHelper;
 
-  function testFetchSimRecordes(expectCalled) {
+  function testFetchSimRecordes(expectCalled, expectCphsSuccess) {
     let ifCalled = [];
 
     RIL.getIMSI = function() {
@@ -176,6 +176,15 @@ add_test(function test_fetch_sim_recodes() {
 
     simRecord.readAD = function() {
       ifCalled.push("readAD");
+    };
+
+    simRecord.readCphsInfo = function(onsuccess, onerror) {
+      ifCalled.push("readCphsInfo");
+      if (expectCphsSuccess) {
+        onsuccess();
+      } else {
+        onerror();
+      }
     };
 
     simRecord.readSST = function() {
@@ -187,13 +196,14 @@ add_test(function test_fetch_sim_recodes() {
     for (let i = 0; i < expectCalled.length; i++ ) {
       if (ifCalled[i] != expectCalled[i]) {
         do_print(expectCalled[i] + " is not called.");
-        do_check_true(false);
+        ok(false);
       }
     }
   }
 
-  let expectCalled = ["getIMSI", "readAD", "readSST"];
-  testFetchSimRecordes(expectCalled);
+  let expectCalled = ["getIMSI", "readAD", "readCphsInfo", "readSST"];
+  testFetchSimRecordes(expectCalled, true);
+  testFetchSimRecordes(expectCalled, false);
 
   run_next_test();
 });
@@ -253,9 +263,9 @@ add_test(function test_read_mwis() {
     buildMwisData(isActive, msgCount);
     recordHelper.readMWIS();
 
-    do_check_eq("iccmwis", postedMessage.rilMessageType);
-    do_check_eq(isActive, postedMessage.mwi.active);
-    do_check_eq((isActive) ? msgCount : 0, postedMessage.mwi.msgCount);
+    equal("iccmwis", postedMessage.rilMessageType);
+    equal(isActive, postedMessage.mwi.active);
+    equal((isActive) ? msgCount : 0, postedMessage.mwi.msgCount);
   }
 
   do_test(true, GECKO_VOICEMAIL_MESSAGE_COUNT_UNKNOWN);
@@ -309,41 +319,41 @@ add_test(function test_update_mwis() {
       isUpdated = true;
 
       // Request Type.
-      do_check_eq(this.readInt32(), REQUEST_SIM_IO);
+      equal(this.readInt32(), REQUEST_SIM_IO);
 
       // Token : we don't care
       this.readInt32();
 
       // command.
-      do_check_eq(this.readInt32(), ICC_COMMAND_UPDATE_RECORD);
+      equal(this.readInt32(), ICC_COMMAND_UPDATE_RECORD);
 
       // fileId.
-      do_check_eq(this.readInt32(), ICC_EF_MWIS);
+      equal(this.readInt32(), ICC_EF_MWIS);
 
       // pathId.
-      do_check_eq(this.readString(),
+      equal(this.readString(),
                   EF_PATH_MF_SIM + ((ril.appType === CARD_APPTYPE_USIM) ? EF_PATH_ADF_USIM : EF_PATH_DF_GSM));
 
       // p1.
-      do_check_eq(this.readInt32(), recordNum);
+      equal(this.readInt32(), recordNum);
 
       // p2.
-      do_check_eq(this.readInt32(), READ_RECORD_ABSOLUTE_MODE);
+      equal(this.readInt32(), READ_RECORD_ABSOLUTE_MODE);
 
       // p3.
-      do_check_eq(this.readInt32(), recordSize);
+      equal(this.readInt32(), recordSize);
 
       // data.
       let strLen = this.readInt32();
-      do_check_eq(recordSize * 2, strLen);
+      equal(recordSize * 2, strLen);
       let expectedMwis = buildMwisData();
       for (let i = 0; i < recordSize; i++) {
-        do_check_eq(expectedMwis[i], pduHelper.readHexOctet());
+        equal(expectedMwis[i], pduHelper.readHexOctet());
       }
       this.readStringDelimiter(strLen);
 
       // pin2.
-      do_check_eq(this.readString(), null);
+      equal(this.readString(), null);
 
       if (!ril.v5Legacy) {
         // AID. Ignore because it's from modem.
@@ -351,12 +361,12 @@ add_test(function test_update_mwis() {
       }
     };
 
-    do_check_false(isUpdated);
+    ok(!isUpdated);
 
     recordHelper.updateMWIS({ active: isActive,
                               msgCount: count });
 
-    do_check_true((ril.iccInfoPrivate.mwis) ? isUpdated : !isUpdated);
+    ok((ril.iccInfoPrivate.mwis) ? isUpdated : !isUpdated);
   }
 
   do_test(true, GECKO_VOICEMAIL_MESSAGE_COUNT_UNKNOWN);
@@ -475,10 +485,10 @@ add_test(function test_read_new_sms_on_sim() {
 
     let postedMessage = workerHelper.postedMessage;
 
-    do_check_eq("sms-received", postedMessage.rilMessageType);
-    do_check_eq("+0123456789", postedMessage.SMSC);
-    do_check_eq("+9876543210", postedMessage.sender);
-    do_check_eq("How are you?", postedMessage.body);
+    equal("sms-received", postedMessage.rilMessageType);
+    equal("+0123456789", postedMessage.SMSC);
+    equal("+9876543210", postedMessage.sender);
+    equal("How are you?", postedMessage.body);
   }
 
   do_test();
@@ -524,8 +534,8 @@ add_test(function test_update_display_condition() {
 
     record.readSPDI();
 
-    do_check_eq(ril.iccInfo.isDisplayNetworkNameRequired, true);
-    do_check_eq(ril.iccInfo.isDisplaySpnRequired, false);
+    equal(ril.iccInfo.isDisplayNetworkNameRequired, true);
+    equal(ril.iccInfo.isDisplaySpnRequired, false);
   }
 
   function do_test_spn(displayCondition,
@@ -556,8 +566,8 @@ add_test(function test_update_display_condition() {
 
     record.readSPN();
 
-    do_check_eq(ril.iccInfo.isDisplayNetworkNameRequired, expectedPlmnNameDisplay);
-    do_check_eq(ril.iccInfo.isDisplaySpnRequired, expectedSpnDisplay);
+    equal(ril.iccInfo.isDisplayNetworkNameRequired, expectedPlmnNameDisplay);
+    equal(ril.iccInfo.isDisplaySpnRequired, expectedSpnDisplay);
   }
 
   // Create empty operator object.
@@ -599,6 +609,1042 @@ add_test(function test_update_display_condition() {
   do_test_spn(0x01, true, true);
   do_test_spn(0x02, true, false);
   do_test_spn(0x03, true, false);
+
+  run_next_test();
+});
+
+/**
+ * Verify reading EF_IMG and EF_IIDF with ICC_IMG_CODING_SCHEME_BASIC
+ */
+add_test(function test_reading_img_basic() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let record = context.SimRecordHelper;
+  let helper = context.GsmPDUHelper;
+  let ril    = context.RIL;
+  let buf    = context.Buf;
+  let io     = context.ICCIOHelper;
+
+  let test_data = [
+    {img: [0x01, 0x05, 0x05, 0x11, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x06],
+     iidf: [
+       [/* Header */
+        0x05, 0x05,
+        /* Image body */
+        0x11, 0x33, 0x55, 0xfe]],
+     expected: [
+       {width: 0x05,
+        height: 0x05,
+        codingScheme: ICC_IMG_CODING_SCHEME_BASIC,
+        body: [0x11, 0x33, 0x55, 0xfe]}]},
+    {img: [0x01, 0x05, 0x05, 0x11, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x06,
+           /* Padding */
+           0xff, 0xff],
+     iidf: [
+       [/* Header */
+        0x05, 0x05,
+        /* Image body */
+        0x11, 0x33, 0x55, 0xfe]],
+     expected: [
+       {width: 0x05,
+        height: 0x05,
+        codingScheme: ICC_IMG_CODING_SCHEME_BASIC,
+        body: [0x11, 0x33, 0x55, 0xfe]}]},
+    {img: [0x02, 0x10, 0x01, 0x11, 0x4f, 0x04, 0x00, 0x05, 0x00, 0x04, 0x10,
+           0x01, 0x11, 0x4f, 0x05, 0x00, 0x05, 0x00, 0x04],
+     iidf: [
+       [/* Data offset */
+        0xff, 0xff, 0xff, 0xff, 0xff,
+        /* Header */
+        0x10, 0x01,
+        /* Image body */
+        0x11, 0x99,
+        /* Trailing data */
+        0xff, 0xff, 0xff],
+       [/* Data offset */
+        0xff, 0xff, 0xff, 0xff, 0xff,
+        /* Header */
+        0x10, 0x01,
+        /* Image body */
+        0x99, 0x11]],
+     expected: [
+       {width: 0x10,
+        height: 0x01,
+        codingScheme: ICC_IMG_CODING_SCHEME_BASIC,
+        body: [0x11, 0x99]},
+       {width: 0x10,
+        height: 0x01,
+        codingScheme: ICC_IMG_CODING_SCHEME_BASIC,
+        body: [0x99, 0x11]}]},
+    {img: [0x01, 0x28, 0x20, 0x11, 0x4f, 0xac, 0x00, 0x0b, 0x00, 0xa2],
+     iidf: [
+       [/* Data offset */
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        /* Header */
+        0x28, 0x20,
+        /* Image body */
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+        0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+        0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b,
+        0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
+        0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41,
+        0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c,
+        0x4d, 0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
+        0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x00, 0x01, 0x02,
+        0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+        0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+        0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23,
+        0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e,
+        0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+        0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f]],
+     expected: [
+       {width: 0x28,
+        height: 0x20,
+        codingScheme: ICC_IMG_CODING_SCHEME_BASIC,
+        body: [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+               0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13,
+               0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+               0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+               0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31,
+               0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b,
+               0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45,
+               0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f,
+               0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+               0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x00, 0x01, 0x02, 0x03,
+               0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+               0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+               0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21,
+               0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b,
+               0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35,
+               0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f]}]}];
+
+  function do_test(img, iidf, expected) {
+    io.loadLinearFixedEF = function fakeLoadLinearFixedEF(options) {
+      // Write data size
+      buf.writeInt32(img.length * 2);
+
+      // Write data
+      for (let i = 0; i < img.length; i++) {
+        helper.writeHexOctet(img[i]);
+      }
+
+      // Write string delimiter
+      buf.writeStringDelimiter(img.length * 2);
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    let instanceIndex = 0;
+    io.loadTransparentEF = function fakeLoadTransparentEF(options) {
+      // Write data size
+      buf.writeInt32(iidf[instanceIndex].length * 2);
+
+      // Write data
+      for (let i = 0; i < iidf[instanceIndex].length; i++) {
+        helper.writeHexOctet(iidf[instanceIndex][i]);
+      }
+
+      // Write string delimiter
+      buf.writeStringDelimiter(iidf[instanceIndex].length * 2);
+
+      instanceIndex++;
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    let onsuccess = function(icons) {
+      equal(icons.length, expected.length);
+      for (let i = 0; i < icons.length; i++) {
+        let icon = icons[i];
+        let exp = expected[i];
+        equal(icon.width, exp.width);
+        equal(icon.height, exp.height);
+        equal(icon.codingScheme, exp.codingScheme);
+
+        equal(icon.body.length, exp.body.length);
+        for (let j = 0; j < icon.body.length; j++) {
+          equal(icon.body[j], exp.body[j]);
+        }
+      }
+    };
+    record.readIMG(0, onsuccess);
+  }
+
+  for (let i = 0; i< test_data.length; i++) {
+    do_test(test_data[i].img, test_data[i].iidf, test_data[i].expected);
+  }
+  run_next_test();
+});
+
+/**
+ * Verify reading EF_IMG and EF_IIDF with the case data length is not enough
+ */
+add_test(function test_reading_img_length_error() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let record = context.SimRecordHelper;
+  let helper = context.GsmPDUHelper;
+  let ril    = context.RIL;
+  let buf    = context.Buf;
+  let io     = context.ICCIOHelper;
+
+  let test_data = [
+    {/* Offset length not enough, should be 4. */
+     img: [0x01, 0x05, 0x05, 0x11, 0x4f, 0x00, 0x00, 0x04, 0x00, 0x06],
+     iidf: [0xff, 0xff, 0xff, // Offset.
+            0x05, 0x05, 0x11, 0x22, 0x33, 0xfe]},
+    {/* iidf data length not enough, should be 6. */
+     img: [0x01, 0x05, 0x05, 0x11, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x06],
+     iidf: [0x05, 0x05, 0x11, 0x22, 0x33]}];
+
+  function do_test(img, iidf) {
+    io.loadLinearFixedEF = function fakeLoadLinearFixedEF(options) {
+      // Write data size
+      buf.writeInt32(img.length * 2);
+
+      // Write data
+      for (let i = 0; i < img.length; i++) {
+        helper.writeHexOctet(img[i]);
+      }
+
+      // Write string delimiter
+      buf.writeStringDelimiter(img.length * 2);
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    io.loadTransparentEF = function fakeLoadTransparentEF(options) {
+      // Write data size
+      buf.writeInt32(iidf.length * 2);
+
+      // Write data
+      for (let i = 0; i < iidf.length; i++) {
+        helper.writeHexOctet(iidf[i]);
+      }
+
+      // Write string delimiter
+      buf.writeStringDelimiter(iidf.length * 2);
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    let onsuccess = function() {
+      do_print("onsuccess shouldn't be called.");
+      ok(false);
+    };
+
+    let onerror = function() {
+      do_print("onerror called as expected.");
+      ok(true);
+    };
+
+    record.readIMG(0, onsuccess, onerror);
+  }
+
+  for (let i = 0; i < test_data.length; i++) {
+    do_test(test_data[i].img, test_data[i].iidf);
+  }
+  run_next_test();
+});
+
+/**
+ * Verify reading EF_IMG and EF_IIDF with an invalid fileId
+ */
+add_test(function test_reading_img_invalid_fileId() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let record = context.SimRecordHelper;
+  let helper = context.GsmPDUHelper;
+  let ril    = context.RIL;
+  let buf    = context.Buf;
+  let io     = context.ICCIOHelper;
+
+  // Test invalid fileId: 0x5f00.
+  let img_test = [0x01, 0x05, 0x05, 0x11, 0x5f, 0x00, 0x00, 0x00, 0x00, 0x06];
+  let iidf_test = [0x05, 0x05, 0x11, 0x22, 0x33, 0xfe];
+
+  io.loadLinearFixedEF = function fakeLoadLinearFixedEF(options) {
+    // Write data size
+    buf.writeInt32(img_test.length * 2);
+
+    // Write data
+    for (let i = 0; i < img_test.length; i++) {
+      helper.writeHexOctet(img_test[i]);
+    }
+
+    // Write string delimiter
+    buf.writeStringDelimiter(img_test.length * 2);
+
+    if (options.callback) {
+      options.callback(options);
+    }
+  };
+
+  io.loadTransparentEF = function fakeLoadTransparentEF(options) {
+    // Write data size
+    buf.writeInt32(iidf_test.length * 2);
+
+    // Write data
+    for (let i = 0; i < iidf_test.length; i++) {
+      helper.writeHexOctet(iidf_test[i]);
+    }
+
+    // Write string delimiter
+    buf.writeStringDelimiter(iidf_test.length * 2);
+
+    if (options.callback) {
+      options.callback(options);
+    }
+  };
+
+  let onsuccess = function() {
+    do_print("onsuccess shouldn't be called.");
+    ok(false);
+  };
+
+  let onerror = function() {
+    do_print("onerror called as expected.");
+    ok(true);
+  };
+
+  record.readIMG(0, onsuccess, onerror);
+
+  run_next_test();
+});
+
+/**
+ * Verify reading EF_IMG with a wrong record length
+ */
+add_test(function test_reading_img_wrong_record_length() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let record = context.SimRecordHelper;
+  let helper = context.GsmPDUHelper;
+  let ril    = context.RIL;
+  let buf    = context.Buf;
+  let io     = context.ICCIOHelper;
+
+  let test_data = [
+    [0x01, 0x05, 0x05, 0x11, 0x4f, 0x00, 0x00, 0x00],
+    [0x02, 0x05, 0x05, 0x11, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x06]];
+
+  function do_test(img) {
+    io.loadLinearFixedEF = function fakeLoadLinearFixedEF(options) {
+      // Write data size
+      buf.writeInt32(img.length * 2);
+
+      // Write data
+      for (let i = 0; i < img.length; i++) {
+        helper.writeHexOctet(img[i]);
+      }
+
+      // Write string delimiter
+      buf.writeStringDelimiter(img.length * 2);
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    let onsuccess = function() {
+      do_print("onsuccess shouldn't be called.");
+      ok(false);
+    };
+
+    let onerror = function() {
+      do_print("onerror called as expected.");
+      ok(true);
+    };
+
+    record.readIMG(0, onsuccess, onerror);
+  }
+
+  for (let i = 0; i < test_data.length; i++) {
+    do_test(test_data[i]);
+  }
+  run_next_test();
+});
+
+/**
+ * Verify reading EF_IMG and EF_IIDF with ICC_IMG_CODING_SCHEME_COLOR
+ */
+add_test(function test_reading_img_color() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let record = context.SimRecordHelper;
+  let helper = context.GsmPDUHelper;
+  let ril    = context.RIL;
+  let buf    = context.Buf;
+  let io     = context.ICCIOHelper;
+
+  let test_data = [
+    {img: [0x01, 0x05, 0x05, 0x21, 0x4f, 0x11, 0x00, 0x00, 0x00, 0x13],
+     iidf: [
+       [/* Header */
+        0x05, 0x05, 0x03, 0x08, 0x00, 0x13,
+        /* Image body */
+        0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0,
+        0xb0, 0xc0, 0xd0,
+        /* Clut entries */
+        0x00, 0x01, 0x02,
+        0x10, 0x11, 0x12,
+        0x20, 0x21, 0x22,
+        0x30, 0x31, 0x32,
+        0x40, 0x41, 0x42,
+        0x50, 0x51, 0x52,
+        0x60, 0x61, 0x62,
+        0x70, 0x71, 0x72]],
+     expected: [
+       {width: 0x05,
+        height: 0x05,
+        codingScheme: ICC_IMG_CODING_SCHEME_COLOR,
+        bitsPerImgPoint: 0x03,
+        numOfClutEntries: 0x08,
+        body: [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0,
+               0xc0, 0xd0],
+        clut: [0x00, 0x01, 0x02,
+               0x10, 0x11, 0x12,
+               0x20, 0x21, 0x22,
+               0x30, 0x31, 0x32,
+               0x40, 0x41, 0x42,
+               0x50, 0x51, 0x52,
+               0x60, 0x61, 0x62,
+               0x70, 0x71, 0x72]}]},
+    {img: [0x02, 0x01, 0x06, 0x21, 0x4f, 0x33, 0x00, 0x02, 0x00, 0x08, 0x01,
+           0x06, 0x21, 0x4f, 0x44, 0x00, 0x02, 0x00, 0x08],
+     iidf: [
+       [/* Data offset */
+        0xff, 0xff,
+        /* Header */
+        0x01, 0x06, 0x02, 0x04, 0x00, 0x0d,
+        /* Image body */
+        0x40, 0x50,
+        /* Clut offset */
+        0xaa, 0xbb, 0xcc,
+        /* Clut entries */
+        0x01, 0x03, 0x05,
+        0x21, 0x23, 0x25,
+        0x41, 0x43, 0x45,
+        0x61, 0x63, 0x65],
+       [/* Data offset */
+        0xff, 0xff,
+        /* Header */
+        0x01, 0x06, 0x02, 0x04, 0x00, 0x0d,
+        /* Image body */
+        0x4f, 0x5f,
+        /* Clut offset */
+        0xaa, 0xbb, 0xcc,
+        /* Clut entries */
+        0x11, 0x13, 0x15,
+        0x21, 0x23, 0x25,
+        0x41, 0x43, 0x45,
+        0x61, 0x63, 0x65]],
+      expected: [
+        {width: 0x01,
+         height: 0x06,
+         codingScheme: ICC_IMG_CODING_SCHEME_COLOR,
+         bitsPerImgPoint: 0x02,
+         numOfClutEntries: 0x04,
+         body: [0x40, 0x50],
+         clut: [0x01, 0x03, 0x05,
+                0x21, 0x23, 0x25,
+                0x41, 0x43, 0x45,
+                0x61, 0x63, 0x65]},
+        {width: 0x01,
+         height: 0x06,
+         codingScheme: ICC_IMG_CODING_SCHEME_COLOR,
+         bitsPerImgPoint: 0x02,
+         numOfClutEntries: 0x04,
+         body: [0x4f, 0x5f],
+         clut: [0x11, 0x13, 0x15,
+                0x21, 0x23, 0x25,
+                0x41, 0x43, 0x45,
+                0x61, 0x63, 0x65]}]}];
+
+  function do_test(img, iidf, expected) {
+    io.loadLinearFixedEF = function fakeLoadLinearFixedEF(options) {
+      // Write data size
+      buf.writeInt32(img.length * 2);
+
+      // Write data
+      for (let i = 0; i < img.length; i++) {
+        helper.writeHexOctet(img[i]);
+      }
+
+      // Write string delimiter
+      buf.writeStringDelimiter(img.length * 2);
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    let instanceIndex = 0;
+    io.loadTransparentEF = function fakeLoadTransparentEF(options) {
+      // Write data size
+      buf.writeInt32(iidf[instanceIndex].length * 2);
+
+      // Write data
+      for (let i = 0; i < iidf[instanceIndex].length; i++) {
+        helper.writeHexOctet(iidf[instanceIndex][i]);
+      }
+
+      // Write string delimiter
+      buf.writeStringDelimiter(iidf[instanceIndex].length * 2);
+
+      instanceIndex++;
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    let onsuccess = function(icons) {
+      equal(icons.length, expected.length);
+      for (let i = 0; i < icons.length; i++) {
+        let icon = icons[i];
+        let exp = expected[i];
+        equal(icon.width, exp.width);
+        equal(icon.height, exp.height);
+        equal(icon.codingScheme, exp.codingScheme);
+
+        equal(icon.body.length, exp.body.length);
+        for (let j = 0; j < icon.body.length; j++) {
+          equal(icon.body[j], exp.body[j]);
+        }
+
+        equal(icon.clut.length, exp.clut.length);
+        for (let j = 0; j < icon.clut.length; j++) {
+          equal(icon.clut[j], exp.clut[j]);
+        }
+      }
+    };
+
+    record.readIMG(0, onsuccess);
+  }
+
+  for (let i = 0; i< test_data.length; i++) {
+    do_test(test_data[i].img, test_data[i].iidf, test_data[i].expected);
+  }
+  run_next_test();
+});
+
+/**
+ * Verify reading EF_IMG and EF_IIDF with
+ * ICC_IMG_CODING_SCHEME_COLOR_TRANSPARENCY
+ */
+add_test(function test_reading_img_color() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let record = context.SimRecordHelper;
+  let helper = context.GsmPDUHelper;
+  let ril    = context.RIL;
+  let buf    = context.Buf;
+  let io     = context.ICCIOHelper;
+
+  let test_data = [
+    {img: [0x01, 0x05, 0x05, 0x22, 0x4f, 0x11, 0x00, 0x00, 0x00, 0x13],
+     iidf: [
+       [/* Header */
+        0x05, 0x05, 0x03, 0x08, 0x00, 0x13,
+        /* Image body */
+        0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0,
+        0xb0, 0xc0, 0xd0,
+        /* Clut entries */
+        0x00, 0x01, 0x02,
+        0x10, 0x11, 0x12,
+        0x20, 0x21, 0x22,
+        0x30, 0x31, 0x32,
+        0x40, 0x41, 0x42,
+        0x50, 0x51, 0x52,
+        0x60, 0x61, 0x62,
+        0x70, 0x71, 0x72]],
+     expected: [
+       {width: 0x05,
+        height: 0x05,
+        codingScheme: ICC_IMG_CODING_SCHEME_COLOR_TRANSPARENCY,
+        bitsPerImgPoint: 0x03,
+        numOfClutEntries: 0x08,
+        body: [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90,
+               0xa0, 0xb0, 0xc0, 0xd0],
+        clut: [0x00, 0x01, 0x02,
+               0x10, 0x11, 0x12,
+               0x20, 0x21, 0x22,
+               0x30, 0x31, 0x32,
+               0x40, 0x41, 0x42,
+               0x50, 0x51, 0x52,
+               0x60, 0x61, 0x62,
+               0x70, 0x71, 0x72]}]},
+    {img: [0x02, 0x01, 0x06, 0x22, 0x4f, 0x33, 0x00, 0x02, 0x00, 0x08, 0x01,
+           0x06, 0x22, 0x4f, 0x33, 0x00, 0x02, 0x00, 0x08],
+     iidf: [
+       [/* Data offset */
+        0xff, 0xff,
+        /* Header */
+        0x01, 0x06, 0x02, 0x04, 0x00, 0x0d,
+        /* Image body */
+        0x40, 0x50,
+        /* Clut offset */
+        0x0a, 0x0b, 0x0c,
+        /* Clut entries */
+        0x01, 0x03, 0x05,
+        0x21, 0x23, 0x25,
+        0x41, 0x43, 0x45,
+        0x61, 0x63, 0x65],
+       [/* Data offset */
+        0xff, 0xff,
+        /* Header */
+        0x01, 0x06, 0x02, 0x04, 0x00, 0x0d,
+        /* Image body */
+        0x4f, 0x5f,
+        /* Clut offset */
+        0x0a, 0x0b, 0x0c,
+        /* Clut entries */
+        0x11, 0x13, 0x15,
+        0x21, 0x23, 0x25,
+        0x41, 0x43, 0x45,
+        0x61, 0x63, 0x65]],
+     expected: [
+       {width: 0x01,
+        height: 0x06,
+        codingScheme: ICC_IMG_CODING_SCHEME_COLOR_TRANSPARENCY,
+        bitsPerImgPoint: 0x02,
+        numOfClutEntries: 0x04,
+        body: [0x40, 0x50],
+        clut: [0x01, 0x03, 0x05,
+               0x21, 0x23, 0x25,
+               0x41, 0x43, 0x45,
+               0x61, 0x63, 0x65]},
+       {width: 0x01,
+        height: 0x06,
+        codingScheme: ICC_IMG_CODING_SCHEME_COLOR_TRANSPARENCY,
+        bitsPerImgPoint: 0x02,
+        numOfClutEntries: 0x04,
+        body: [0x4f, 0x5f],
+        clut: [0x11, 0x13, 0x15,
+               0x21, 0x23, 0x25,
+               0x41, 0x43, 0x45,
+               0x61, 0x63, 0x65]}]}];
+
+  function do_test(img, iidf, expected) {
+    io.loadLinearFixedEF = function fakeLoadLinearFixedEF(options) {
+      // Write data size
+      buf.writeInt32(img.length * 2);
+
+      // Write data
+      for (let i = 0; i < img.length; i++) {
+        helper.writeHexOctet(img[i]);
+      }
+
+      // Write string delimiter
+      buf.writeStringDelimiter(img.length * 2);
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    let instanceIndex = 0;
+    io.loadTransparentEF = function fakeLoadTransparentEF(options) {
+      // Write data size
+      buf.writeInt32(iidf[instanceIndex].length * 2);
+
+      // Write data
+      for (let i = 0; i < iidf[instanceIndex].length; i++) {
+        helper.writeHexOctet(iidf[instanceIndex][i]);
+      }
+
+      // Write string delimiter
+      buf.writeStringDelimiter(iidf[instanceIndex].length * 2);
+
+      instanceIndex++;
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    let onsuccess = function(icons) {
+      equal(icons.length, expected.length);
+      for (let i = 0; i < icons.length; i++) {
+        let icon = icons[i];
+        let exp = expected[i];
+        equal(icon.width, exp.width);
+        equal(icon.height, exp.height);
+        equal(icon.codingScheme, exp.codingScheme);
+
+        equal(icon.body.length, exp.body.length);
+        for (let j = 0; j < icon.body.length; j++) {
+          equal(icon.body[j], exp.body[j]);
+        }
+
+        equal(icon.clut.length, exp.clut.length);
+        for (let j = 0; j < icon.clut.length; j++) {
+          equal(icon.clut[j], exp.clut[j]);
+        }
+      }
+    };
+
+    record.readIMG(0, onsuccess);
+  }
+
+  for (let i = 0; i< test_data.length; i++) {
+    do_test(test_data[i].img, test_data[i].iidf, test_data[i].expected);
+  }
+  run_next_test();
+});
+
+/**
+ * Verify SimRecordHelper.readCphsInfo
+ */
+add_test(function test_read_cphs_info() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let RIL = context.RIL;
+  let pduHelper = context.GsmPDUHelper;
+  let recordHelper = context.SimRecordHelper;
+  let buf  = context.Buf;
+  let io  = context.ICCIOHelper;
+  let cphsPDU = Uint8Array(3);
+
+  io.loadTransparentEF = function(options) {
+    if (cphsPDU) {
+      // Write data size
+      buf.writeInt32(cphsPDU.length * 2);
+
+      // Write CPHS INFO
+      for (let i = 0; i < cphsPDU.length; i++) {
+        pduHelper.writeHexOctet(cphsPDU[i]);
+      }
+
+      // Write string delimiter
+      buf.writeStringDelimiter(cphsPDU.length * 2);
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    } else {
+      do_print("cphsPDU[] is not set.");
+    }
+  };
+
+  function do_test(cphsInfo, cphsSt) {
+    let onsuccess = false;
+    let onerror = false;
+
+    delete RIL.iccInfoPrivate.cphsSt;
+    cphsPDU.set(cphsInfo);
+    recordHelper.readCphsInfo(() => { onsuccess = true; },
+                              () => { onerror = true; });
+
+    ok((cphsSt) ? onsuccess : onerror);
+    ok(!((cphsSt) ? onerror : onsuccess));
+    if (cphsSt) {
+      equal(RIL.iccInfoPrivate.cphsSt.length, cphsSt.length);
+      for (let i = 0; i < cphsSt.length; i++) {
+        equal(RIL.iccInfoPrivate.cphsSt[i], cphsSt[i]);
+      }
+    } else {
+      equal(RIL.iccInfoPrivate.cphsSt, cphsSt);
+    }
+  }
+
+  do_test([
+    0x01, // Phase 1
+    0xFF, // All available & activated
+    0x03  // All available & activated
+  ],
+  [
+    0x3F, // All services except ONSF(bit 8-7) are available and activated.
+    0x00  // INFO_NUM shall not be available & activated.
+  ]);
+
+  do_test([
+    0x02, // Phase 2
+    0xFF, // All available & activated
+    0x03  // All available & activated
+  ],
+  [
+    0xF3, // All services except ONSF are available and activated.
+    0x03  // INFO_NUM shall not be available & activated.
+  ]);
+
+  do_test([
+    0x03, // Phase 3
+    0xFF, // All available & activated
+    0x03  // All available & activated
+  ],
+  undefined); // RIL.iccInfoPrivate.cphsSt shall be remained as 'undefined'.
+
+  run_next_test();
+});
+
+/**
+ * Verify SimRecordHelper.readMBDN/SimRecordHelper.readCphsMBN
+ */
+add_test(function test_read_voicemail_number() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let RIL = context.RIL;
+  let pduHelper = context.GsmPDUHelper;
+  let recordHelper = context.SimRecordHelper;
+  let buf    = context.Buf;
+  let io     = context.ICCIOHelper;
+  let postedMessage;
+
+  worker.postMessage = function(message) {
+    postedMessage = message;
+  };
+
+  io.loadLinearFixedEF = function(options) {
+    let mbnData = [
+      0x56, 0x6F, 0x69, 0x63, 0x65, 0x6D, 0x61, 0x69,
+      0x6C, 0xFF, // Alpha Identifier: Voicemail
+      0x03,       // Length of BCD number: 3
+      0x80,       // TOA: Unknown
+      0x11, 0xF1, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xFF, 0xFF, // Dialing Number: 111
+      0xFF,       // Capability/Configuration Record Identifier
+      0xFF        // Extension Record Identifier
+    ];
+
+    // Write data size
+    buf.writeInt32(mbnData.length * 2);
+
+    // Write MBN
+    for (let i = 0; i < mbnData.length; i++) {
+      pduHelper.writeHexOctet(mbnData[i]);
+    }
+
+    // Write string delimiter
+    buf.writeStringDelimiter(mbnData.length * 2);
+
+    options.recordSize = mbnData.length;
+    if (options.callback) {
+      options.callback(options);
+    }
+  };
+
+  function do_test(funcName, msgCount) {
+    postedMessage = null;
+    delete RIL.iccInfoPrivate.mbdn;
+    recordHelper[funcName]();
+
+    equal("iccmbdn", postedMessage.rilMessageType);
+    equal("Voicemail", postedMessage.alphaId);
+    equal("111", postedMessage.number);
+  }
+
+  do_test("readMBDN");
+  do_test("readCphsMBN");
+
+  run_next_test();
+});
+
+/**
+ * Verify the recovery from SimRecordHelper.readCphsMBN() if MBDN is not valid
+ * or is empty after SimRecordHelper.readMBDN().
+ */
+add_test(function test_read_mbdn_recovered_from_cphs_mbn() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let RIL = context.RIL;
+  let pduHelper = context.GsmPDUHelper;
+  let recordHelper = context.SimRecordHelper;
+  let iccUtilsHelper = context.ICCUtilsHelper;
+  let buf    = context.Buf;
+  let io     = context.ICCIOHelper;
+
+  io.loadLinearFixedEF = function(options) {
+    let mbnData = [
+      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+    ];
+
+    // Write data size
+    buf.writeInt32(mbnData.length * 2);
+
+    // Write MBN
+    for (let i = 0; i < mbnData.length; i++) {
+      pduHelper.writeHexOctet(mbnData[i]);
+    }
+
+    // Write string delimiter
+    buf.writeStringDelimiter(mbnData.length * 2);
+
+    options.recordSize = mbnData.length;
+    if (options.callback) {
+      options.callback(options);
+    }
+  };
+
+  iccUtilsHelper.isCphsServiceAvailable = function(geckoService) {
+    return geckoService == "MBN";
+  };
+
+  let isRecovered = false;
+  recordHelper.readCphsMBN = function(onComplete) {
+    isRecovered = true;
+  };
+
+  recordHelper.readMBDN();
+
+  equal(RIL.iccInfoPrivate.mbdn, undefined);
+  ok(isRecovered);
+
+  run_next_test();
+});
+
+/**
+ * Verify reading EF_PNN with different coding scheme.
+ */
+add_test(function test_pnn_with_different_coding_scheme() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let record = context.SimRecordHelper;
+  let pduHelper = context.GsmPDUHelper;
+  let ril = context.RIL;
+  let buf = context.Buf;
+  let io = context.ICCIOHelper;
+
+  let test_data = [{
+    // Cell Broadcast data coding scheme - "Test1"
+    pnn: [0x43, 0x06, 0x85, 0xD4, 0xF2, 0x9C, 0x1E, 0x03],
+    expectedResult: "Test1"
+  },{
+    // UCS2 with 0x80 - "Test1"
+    pnn: [0x43, 0x0C, 0x90, 0x80, 0x00, 0x54, 0x00, 0x65, 0x00, 0x73, 0x00, 0x74, 0x00, 0x31],
+    expectedResult: "Test1"
+  },{
+    // UCS2 with 0x81 - "Mozilla\u694a"
+    pnn: [0x43, 0x0E, 0x90, 0x81, 0x08, 0xd2, 0x4d, 0x6f, 0x7a, 0x69, 0x6c, 0x6c, 0x61, 0xca, 0xff, 0xff],
+    expectedResult: "Mozilla\u694a"
+  },{
+    // UCS2 with 0x82 - "Mozilla\u694a"
+    pnn: [0x43, 0x0F, 0x90, 0x82, 0x08, 0x69, 0x00, 0x4d, 0x6f, 0x7a, 0x69, 0x6c, 0x6c, 0x61, 0xca, 0xff, 0xff],
+    expectedResult: "Mozilla\u694a"
+  }];
+
+  function do_test_pnn(pnn, expectedResult) {
+    io.loadLinearFixedEF = function fakeLoadLinearFixedEF(options) {
+      // Write data size.
+      buf.writeInt32(pnn.length * 2);
+
+      // Write data.
+      for (let i = 0; i < pnn.length; i++) {
+        pduHelper.writeHexOctet(pnn[i]);
+      }
+
+      // Write string delimiter.
+      buf.writeStringDelimiter(pnn.length * 2);
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    record.readPNN();
+
+    equal(ril.iccInfoPrivate.PNN[0].fullName, expectedResult);
+    // Reset PNN info for next test
+    ril.iccInfoPrivate.PNN = null;
+  }
+
+  ril.appType = CARD_APPTYPE_SIM;
+  for (let i = 0; i < test_data.length; i++) {
+    do_test_pnn(test_data[i].pnn, test_data[i].expectedResult);
+  }
+
+  run_next_test();
+});
+
+/**
+ * Verify reading EF_PNN with different content.
+ */
+add_test(function test_pnn_with_different_content() {
+  let worker = newUint8Worker();
+  let context = worker.ContextPool._contexts[0];
+  let record = context.SimRecordHelper;
+  let pduHelper = context.GsmPDUHelper;
+  let ril = context.RIL;
+  let buf = context.Buf;
+  let io = context.ICCIOHelper;
+
+  let test_data = [{
+    // [0]: {"fullName":"Test1","shortName":"Test1"}
+    pnn: [0x43, 0x06, 0x85, 0xD4, 0xF2, 0x9C, 0x1E, 0x03,
+          0x45, 0x06, 0x85, 0xD4, 0xF2, 0x9C, 0x1E, 0x03],
+    expectedResult: {"fullName": "Test1","shortName": "Test1"}
+  },{
+    // [1]: {"fullName":"Test2"}
+    pnn: [0x43, 0x06, 0x85, 0xD4, 0xF2, 0x9C, 0x2E, 0x03],
+    expectedResult: {"fullName": "Test2"}
+  },{
+    // [2]: undefined
+    pnn: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+  },{
+    // [3]: {"fullName": "Test4"}
+    pnn: [0x43, 0x06, 0x85, 0xD4, 0xF2, 0x9C, 0x4E, 0x03],
+    expectedResult: {"fullName": "Test4"}
+  },{
+    // [4]: undefined
+    pnn: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+  }];
+
+  function do_test_pnn() {
+    ril.iccIO = function fakeIccIO(options) {
+      let index = options.p1 - 1;
+      let pnn = test_data[index].pnn;
+
+      // Write data size.
+      buf.writeInt32(pnn.length * 2);
+
+      // Write data.
+      for (let i = 0; i < pnn.length; i++) {
+        pduHelper.writeHexOctet(pnn[i]);
+      }
+
+      // Write string delimiter.
+      buf.writeStringDelimiter(pnn.length * 2);
+
+      if (options.callback) {
+        options.callback(options);
+      }
+    };
+
+    io.loadLinearFixedEF = function fakeLoadLinearFixedEF(options) {
+      options.p1 = 1;
+      options.totalRecords = test_data.length;
+
+      ril.iccIO(options);
+    };
+
+    record.readPNN();
+
+    equal(test_data.length, ril.iccInfoPrivate.PNN.length);
+    for (let i = 0; i < test_data.length; i++) {
+      if (test_data[i].expectedResult) {
+        equal(test_data[i].expectedResult.fullName,
+                    ril.iccInfoPrivate.PNN[i].fullName);
+        equal(test_data[i].expectedResult.shortName,
+                    ril.iccInfoPrivate.PNN[i].shortName);
+      } else {
+        equal(test_data[i].expectedResult, ril.iccInfoPrivate.PNN[i]);
+      }
+    }
+  }
+
+  ril.appType = CARD_APPTYPE_SIM;
+  do_test_pnn();
 
   run_next_test();
 });

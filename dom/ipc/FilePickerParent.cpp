@@ -6,7 +6,6 @@
 
 #include "FilePickerParent.h"
 #include "nsComponentManagerUtils.h"
-#include "nsDOMFile.h"
 #include "nsNetCID.h"
 #include "nsIDocument.h"
 #include "nsIDOMFile.h"
@@ -14,10 +13,11 @@
 #include "nsIFile.h"
 #include "nsISimpleEnumerator.h"
 #include "mozilla/unused.h"
+#include "mozilla/dom/File.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/TabParent.h"
-#include "mozilla/dom/ipc/Blob.h"
+#include "mozilla/dom/ipc/BlobParent.h"
 
 using mozilla::unused;
 using namespace mozilla::dom;
@@ -55,10 +55,10 @@ FilePickerParent::~FilePickerParent()
 // the same runnable on the main thread.
 // 3. The main thread sends the results over IPC.
 FilePickerParent::FileSizeAndDateRunnable::FileSizeAndDateRunnable(FilePickerParent *aFPParent,
-                                                                   nsCOMArray<nsIDOMFile>& aDomfiles)
+                                                                   nsTArray<nsRefPtr<FileImpl>>& aFiles)
  : mFilePickerParent(aFPParent)
 {
-  mDomfiles.SwapElements(aDomfiles);
+  mFiles.SwapElements(aFiles);
 }
 
 bool
@@ -82,16 +82,16 @@ FilePickerParent::FileSizeAndDateRunnable::Run()
   // results.
   if (NS_IsMainThread()) {
     if (mFilePickerParent) {
-      mFilePickerParent->SendFiles(mDomfiles);
+      mFilePickerParent->SendFiles(mFiles);
     }
     return NS_OK;
   }
 
   // We're not on the main thread, so do the stat().
-  for (unsigned i = 0; i < mDomfiles.Length(); i++) {
-    uint64_t size, lastModified;
-    mDomfiles[i]->GetSize(&size);
-    mDomfiles[i]->GetMozLastModifiedDate(&lastModified);
+  for (unsigned i = 0; i < mFiles.Length(); i++) {
+    ErrorResult rv;
+    mFiles[i]->GetSize(rv);
+    mFiles[i]->GetLastModified(rv);
   }
 
   // Dispatch ourselves back on the main thread.
@@ -111,13 +111,14 @@ FilePickerParent::FileSizeAndDateRunnable::Destroy()
 }
 
 void
-FilePickerParent::SendFiles(const nsCOMArray<nsIDOMFile>& aDomfiles)
+FilePickerParent::SendFiles(const nsTArray<nsRefPtr<FileImpl>>& aFiles)
 {
-  nsIContentParent* parent = static_cast<TabParent*>(Manager())->Manager();
+  nsIContentParent* parent = TabParent::GetFrom(Manager())->Manager();
   InfallibleTArray<PBlobParent*> files;
 
-  for (unsigned i = 0; i < aDomfiles.Length(); i++) {
-    BlobParent* blob = parent->GetOrCreateActorForBlob(aDomfiles[i]);
+  for (unsigned i = 0; i < aFiles.Length(); i++) {
+    nsRefPtr<File> file = new File(nullptr, aFiles[i]);
+    BlobParent* blob = parent->GetOrCreateActorForBlob(file);
     if (blob) {
       files.AppendElement(blob);
     }
@@ -138,7 +139,7 @@ FilePickerParent::Done(int16_t aResult)
     return;
   }
 
-  nsCOMArray<nsIDOMFile> domfiles;
+  nsTArray<nsRefPtr<FileImpl>> files;
   if (mMode == nsIFilePicker::modeOpenMultiple) {
     nsCOMPtr<nsISimpleEnumerator> iter;
     NS_ENSURE_SUCCESS_VOID(mFilePicker->GetFiles(getter_AddRefs(iter)));
@@ -149,21 +150,22 @@ FilePickerParent::Done(int16_t aResult)
       iter->GetNext(getter_AddRefs(supports));
       if (supports) {
         nsCOMPtr<nsIFile> file = do_QueryInterface(supports);
-        nsCOMPtr<nsIDOMFile> domfile = DOMFile::CreateFromFile(file);
-        domfiles.AppendElement(domfile);
+
+        nsRefPtr<FileImpl> fileimpl = new FileImplFile(file);
+        files.AppendElement(fileimpl);
       }
     }
   } else {
     nsCOMPtr<nsIFile> file;
     mFilePicker->GetFile(getter_AddRefs(file));
     if (file) {
-      nsCOMPtr<nsIDOMFile> domfile = DOMFile::CreateFromFile(file);
-      domfiles.AppendElement(domfile);
+      nsRefPtr<FileImpl> fileimpl = new FileImplFile(file);
+      files.AppendElement(fileimpl);
     }
   }
 
   MOZ_ASSERT(!mRunnable);
-  mRunnable = new FileSizeAndDateRunnable(this, domfiles);
+  mRunnable = new FileSizeAndDateRunnable(this, files);
   if (!mRunnable->Dispatch()) {
     unused << Send__delete__(this, void_t(), nsIFilePicker::returnCancel);
   }
@@ -177,7 +179,7 @@ FilePickerParent::CreateFilePicker()
     return false;
   }
 
-  Element* element = static_cast<TabParent*>(Manager())->GetOwnerElement();
+  Element* element = TabParent::GetFrom(Manager())->GetOwnerElement();
   if (!element) {
     return false;
   }
@@ -195,8 +197,9 @@ FilePickerParent::RecvOpen(const int16_t& aSelectedType,
                            const bool& aAddToRecentDocs,
                            const nsString& aDefaultFile,
                            const nsString& aDefaultExtension,
-                           const InfallibleTArray<nsString>& aFilters,
-                           const InfallibleTArray<nsString>& aFilterNames)
+                           InfallibleTArray<nsString>&& aFilters,
+                           InfallibleTArray<nsString>&& aFilterNames,
+                           const nsString& aDisplayDirectory)
 {
   if (!CreateFilePicker()) {
     unused << Send__delete__(this, void_t(), nsIFilePicker::returnCancel);
@@ -212,6 +215,14 @@ FilePickerParent::RecvOpen(const int16_t& aSelectedType,
   mFilePicker->SetDefaultString(aDefaultFile);
   mFilePicker->SetDefaultExtension(aDefaultExtension);
   mFilePicker->SetFilterIndex(aSelectedType);
+
+  if (!aDisplayDirectory.IsEmpty()) {
+    nsCOMPtr<nsIFile> localFile = do_CreateInstance(NS_LOCAL_FILE_CONTRACTID);
+    if (localFile) {
+      localFile->InitWithPath(aDisplayDirectory);
+      mFilePicker->SetDisplayDirectory(localFile);
+    }
+  }
 
   mCallback = new FilePickerShownCallback(this);
 

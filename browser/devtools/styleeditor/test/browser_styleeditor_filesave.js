@@ -2,8 +2,8 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const TESTCASE_URI_HTML = TEST_BASE + "simple.html";
-const TESTCASE_URI_CSS = TEST_BASE + "simple.css";
+const TESTCASE_URI_HTML = TEST_BASE_HTTP + "simple.html";
+const TESTCASE_URI_CSS = TEST_BASE_HTTP + "simple.css";
 
 const Cc = Components.classes;
 const Ci = Components.interfaces;
@@ -65,7 +65,14 @@ function read(aSrcChromeURL)
   let scriptableStream = Cc["@mozilla.org/scriptableinputstream;1"]
     .getService(Ci.nsIScriptableInputStream);
 
-  let channel = Services.io.newChannel(aSrcChromeURL, null, null);
+  let channel = Services.io.newChannel2(aSrcChromeURL,
+                                        null,
+                                        null,
+                                        null,      // aLoadingNode
+                                        Services.scriptSecurityManager.getSystemPrincipal(),
+                                        null,      // aTriggeringPrincipal
+                                        Ci.nsILoadInfo.SEC_NORMAL,
+                                        Ci.nsIContentPolicy.TYPE_OTHER);
   let input = channel.open();
   scriptableStream.init(input);
 

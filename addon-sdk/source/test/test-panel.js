@@ -16,18 +16,16 @@ const { setTimeout } = require("sdk/timers");
 const self = require('sdk/self');
 const { open, close, focus, ready } = require('sdk/window/helpers');
 const { isPrivate } = require('sdk/private-browsing');
-const { isWindowPBSupported, isGlobalPBSupported } = require('sdk/private-browsing/utils');
+const { isWindowPBSupported } = require('sdk/private-browsing/utils');
 const { defer, all } = require('sdk/core/promise');
 const { getMostRecentBrowserWindow } = require('sdk/window/utils');
-const { getWindow } = require('sdk/panel/window');
-const { pb } = require('./private-browsing/helper');
 const { URL } = require('sdk/url');
 const { wait } = require('./event/helpers');
+const packaging = require('@loader/options');
 
 const fixtures = require('./fixtures')
 
 const SVG_URL = fixtures.url('mofo_logo.SVG');
-const CSS_URL = fixtures.url('css-include-file.css');
 
 const Isolate = fn => '(' + fn + ')()';
 
@@ -283,17 +281,28 @@ exports["test Hide Before Show"] = function(assert, done) {
   const { Panel } = require('sdk/panel');
 
   let showCalled = false;
-  let panel = Panel({
+  let hideCalled = false;
+  let panel1 = Panel({
     onShow: function () {
       showCalled = true;
     },
     onHide: function () {
-      assert.ok(!showCalled, 'must not emit show if was hidden before');
-      done();
+      hideCalled = true;
     }
   });
-  panel.show();
-  panel.hide();
+  panel1.show();
+  panel1.hide();
+
+  let panel2 = Panel({
+    onShow: function () {
+      assert.ok(!showCalled, 'should not emit show');
+      assert.ok(!hideCalled, 'should not emit hide');
+      panel1.destroy();
+      panel2.destroy();
+      done();
+    },
+  });
+  panel2.show();
 };
 
 exports["test Several Show Hides"] = function(assert, done) {
@@ -578,6 +587,10 @@ exports["test Show Then Destroy"] = makeEventOrderTest({
   }
 });
 
+
+// TODO: Re-enable and fix this intermittent test
+// See Bug 1111695 https://bugzilla.mozilla.org/show_bug.cgi?id=1111695
+/*
 exports["test Show Then Hide Then Destroy"] = makeEventOrderTest({
   test: function(assert, done, expect, panel) {
     panel.show();
@@ -585,28 +598,28 @@ exports["test Show Then Hide Then Destroy"] = makeEventOrderTest({
       then('hide', function() { panel.destroy(); done(); });
   }
 });
+*/
 
 exports["test Content URL Option"] = function(assert) {
   const { Panel } = require('sdk/panel');
 
   const URL_STRING = "about:buildconfig";
   const HTML_CONTENT = "<html><title>Test</title><p>This is a test.</p></html>";
-
-  let (panel = Panel({ contentURL: URL_STRING })) {
-    assert.pass("contentURL accepts a string URL.");
-    assert.equal(panel.contentURL, URL_STRING,
-                "contentURL is the string to which it was set.");
-  }
-
   let dataURL = "data:text/html;charset=utf-8," + encodeURIComponent(HTML_CONTENT);
-  let (panel = Panel({ contentURL: dataURL })) {
-    assert.pass("contentURL accepts a data: URL.");
-  }
 
-  let (panel = Panel({})) {
-    assert.ok(panel.contentURL == null,
-                "contentURL is undefined.");
-  }
+  let panel = Panel({ contentURL: URL_STRING });
+  assert.pass("contentURL accepts a string URL.");
+  assert.equal(panel.contentURL, URL_STRING,
+              "contentURL is the string to which it was set.");
+  panel.destroy();
+
+  panel = Panel({ contentURL: dataURL });
+  assert.pass("contentURL accepts a data: URL.");
+  panel.destroy();
+
+  panel = Panel({});
+  assert.ok(panel.contentURL == null, "contentURL is undefined.");
+  panel.destroy();
 
   assert.throws(function () Panel({ contentURL: "foo" }),
                     /The `contentURL` option must be a valid URL./,
@@ -666,7 +679,7 @@ exports["test console.log in Panel"] = function(assert, done) {
   }
 };
 
-if (isWindowPBSupported) {
+/*if (isWindowPBSupported) {
   exports.testPanelDoesNotShowInPrivateWindowNoAnchor = function(assert, done) {
     let { loader } = LoaderWithHookedConsole(module, ignorePassingDOMNodeWarning);
     let { Panel } = loader.require("sdk/panel");
@@ -774,7 +787,7 @@ if (isWindowPBSupported) {
       then(testShowPanel.bind(null, assert, panel)).
       then(done, assert.fail.bind(assert));
   }
-}
+}*/
 
 function testShowPanel(assert, panel) {
   let { promise, resolve } = defer();
@@ -979,7 +992,16 @@ exports['test panel can be constructed without any arguments'] = function (asser
 };
 
 exports['test panel CSS'] = function(assert, done) {
-  const loader = Loader(module);
+  const { merge } = require("sdk/util/object");
+
+  let loader = Loader(module, null, null, {
+    modules: {
+      "sdk/self": merge({}, self, {
+        data: merge({}, self.data, fixtures)
+      })
+    }
+  });
+
   const { Panel } = loader.require('sdk/panel');
 
   const { getActiveView } = loader.require('sdk/view/core');
@@ -991,13 +1013,19 @@ exports['test panel CSS'] = function(assert, done) {
     contentURL: 'data:text/html;charset=utf-8,' +
                 '<div style="background: silver">css test</div>',
     contentStyle: 'div { height: 100px; }',
-    contentStyleFile: CSS_URL,
+    contentStyleFile: [fixtures.url("include-file.css"), "./border-style.css"],
     onShow: () => {
-      ready(getContentWindow(panel)).then(({ document }) => {
+      ready(getContentWindow(panel)).then(({ window, document }) => {
         let div = document.querySelector('div');
 
-        assert.equal(div.clientHeight, 100, 'Panel contentStyle worked');
-        assert.equal(div.offsetHeight, 120, 'Panel contentStyleFile worked');
+      assert.equal(div.clientHeight, 100,
+        "Panel contentStyle worked");
+
+      assert.equal(div.offsetHeight, 120,
+        "Panel contentStyleFile worked");
+
+      assert.equal(window.getComputedStyle(div).borderTopStyle, "dashed",
+        "Panel contentStyleFile with relative path worked");
 
         loader.unload();
         done();
@@ -1007,6 +1035,53 @@ exports['test panel CSS'] = function(assert, done) {
 
   panel.show();
 };
+
+exports['test panel contentScriptFile'] = function(assert, done) {
+  const { merge } = require("sdk/util/object");
+
+  let loader = Loader(module, null, null, {
+    modules: {
+      "sdk/self": merge({}, self, {
+        data: merge({}, self.data, {url: fixtures.url})
+      })
+    }
+  });
+
+  const { Panel } = loader.require('sdk/panel');
+  const { getActiveView } = loader.require('sdk/view/core');
+
+  const getContentWindow = panel =>
+    getActiveView(panel).querySelector('iframe').contentWindow;
+
+  let whenMessage = defer();
+  let whenShown = defer();
+
+  let panel = Panel({
+    contentURL: './test.html',
+    contentScriptFile: "./test-contentScriptFile.js",
+    onMessage: (message) => {
+      assert.equal(message, "msg from contentScriptFile",
+        "Panel contentScriptFile with relative path worked");
+
+      whenMessage.resolve();
+    },
+    onShow: () => {
+      ready(getContentWindow(panel)).then(({ document }) => {
+        assert.equal(document.title, 'foo',
+          "Panel contentURL with relative path worked");
+
+        whenShown.resolve();
+      });
+    }
+  });
+
+  all([whenMessage.promise, whenShown.promise]).
+    then(loader.unload).
+    then(done, assert.fail);
+
+  panel.show();
+};
+
 
 exports['test panel CSS list'] = function(assert, done) {
   const loader = Loader(module);
@@ -1094,7 +1169,7 @@ exports['test panel contextmenu validation'] = function(assert) {
 
   assert.equal(panel.contextMenu, false,
     'contextMenu option accepts boolean values');
-  
+
   assert.throws(() =>
     Panel({contextMenu: 1}),
     /The option "contextMenu" must be one of the following types: boolean, undefined, null/,
@@ -1174,7 +1249,7 @@ exports['test panel contextmenu disabled'] = function*(assert) {
 
   assert.equal(contextmenu.state, 'closed',
     'contextmenu must be closed');
-  
+
   sendMouseEvent('contextmenu', 20, 20, 2, 1, 0);
 
   contextmenu.addEventListener('popupshown', listener);
@@ -1189,43 +1264,98 @@ exports['test panel contextmenu disabled'] = function*(assert) {
   loader.unload();
 }
 
-if (isWindowPBSupported) {
-  exports.testGetWindow = function(assert, done) {
-    let activeWindow = getMostRecentBrowserWindow();
-    open(null, { features: {
-      toolbar: true,
-      chrome: true,
-      private: true
-    } }).then(window => {
-      assert.ok(isPrivate(window), 'window is private');
-      assert.equal(getWindow(window.gBrowser), null, 'private window elements returns null');
-      assert.equal(getWindow(activeWindow.gBrowser), activeWindow, 'non-private window elements returns window');
-      return window;
-    }).then(close).then(done).then(null, assert.fail);
-  }
-}
-else if (isGlobalPBSupported) {
-  exports.testGetWindow = function(assert, done) {
-    let activeWindow = getMostRecentBrowserWindow();
+exports["test panel addon global object"] = function*(assert) {
+  const { merge } = require("sdk/util/object");
 
-    assert.equal(getWindow(activeWindow.gBrowser), activeWindow, 'non-private window elements returns window');
-    pb.once('start', function() {
-      assert.ok(isPrivate(activeWindow), 'window is private');
-      assert.equal(getWindow(activeWindow.gBrowser), activeWindow, 'private window elements returns window');
-      open(null, { features: {
-        toolbar: true,
-        chrome: true
-      } }).then(window => {
-        assert.ok(isPrivate(window), 'window is private');
-        assert.equal(getWindow(window.gBrowser), window, 'private window elements returns window');
-        assert.equal(getWindow(activeWindow.gBrowser), activeWindow, 'active window elements returns window');
-
-        pb.once('stop', done);
-        pb.deactivate();
+  let loader = Loader(module, null, null, {
+    modules: {
+      "sdk/self": merge({}, self, {
+        data: merge({}, self.data, {url: fixtures.url})
       })
-    });
-    pb.activate();
-  }
+    }
+  });
+
+  const { Panel } = loader.require('sdk/panel');
+
+  let panel = Panel({
+    contentURL: "./test-trusted-document.html"
+  });
+
+  panel.show();
+
+  yield wait(panel, "show");
+
+  panel.port.emit('addon-to-document', 'ok');
+
+  yield wait(panel.port, "document-to-addon");
+
+  assert.pass("Received an event from the document");
+
+  loader.unload();
 }
 
-require("test").run(exports);
+exports["test panel load doesn't show"] = function*(assert) {
+  let loader = Loader(module);
+
+  let panel = loader.require("sdk/panel").Panel({
+    contentScript: "addEventListener('load', function(event) { self.postMessage('load'); });",
+    contentScriptWhen: "start",
+    contentURL: "data:text/html;charset=utf-8,",
+  });
+
+  let shown = defer();
+  let messaged = defer();
+
+  panel.once("show", function() {
+    shown.resolve();
+  });
+
+  panel.once("message", function() {
+    messaged.resolve();
+  });
+
+  panel.show();
+  yield all([shown.promise, messaged.promise]);
+  assert.ok(true, "Saw panel display");
+
+  panel.on("show", function() {
+    assert.fail("Should not have seen another show event")
+  });
+
+  messaged = defer();
+  panel.once("message", function() {
+    assert.ok(true, "Saw panel reload");
+    messaged.resolve();
+  });
+
+  panel.contentURL = "data:text/html;charset=utf-8,<html/>";
+
+  yield messaged.promise;
+  loader.unload();
+}
+
+exports["test Panel without contentURL and contentScriptWhen=start should show"] = function*(assert) {
+  let loader = Loader(module);
+
+  let panel = loader.require("sdk/panel").Panel({
+    contentScriptWhen: "start",
+    // No contentURL, the bug only shows up when contentURL is not explicitly set.
+  });
+
+  yield new Promise(resolve => {
+    panel.once("show", resolve);
+    panel.show();
+  });
+
+  assert.pass("Received show event");
+
+  loader.unload();
+}
+
+if (packaging.isNative) {
+  module.exports = {
+    "test skip on jpm": (assert) => assert.pass("skipping this file with jpm")
+  };
+}
+
+require("sdk/test").run(exports);

@@ -19,16 +19,16 @@ class nsIDOMKeyEvent;
 
 /** editor Implementation of the DragListener interface
  */
-class nsMenuBarListener : public nsIDOMEventListener
+class nsMenuBarListener final : public nsIDOMEventListener
 {
 public:
   /** default constructor
    */
-  nsMenuBarListener(nsMenuBarFrame* aMenuBar);
+  explicit nsMenuBarListener(nsMenuBarFrame* aMenuBar);
 
   static void InitializeStatics();
    
-  NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent) MOZ_OVERRIDE;
+  NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent) override;
   
   nsresult KeyUp(nsIDOMEvent* aMouseEvent);
   nsresult KeyDown(nsIDOMEvent* aMouseEvent);

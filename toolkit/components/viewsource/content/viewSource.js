@@ -323,7 +323,7 @@ function ViewSourceReload()
 // Strips the |view-source:| for internalSave()
 function ViewSourceSavePage()
 {
-  internalSave(window.content.location.href.substring(12), 
+  internalSave(window.content.location.href.replace(/^view-source:/i, ""),
                null, null, null, null, null, "SaveLinkTitle",
                null, null, window.content.document, null, gPageLoader);
 }
@@ -335,9 +335,11 @@ var PrintPreviewListener = {
       browser = document.createElement("browser");
       browser.setAttribute("id", "ppBrowser");
       browser.setAttribute("flex", "1");
+      browser.setAttribute("type", "content");
       document.getElementById("appcontent").
         insertBefore(browser, document.getElementById("FindToolbar"));
     }
+
     return browser;
   },
   getSourceBrowser: function () {

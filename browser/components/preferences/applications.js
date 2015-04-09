@@ -13,6 +13,7 @@ var Ci = Components.interfaces;
 var Cr = Components.results;
 
 Components.utils.import('resource://gre/modules/Services.jsm');
+Components.utils.import('resource://gre/modules/AppConstants.jsm');
 
 const TYPE_MAYBE_FEED = "application/vnd.mozilla.maybe.feed";
 const TYPE_MAYBE_VIDEO_FEED = "application/vnd.mozilla.maybe.video.feed";
@@ -73,17 +74,9 @@ const PREF_AUDIO_FEED_SELECTED_READER = "browser.audioFeeds.handler.default";
 // identifying the "use plugin" action, so we use this constant instead.
 const kActionUsePlugin = 5;
 
-/*
-#ifdef MOZ_WIDGET_GTK
-*/
-const ICON_URL_APP      = "moz-icon://dummy.exe?size=16";
-/*
-#else
-*/
-const ICON_URL_APP      = "chrome://browser/skin/preferences/application.png";
-/*
-#endif
-*/
+const ICON_URL_APP = AppConstants.platform == "linux" ?
+                     "moz-icon://dummy.exe?size=16" :
+                     "chrome://browser/skin/preferences/application.png";
 
 // For CSS. Can be one of "ask", "save", "plugin" or "feed". If absent, the icon URL
 // was set by us to a custom handler icon and CSS should not try to override it.
@@ -1097,29 +1090,20 @@ var gApplicationsPane = {
   _loadPluginHandlers: function() {
     "use strict";
 
-    let pluginHost = Cc["@mozilla.org/plugin/host;1"].getService(Ci.nsIPluginHost);
-    let pluginTags = pluginHost.getPluginTags();
+    let mimeTypes = navigator.mimeTypes;
 
-    for (let i = 0; i < pluginTags.length; ++i) {
-      let pluginTag = pluginTags[i];
-
-      let mimeTypes = pluginTag.getMimeTypes();
-      for (let j = 0; j < mimeTypes.length; ++j) {
-        let type = mimeTypes[j];
-
-        let handlerInfoWrapper;
-        if (type in this._handledTypes)
-          handlerInfoWrapper = this._handledTypes[type];
-        else {
-          let wrappedHandlerInfo =
-            this._mimeSvc.getFromTypeAndExtension(type, null);
-          handlerInfoWrapper = new HandlerInfoWrapper(type, wrappedHandlerInfo);
-          handlerInfoWrapper.handledOnlyByPlugin = true;
-          this._handledTypes[type] = handlerInfoWrapper;
-        }
-
-        handlerInfoWrapper.pluginName = pluginTag.name;
+    for (let mimeType of mimeTypes) {
+      let handlerInfoWrapper;
+      if (mimeType.type in this._handledTypes) {
+        handlerInfoWrapper = this._handledTypes[mimeType.type];
+      } else {
+        let wrappedHandlerInfo =
+              this._mimeSvc.getFromTypeAndExtension(mimeType.type, null);
+        handlerInfoWrapper = new HandlerInfoWrapper(mimeType.type, wrappedHandlerInfo);
+        handlerInfoWrapper.handledOnlyByPlugin = true;
+        this._handledTypes[mimeType.type] = handlerInfoWrapper;
       }
+      handlerInfoWrapper.pluginName = mimeType.enabledPlugin.name;
     }
   },
 
@@ -1850,10 +1834,9 @@ var gApplicationsPane = {
         return this._getIconURLForSystemDefault(aHandlerInfo);
 
       case Ci.nsIHandlerInfo.useHelperApp:
-        let (preferredApp = aHandlerInfo.preferredApplicationHandler) {
-          if (this.isValidHandlerApp(preferredApp))
-            return this._getIconURLForHandlerApp(preferredApp);
-        }
+        let preferredApp = aHandlerInfo.preferredApplicationHandler;
+        if (this.isValidHandlerApp(preferredApp))
+          return this._getIconURLForHandlerApp(preferredApp);
         break;
 
       // This should never happen, but if preferredAction is set to some weird

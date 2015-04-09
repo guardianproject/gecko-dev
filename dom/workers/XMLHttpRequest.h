@@ -16,14 +16,20 @@
 #include "js/StructuredClone.h"
 #include "nsXMLHttpRequest.h"
 
+namespace mozilla {
+namespace dom {
+class File;
+}
+}
+
 BEGIN_WORKERS_NAMESPACE
 
 class Proxy;
 class XMLHttpRequestUpload;
 class WorkerPrivate;
 
-class XMLHttpRequest MOZ_FINAL: public nsXHREventTarget,
-                                public WorkerFeature
+class XMLHttpRequest final: public nsXHREventTarget,
+                            public WorkerFeature
 {
 public:
   struct StateData
@@ -39,7 +45,7 @@ public:
     nsresult mResponseResult;
 
     StateData()
-    : mStatus(0), mReadyState(0), mResponse(JSVAL_VOID),
+    : mStatus(0), mReadyState(0), mResponse(JS::UndefinedValue()),
       mResponseTextResult(NS_OK), mStatusResult(NS_OK),
       mResponseResult(NS_OK)
     { }
@@ -64,7 +70,7 @@ private:
 
 public:
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(XMLHttpRequest,
@@ -100,7 +106,7 @@ public:
   Unpin();
 
   bool
-  Notify(JSContext* aCx, Status aStatus) MOZ_OVERRIDE;
+  Notify(JSContext* aCx, Status aStatus) override;
 
   IMPL_EVENT_HANDLER(readystatechange)
 
@@ -164,13 +170,16 @@ public:
   Send(JS::Handle<JSObject*> aBody, ErrorResult& aRv);
 
   void
+  Send(File& aBody, ErrorResult& aRv);
+
+  void
+  Send(nsFormData& aBody, ErrorResult& aRv);
+
+  void
   Send(const ArrayBuffer& aBody, ErrorResult& aRv);
 
   void
   Send(const ArrayBufferView& aBody, ErrorResult& aRv);
-
-  void
-  SendAsBinary(const nsAString& aBody, ErrorResult& aRv);
 
   void
   Abort(ErrorResult& aRv);
@@ -220,18 +229,6 @@ public:
   void
   GetResponseText(nsAString& aResponseText, ErrorResult& aRv);
 
-  JSObject*
-  GetResponseXML() const
-  {
-    return nullptr;
-  }
-
-  JSObject*
-  GetChannel() const
-  {
-    return nullptr;
-  }
-
   void
   GetInterface(JSContext* cx, JS::Handle<JSObject*> aIID,
                JS::MutableHandle<JS::Value> aRetval, ErrorResult& aRv)
@@ -272,7 +269,7 @@ public:
   }
 
 private:
-  XMLHttpRequest(WorkerPrivate* aWorkerPrivate);
+  explicit XMLHttpRequest(WorkerPrivate* aWorkerPrivate);
   ~XMLHttpRequest();
 
   enum ReleaseType { Default, XHRIsGoingAway, WorkerIsGoingAway };

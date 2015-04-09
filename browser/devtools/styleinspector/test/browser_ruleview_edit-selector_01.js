@@ -16,8 +16,8 @@ let PAGE_CONTENT = [
   '<span id="testid2">This is a span</span>'
 ].join("\n");
 
-let test = asyncTest(function*() {
-  yield addTab("data:text/html,test rule view selector changes");
+add_task(function*() {
+  yield addTab("data:text/html;charset=utf-8,test rule view selector changes");
 
   info("Creating the test document");
   content.document.body.innerHTML = PAGE_CONTENT;
@@ -49,7 +49,7 @@ function* testEditSelector(view, name) {
   editor.input.value = name;
 
   info("Waiting for rule view to refresh");
-  let onRuleViewRefresh = once(view.element, "CssRuleViewRefreshed");
+  let onRuleViewRefresh = once(view, "ruleview-refreshed");
 
   info("Entering the commit key");
   EventUtils.synthesizeKey("VK_RETURN", {});

@@ -171,7 +171,8 @@ nsZipHandle::nsZipHandle()
 NS_IMPL_ADDREF(nsZipHandle)
 NS_IMPL_RELEASE(nsZipHandle)
 
-nsresult nsZipHandle::Init(nsIFile *file, nsZipHandle **ret, PRFileDesc **aFd)
+nsresult nsZipHandle::Init(nsIFile *file, bool aMustCacheFd, nsZipHandle **ret,
+                           PRFileDesc **aFd)
 {
   mozilla::AutoFDClose fd;
   int32_t flags = PR_RDONLY;
@@ -208,6 +209,10 @@ nsresult nsZipHandle::Init(nsIFile *file, nsZipHandle **ret, PRFileDesc **aFd)
   if (aFd) {
     *aFd = fd.forget();
   }
+#else
+  if (aMustCacheFd) {
+    handle->mNSPRFileDesc = fd.forget();
+  }
 #endif
   handle->mMap = map;
   handle->mFile.Init(file);
@@ -239,9 +244,30 @@ nsresult nsZipHandle::Init(nsZipArchive *zip, const char *entry,
   return NS_OK;
 }
 
+nsresult nsZipHandle::Init(const uint8_t* aData, uint32_t aLen,
+                           nsZipHandle **aRet)
+{
+  nsRefPtr<nsZipHandle> handle = new nsZipHandle();
+
+  handle->mFileData = aData;
+  handle->mLen = aLen;
+  handle.forget(aRet);
+  return NS_OK;
+}
+
 int64_t nsZipHandle::SizeOfMapping()
 {
     return mLen;
+}
+
+nsresult nsZipHandle::GetNSPRFileDesc(PRFileDesc** aNSPRFileDesc)
+{
+  if (!aNSPRFileDesc) {
+    return NS_ERROR_ILLEGAL_VALUE;
+  }
+
+  *aNSPRFileDesc = mNSPRFileDesc;
+  return NS_OK;
 }
 
 nsZipHandle::~nsZipHandle()
@@ -279,14 +305,15 @@ nsresult nsZipArchive::OpenArchive(nsZipHandle *aZipHandle, PRFileDesc *aFd)
   return rv;
 }
 
-nsresult nsZipArchive::OpenArchive(nsIFile *aFile)
+nsresult nsZipArchive::OpenArchive(nsIFile *aFile, bool aMustCacheFd)
 {
   nsRefPtr<nsZipHandle> handle;
 #if defined(XP_WIN)
   mozilla::AutoFDClose fd;
-  nsresult rv = nsZipHandle::Init(aFile, getter_AddRefs(handle), &fd.rwget());
+  nsresult rv = nsZipHandle::Init(aFile, aMustCacheFd, getter_AddRefs(handle),
+                                  &fd.rwget());
 #else
-  nsresult rv = nsZipHandle::Init(aFile, getter_AddRefs(handle));
+  nsresult rv = nsZipHandle::Init(aFile, aMustCacheFd, getter_AddRefs(handle));
 #endif
   if (NS_FAILED(rv))
     return rv;
@@ -1141,7 +1168,7 @@ nsZipItemPtr_base::nsZipItemPtr_base(nsZipArchive *aZip, const char * aEntryName
   uint32_t size = 0;
   if (item->Compression() == DEFLATED) {
     size = item->RealSize();
-    mAutoBuf = new ((fallible_t())) uint8_t[size];
+    mAutoBuf = new (fallible) uint8_t[size];
     if (!mAutoBuf) {
       return;
     }

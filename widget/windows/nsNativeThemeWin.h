@@ -14,12 +14,12 @@
 #include "gfxTypes.h"
 #include <windows.h>
 #include "mozilla/TimeStamp.h"
-
-struct nsIntRect;
-struct nsIntSize;
+#include "nsSize.h"
 
 class nsNativeThemeWin : private nsNativeTheme,
                          public nsITheme {
+  virtual ~nsNativeThemeWin();
+
 public:
   typedef mozilla::TimeStamp TimeStamp;
   typedef mozilla::TimeDuration TimeDuration;
@@ -50,7 +50,7 @@ public:
 
   NS_IMETHOD GetMinimumWidgetSize(nsPresContext* aPresContext, nsIFrame* aFrame,
                                   uint8_t aWidgetType,
-                                  nsIntSize* aResult,
+                                  mozilla::LayoutDeviceIntSize* aResult,
                                   bool* aIsOverridable);
 
   virtual Transparency GetWidgetTransparency(nsIFrame* aFrame, uint8_t aWidgetType);
@@ -66,16 +66,21 @@ public:
 
   bool WidgetIsContainer(uint8_t aWidgetType);
 
-  bool ThemeDrawsFocusForWidget(uint8_t aWidgetType) MOZ_OVERRIDE;
+  bool ThemeDrawsFocusForWidget(uint8_t aWidgetType) override;
 
   bool ThemeNeedsComboboxDropmarker();
 
-  virtual bool WidgetAppearanceDependsOnWindowFocus(uint8_t aWidgetType) MOZ_OVERRIDE;
+  virtual bool WidgetAppearanceDependsOnWindowFocus(uint8_t aWidgetType) override;
 
-  virtual bool ShouldHideScrollbars() MOZ_OVERRIDE;
+  enum {
+    eThemeGeometryTypeWindowButtons = eThemeGeometryTypeUnknown + 1
+  };
+  virtual ThemeGeometryType ThemeGeometryTypeForWidget(nsIFrame* aFrame,
+                                                       uint8_t aWidgetType) override;
+
+  virtual bool ShouldHideScrollbars() override;
 
   nsNativeThemeWin();
-  virtual ~nsNativeThemeWin();
 
 protected:
   HANDLE GetTheme(uint8_t aWidgetType);
@@ -98,7 +103,7 @@ protected:
                                nsIntMargin* aResult);
   nsresult ClassicGetMinimumWidgetSize(nsPresContext* aPresContext, nsIFrame* aFrame,
                                        uint8_t aWidgetType,
-                                       nsIntSize* aResult,
+                                       mozilla::LayoutDeviceIntSize* aResult,
                                        bool* aIsOverridable);
   bool ClassicThemeSupportsWidget(nsPresContext* aPresContext, 
                                   nsIFrame* aFrame,

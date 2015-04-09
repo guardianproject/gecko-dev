@@ -10,6 +10,7 @@
 #include "CacheFileOutputStream.h"
 #include "nsThreadUtils.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/Move.h"
 #include <algorithm>
 #include "nsComponentManagerUtils.h"
 #include "nsProxyRelease.h"
@@ -41,6 +42,7 @@ public:
     MOZ_COUNT_CTOR(NotifyCacheFileListenerEvent);
   }
 
+protected:
   ~NotifyCacheFileListenerEvent()
   {
     LOG(("NotifyCacheFileListenerEvent::~NotifyCacheFileListenerEvent() "
@@ -48,6 +50,7 @@ public:
     MOZ_COUNT_DTOR(NotifyCacheFileListenerEvent);
   }
 
+public:
   NS_IMETHOD Run()
   {
     LOG(("NotifyCacheFileListenerEvent::Run() [this=%p]", this));
@@ -78,6 +81,7 @@ public:
     MOZ_COUNT_CTOR(NotifyChunkListenerEvent);
   }
 
+protected:
   ~NotifyChunkListenerEvent()
   {
     LOG(("NotifyChunkListenerEvent::~NotifyChunkListenerEvent() [this=%p]",
@@ -85,6 +89,7 @@ public:
     MOZ_COUNT_DTOR(NotifyChunkListenerEvent);
   }
 
+public:
   NS_IMETHOD Run()
   {
     LOG(("NotifyChunkListenerEvent::Run() [this=%p]", this));
@@ -106,46 +111,46 @@ class DoomFileHelper : public CacheFileIOListener
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
 
-  DoomFileHelper(CacheFileListener *aListener)
+  explicit DoomFileHelper(CacheFileListener *aListener)
     : mListener(aListener)
   {
     MOZ_COUNT_CTOR(DoomFileHelper);
   }
 
 
-  NS_IMETHOD OnFileOpened(CacheFileHandle *aHandle, nsresult aResult)
+  NS_IMETHOD OnFileOpened(CacheFileHandle *aHandle, nsresult aResult) override
   {
     MOZ_CRASH("DoomFileHelper::OnFileOpened should not be called!");
     return NS_ERROR_UNEXPECTED;
   }
 
   NS_IMETHOD OnDataWritten(CacheFileHandle *aHandle, const char *aBuf,
-                           nsresult aResult)
+                           nsresult aResult) override
   {
     MOZ_CRASH("DoomFileHelper::OnDataWritten should not be called!");
     return NS_ERROR_UNEXPECTED;
   }
 
-  NS_IMETHOD OnDataRead(CacheFileHandle *aHandle, char *aBuf, nsresult aResult)
+  NS_IMETHOD OnDataRead(CacheFileHandle *aHandle, char *aBuf, nsresult aResult) override
   {
     MOZ_CRASH("DoomFileHelper::OnDataRead should not be called!");
     return NS_ERROR_UNEXPECTED;
   }
 
-  NS_IMETHOD OnFileDoomed(CacheFileHandle *aHandle, nsresult aResult)
+  NS_IMETHOD OnFileDoomed(CacheFileHandle *aHandle, nsresult aResult) override
   {
     if (mListener)
       mListener->OnFileDoomed(aResult);
     return NS_OK;
   }
 
-  NS_IMETHOD OnEOFSet(CacheFileHandle *aHandle, nsresult aResult)
+  NS_IMETHOD OnEOFSet(CacheFileHandle *aHandle, nsresult aResult) override
   {
     MOZ_CRASH("DoomFileHelper::OnEOFSet should not be called!");
     return NS_ERROR_UNEXPECTED;
   }
 
-  NS_IMETHOD OnFileRenamed(CacheFileHandle *aHandle, nsresult aResult)
+  NS_IMETHOD OnFileRenamed(CacheFileHandle *aHandle, nsresult aResult) override
   {
     MOZ_CRASH("DoomFileHelper::OnFileRenamed should not be called!");
     return NS_ERROR_UNEXPECTED;
@@ -261,7 +266,7 @@ CacheFile::Init(const nsACString &aKey,
 
     mOpeningFile = true;
     mListener = aCallback;
-    rv = CacheFileIOManager::OpenFile(mKey, flags, true, this);
+    rv = CacheFileIOManager::OpenFile(mKey, flags, this);
     if (NS_FAILED(rv)) {
       mListener = nullptr;
       mOpeningFile = false;
@@ -326,6 +331,13 @@ CacheFile::OnChunkRead(nsresult aResult, CacheFileChunk *aChunk)
 nsresult
 CacheFile::OnChunkWritten(nsresult aResult, CacheFileChunk *aChunk)
 {
+  // In case the chunk was reused, made dirty and released between calls to
+  // CacheFileChunk::Write() and CacheFile::OnChunkWritten(), we must write
+  // the chunk to the disk again. When the chunk is unused and is dirty simply
+  // addref and release (outside the lock) the chunk which ensures that
+  // CacheFile::DeactivateChunk() will be called again.
+  nsRefPtr<CacheFileChunk> deactivateChunkAgain;
+
   CacheFileAutoLock lock(this);
 
   nsresult rv;
@@ -360,6 +372,14 @@ CacheFile::OnChunkWritten(nsresult aResult, CacheFileChunk *aChunk)
     LOG(("CacheFile::OnChunkWritten() - Chunk is still used [this=%p, chunk=%p,"
          " refcnt=%d]", this, aChunk, aChunk->mRefCnt.get()));
 
+    return NS_OK;
+  }
+
+  if (aChunk->IsDirty()) {
+    LOG(("CacheFile::OnChunkWritten() - Unused chunk is dirty. We must go "
+         "through deactivation again. [this=%p, chunk=%p]", this, aChunk));
+
+    deactivateChunkAgain = aChunk;
     return NS_OK;
   }
 
@@ -405,7 +425,7 @@ CacheFile::OnFileOpened(CacheFileHandle *aHandle, nsresult aResult)
   class AutoFailDoomListener
   {
   public:
-    AutoFailDoomListener(CacheFileHandle *aHandle)
+    explicit AutoFailDoomListener(CacheFileHandle *aHandle)
       : mHandle(aHandle)
       , mAlreadyDoomed(false)
     {}
@@ -592,8 +612,9 @@ CacheFile::OnMetadataWritten(nsresult aResult)
   MOZ_ASSERT(!mMemoryOnly);
   MOZ_ASSERT(!mOpeningFile);
 
-  if (NS_FAILED(aResult)) {
+  if (NS_WARN_IF(NS_FAILED(aResult))) {
     // TODO close streams with an error ???
+    SetError(aResult);
   }
 
   if (mOutput || mInputs.Length() || mChunks.Count())
@@ -657,6 +678,19 @@ CacheFile::OpenInputStream(nsIInputStream **_retval)
          this));
 
     return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  if (NS_FAILED(mStatus)) {
+    LOG(("CacheFile::OpenInputStream() - CacheFile is in a failure state "
+         "[this=%p, status=0x%08x]", this, mStatus));
+
+    // Don't allow opening the input stream when this CacheFile is in
+    // a failed state.  This is the only way to protect consumers correctly
+    // from reading a broken entry.  When the file is in the failed state,
+    // it's also doomed, so reopening the entry won't make any difference -
+    // data will still be inaccessible anymore.  Note that for just doomed 
+    // files, we must allow reading the data.
+    return mStatus;
   }
 
   // Once we open input stream we no longer allow preloading of chunks without
@@ -892,27 +926,6 @@ CacheFile::GetExpirationTime(uint32_t *_retval)
 }
 
 nsresult
-CacheFile::SetLastModified(uint32_t aLastModified)
-{
-  CacheFileAutoLock lock(this);
-  MOZ_ASSERT(mMetadata);
-  NS_ENSURE_TRUE(mMetadata, NS_ERROR_UNEXPECTED);
-
-  PostWriteTimer();
-  return mMetadata->SetLastModified(aLastModified);
-}
-
-nsresult
-CacheFile::GetLastModified(uint32_t *_retval)
-{
-  CacheFileAutoLock lock(this);
-  MOZ_ASSERT(mMetadata);
-  NS_ENSURE_TRUE(mMetadata, NS_ERROR_UNEXPECTED);
-
-  return mMetadata->GetLastModified(_retval);
-}
-
-nsresult
 CacheFile::SetFrecency(uint32_t aFrecency)
 {
   CacheFileAutoLock lock(this);
@@ -938,6 +951,16 @@ CacheFile::GetFrecency(uint32_t *_retval)
 }
 
 nsresult
+CacheFile::GetLastModified(uint32_t *_retval)
+{
+  CacheFileAutoLock lock(this);
+  MOZ_ASSERT(mMetadata);
+  NS_ENSURE_TRUE(mMetadata, NS_ERROR_UNEXPECTED);
+
+  return mMetadata->GetLastModified(_retval);
+}
+
+nsresult
 CacheFile::GetLastFetched(uint32_t *_retval)
 {
   CacheFileAutoLock lock(this);
@@ -957,6 +980,18 @@ CacheFile::GetFetchCount(uint32_t *_retval)
   return mMetadata->GetFetchCount(_retval);
 }
 
+nsresult
+CacheFile::OnFetched()
+{
+  CacheFileAutoLock lock(this);
+  MOZ_ASSERT(mMetadata);
+  NS_ENSURE_TRUE(mMetadata, NS_ERROR_UNEXPECTED);
+
+  PostWriteTimer();
+
+  return mMetadata->OnFetched();
+}
+
 void
 CacheFile::Lock()
 {
@@ -966,13 +1001,13 @@ CacheFile::Lock()
 void
 CacheFile::Unlock()
 {
-  nsTArray<nsISupports*> objs;
+  // move the elements out of mObjsToRelease
+  // so that they can be released after we unlock
+  nsTArray<nsRefPtr<nsISupports>> objs;
   objs.SwapElements(mObjsToRelease);
 
   mLock.Unlock();
 
-  for (uint32_t i = 0; i < objs.Length(); i++)
-    objs[i]->Release();
 }
 
 void
@@ -982,11 +1017,11 @@ CacheFile::AssertOwnsLock() const
 }
 
 void
-CacheFile::ReleaseOutsideLock(nsISupports *aObject)
+CacheFile::ReleaseOutsideLock(nsRefPtr<nsISupports> aObject)
 {
   AssertOwnsLock();
 
-  mObjsToRelease.AppendElement(aObject);
+  mObjsToRelease.AppendElement(Move(aObject));
 }
 
 nsresult
@@ -1405,8 +1440,7 @@ CacheFile::RemoveChunkInternal(CacheFileChunk *aChunk, bool aCacheChunk)
   AssertOwnsLock();
 
   aChunk->mActiveChunk = false;
-  ReleaseOutsideLock(static_cast<CacheFileChunkListener *>(
-                       aChunk->mFile.forget().take()));
+  ReleaseOutsideLock(nsRefPtr<CacheFileChunkListener>(aChunk->mFile.forget()).forget());
 
   if (aCacheChunk) {
     mCachedChunks.Put(aChunk->Index(), aChunk);
@@ -1509,7 +1543,7 @@ CacheFile::RemoveInput(CacheFileInputStream *aInput, nsresult aStatus)
   found = mInputs.RemoveElement(aInput);
   MOZ_ASSERT(found);
 
-  ReleaseOutsideLock(static_cast<nsIInputStream*>(aInput));
+  ReleaseOutsideLock(already_AddRefed<nsIInputStream>(static_cast<nsIInputStream*>(aInput)));
 
   if (!mMemoryOnly)
     WriteMetadataIfNeededLocked();
@@ -1545,6 +1579,13 @@ CacheFile::RemoveOutput(CacheFileOutputStream *aOutput, nsresult aStatus)
 
   if (!mMemoryOnly)
     WriteMetadataIfNeededLocked();
+
+  // Make sure the CacheFile status is set to a failure when the output stream
+  // is closed with a fatal error.  This way we propagate correctly and w/o any
+  // windows the failure state of this entry to end consumers.
+  if (NS_SUCCEEDED(mStatus) && NS_FAILED(aStatus) && aStatus != NS_BASE_STREAM_CLOSED) {
+    mStatus = aStatus;
+  }
 
   // Notify close listener as the last action
   aOutput->NotifyCloseListener();
@@ -1590,7 +1631,12 @@ CacheFile::QueueChunkListener(uint32_t aIndex,
   MOZ_ASSERT(aCallback);
 
   ChunkListenerItem *item = new ChunkListenerItem();
-  item->mTarget = NS_GetCurrentThread();
+  item->mTarget = CacheFileIOManager::IOTarget();
+  if (!item->mTarget) {
+    LOG(("CacheFile::QueueChunkListener() - Cannot get Cache I/O thread! Using "
+         "main thread for callback."));
+    item->mTarget = do_GetMainThread();
+  }
   item->mCallback = aCallback;
 
   ChunkListeners *listeners;
@@ -1790,8 +1836,9 @@ CacheFile::WriteAllCachedChunks(const uint32_t& aIdx,
 
   MOZ_ASSERT(aChunk->IsReady());
 
-  NS_ADDREF(aChunk);
-  file->ReleaseOutsideLock(aChunk);
+  // this would be cleaner if we had an nsRefPtr constructor
+  // that took a nsRefPtr<Derived>
+  file->ReleaseOutsideLock(nsRefPtr<nsISupports>(aChunk));
 
   return PL_DHASH_REMOVE;
 }
@@ -1880,13 +1927,18 @@ CacheFile::PadChunkWithZeroes(uint32_t aChunkIdx)
   LOG(("CacheFile::PadChunkWithZeroes() - Zeroing hole in chunk %d, range %d-%d"
        " [this=%p]", aChunkIdx, chunk->DataSize(), kChunkSize - 1, this));
 
-  chunk->EnsureBufSize(kChunkSize);
+  rv = chunk->EnsureBufSize(kChunkSize);
+  if (NS_FAILED(rv)) {
+    ReleaseOutsideLock(chunk.forget());
+    SetError(rv);
+    return rv;
+  }
   memset(chunk->BufForWriting() + chunk->DataSize(), 0, kChunkSize - chunk->DataSize());
 
   chunk->UpdateDataSize(chunk->DataSize(), kChunkSize - chunk->DataSize(),
                         false);
 
-  ReleaseOutsideLock(chunk.forget().take());
+  ReleaseOutsideLock(chunk.forget());
 
   return NS_OK;
 }

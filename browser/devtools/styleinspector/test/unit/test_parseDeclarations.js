@@ -155,7 +155,7 @@ const TEST_DATA = [
   {input: 'content: "this is a \\"string\\""', expected: [{name: "content", value: '\'this is a "string"\'', priority: ""}]},
   {input: "content: 'this is a \"string\"'", expected: [{name: "content", value: '\'this is a "string"\'', priority: ""}]},
   {input: "content: 'this is a \\'string\\'", expected: [{name: "content", value: '"this is a \'string\'"', priority: ""}]},
-  {input: "content: 'this \\' is a \" really strange string'", expected: [{name: "content", value: '"this \' is a \" really strange string"', priority: ""}]},
+  {input: "content: 'this \\' is a \" really strange string'", expected: [{name: "content", value: '"this \' is a \\\" really strange string"', priority: ""}]},
   {
     input: "content: \"a not s\\\
           o very long title\"",
@@ -163,7 +163,9 @@ const TEST_DATA = [
       {name: "content", value: '"a not s\
           o very long title"', priority: ""}
     ]
-  }
+  },
+  // Test calc with nested parentheses
+  {input: "width: calc((100% - 3em) / 2)", expected: [{name: "width", value: "calc((100% - 3em) / 2)", priority: ""}]},
 ];
 
 function run_test() {

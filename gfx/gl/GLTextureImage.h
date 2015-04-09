@@ -58,20 +58,13 @@ public:
     enum Flags {
         NoFlags          = 0x0,
         UseNearestFilter = 0x1,
-        NeedsYFlip       = 0x2,
+        OriginBottomLeft = 0x2,
         DisallowBigImage = 0x4
     };
 
     typedef gfxContentType ContentType;
     typedef gfxImageFormat ImageFormat;
 
-    static already_AddRefed<TextureImage> Create(
-                       GLContext* gl,
-                       const nsIntSize& aSize,
-                       TextureImage::ContentType aContentType,
-                       GLenum aWrapMode,
-                       TextureImage::Flags aFlags = TextureImage::NoFlags);
-    // Moz2D equivalent...
     static already_AddRefed<TextureImage> Create(
                        GLContext* gl,
                        const gfx::IntSize& aSize,
@@ -218,22 +211,10 @@ protected:
      * TextureImage from GLContext::CreateTextureImage().  That is,
      * clients must not be given partially-constructed TextureImages.
      */
-    TextureImage(const nsIntSize& aSize,
-                 GLenum aWrapMode, ContentType aContentType,
-                 Flags aFlags = NoFlags,
-                 ImageFormat aImageFormat = gfxImageFormat::Unknown)
-        : mSize(aSize.ToIntSize())
-        , mWrapMode(aWrapMode)
-        , mContentType(aContentType)
-        , mImageFormat(aImageFormat)
-        , mFilter(GraphicsFilter::FILTER_GOOD)
-        , mFlags(aFlags)
-    {}
-
-    // Moz2D equivalent...
     TextureImage(const gfx::IntSize& aSize,
                  GLenum aWrapMode, ContentType aContentType,
-                 Flags aFlags = NoFlags);
+                 Flags aFlags = NoFlags,
+                 ImageFormat aImageFormat = gfxImageFormat::Unknown);
 
     // Protected destructor, to discourage deletion outside of Release():
     virtual ~TextureImage() {}
@@ -264,13 +245,6 @@ class BasicTextureImage
 public:
     virtual ~BasicTextureImage();
 
-    BasicTextureImage(GLuint aTexture,
-                      const nsIntSize& aSize,
-                      GLenum aWrapMode,
-                      ContentType aContentType,
-                      GLContext* aContext,
-                      TextureImage::Flags aFlags = TextureImage::NoFlags,
-                      TextureImage::ImageFormat aImageFormat = gfxImageFormat::Unknown);
     BasicTextureImage(GLuint aTexture,
                       const gfx::IntSize& aSize,
                       GLenum aWrapMode,
@@ -319,7 +293,7 @@ protected:
  * Aims to behave just like the real thing.
  */
 
-class TiledTextureImage
+class TiledTextureImage final
     : public TextureImage
 {
 public:
@@ -388,7 +362,8 @@ CreateBasicTextureImage(GLContext* aGL,
   * |aWrapMode| (usually GL_CLAMP_TO_EDGE or GL_REPEAT) and by
   * default, GL_LINEAR filtering.  Specify
   * |aFlags=UseNearestFilter| for GL_NEAREST filtering. Specify
-  * |aFlags=NeedsYFlip| if the image is flipped. Return
+  * |aFlags=OriginBottomLeft| if the image is origin-bottom-left, instead of the
+  * default origin-top-left. Return
   * nullptr if creating the TextureImage fails.
   *
   * The returned TextureImage may only be used with this GLContext.

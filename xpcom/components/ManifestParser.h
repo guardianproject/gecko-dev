@@ -7,17 +7,19 @@
 #define ManifestParser_h
 
 #include "nsComponentManager.h"
+#if !defined(MOZILLA_XPCOMRT_API)
 #include "nsChromeRegistry.h"
+#endif // !defined(MOZILLA_XPCOMRT_API)
 #include "mozilla/FileLocation.h"
 
 class nsIFile;
 
-void ParseManifest(NSLocationType type, mozilla::FileLocation &file,
-                   char* buf, bool aChromeOnly);
+void ParseManifest(NSLocationType aType, mozilla::FileLocation& aFile,
+                   char* aBuf, bool aChromeOnly, bool aXPTOnly = false);
 
 void LogMessage(const char* aMsg, ...);
 
-void LogMessageWithContext(mozilla::FileLocation &aFile,
+void LogMessageWithContext(mozilla::FileLocation& aFile,
                            uint32_t aLineNumber, const char* aMsg, ...);
 
 #endif // ManifestParser_h

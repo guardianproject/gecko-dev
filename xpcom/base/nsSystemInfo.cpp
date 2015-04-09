@@ -29,18 +29,22 @@
 
 #ifdef MOZ_WIDGET_ANDROID
 #include "AndroidBridge.h"
-using namespace mozilla::widget::android;
 #endif
 
 #ifdef MOZ_WIDGET_GONK
 #include <sys/system_properties.h>
 #include "mozilla/Preferences.h"
+#include "nsPrintfCString.h"
 #endif
 
 #ifdef ANDROID
 extern "C" {
 NS_EXPORT int android_sdk_version;
 }
+#endif
+
+#if defined(XP_LINUX) && defined(MOZ_SANDBOX)
+#include "mozilla/SandboxInfo.h"
 #endif
 
 // Slot for NS_InitXPCOM2 to pass information to nsSystemInfo::Init.
@@ -202,7 +206,8 @@ nsSystemInfo::Init()
                          versionDouble >= 6.2);
   NS_ENSURE_SUCCESS(rv, rv);
 #else
-  rv = SetPropertyAsBool(NS_ConvertASCIItoUTF16("hasWindowsTouchInterface"), false);
+  rv = SetPropertyAsBool(NS_ConvertASCIItoUTF16("hasWindowsTouchInterface"),
+                         false);
   NS_ENSURE_SUCCESS(rv, rv);
 #endif
 
@@ -235,7 +240,8 @@ nsSystemInfo::Init()
   if (NS_FAILED(GetProfileHDDInfo())) {
     // We might have been called before profile-do-change. We'll observe that
     // event so that we can fill this in later.
-    nsCOMPtr<nsIObserverService> obsService = do_GetService(NS_OBSERVERSERVICE_CONTRACTID, &rv);
+    nsCOMPtr<nsIObserverService> obsService =
+      do_GetService(NS_OBSERVERSERVICE_CONTRACTID, &rv);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -263,7 +269,8 @@ nsSystemInfo::Init()
 
 #if defined(MOZ_WIDGET_GTK)
   // This must be done here because NSPR can only separate OS's when compiled, not libraries.
-  char* gtkver = PR_smprintf("GTK %u.%u.%u", gtk_major_version, gtk_minor_version, gtk_micro_version);
+  char* gtkver = PR_smprintf("GTK %u.%u.%u", gtk_major_version,
+                             gtk_minor_version, gtk_micro_version);
   if (gtkver) {
     rv = SetPropertyAsACString(NS_LITERAL_STRING("secondaryLibrary"),
                                nsDependentCString(gtkver));
@@ -300,7 +307,7 @@ nsSystemInfo::Init()
           "android/os/Build", "HARDWARE", str)) {
       SetPropertyAsAString(NS_LITERAL_STRING("hardware"), str);
     }
-    bool isTablet = mozilla::widget::android::GeckoAppShell::IsTablet();
+    bool isTablet = mozilla::widget::GeckoAppShell::IsTablet();
     SetPropertyAsBool(NS_LITERAL_STRING("tablet"), isTablet);
     // NSPR "version" is the kernel version. For Android we want the Android version.
     // Rename SDK version to version and put the kernel version into kernel_version.
@@ -317,6 +324,9 @@ nsSystemInfo::Init()
   if (__system_property_get("ro.build.version.sdk", sdk)) {
     android_sdk_version = atoi(sdk);
     SetPropertyAsInt32(NS_LITERAL_STRING("sdk_version"), android_sdk_version);
+
+    SetPropertyAsACString(NS_LITERAL_STRING("secondaryLibrary"),
+                          nsPrintfCString("SDK %u", android_sdk_version));
   }
 
   char characteristics[PROP_VALUE_MAX];
@@ -344,6 +354,29 @@ nsSystemInfo::Init()
     SetPropertyAsAString(NS_LITERAL_STRING("version"), b2g_version);
   }
 #endif
+
+#if defined(XP_LINUX) && defined(MOZ_SANDBOX)
+  SandboxInfo sandInfo = SandboxInfo::Get();
+
+  SetPropertyAsBool(NS_LITERAL_STRING("hasSeccompBPF"),
+                    sandInfo.Test(SandboxInfo::kHasSeccompBPF));
+  SetPropertyAsBool(NS_LITERAL_STRING("hasSeccompTSync"),
+                    sandInfo.Test(SandboxInfo::kHasSeccompTSync));
+  SetPropertyAsBool(NS_LITERAL_STRING("hasUserNamespaces"),
+                    sandInfo.Test(SandboxInfo::kHasUserNamespaces));
+  SetPropertyAsBool(NS_LITERAL_STRING("hasPrivilegedUserNamespaces"),
+                    sandInfo.Test(SandboxInfo::kHasPrivilegedUserNamespaces));
+
+  if (sandInfo.Test(SandboxInfo::kEnabledForContent)) {
+    SetPropertyAsBool(NS_LITERAL_STRING("canSandboxContent"),
+                      sandInfo.CanSandboxContent());
+  }
+
+  if (sandInfo.Test(SandboxInfo::kEnabledForMedia)) {
+    SetPropertyAsBool(NS_LITERAL_STRING("canSandboxMedia"),
+                      sandInfo.CanSandboxMedia());
+  }
+#endif // XP_LINUX && MOZ_SANDBOX
 
   return NS_OK;
 }
@@ -396,8 +429,8 @@ nsSystemInfo::Observe(nsISupports* aSubject, const char* aTopic,
 {
   if (!strcmp(aTopic, "profile-do-change")) {
     nsresult rv;
-    nsCOMPtr<nsIObserverService> obsService = do_GetService(
-                                              NS_OBSERVERSERVICE_CONTRACTID, &rv);
+    nsCOMPtr<nsIObserverService> obsService =
+      do_GetService(NS_OBSERVERSERVICE_CONTRACTID, &rv);
     if (NS_FAILED(rv)) {
       return rv;
     }

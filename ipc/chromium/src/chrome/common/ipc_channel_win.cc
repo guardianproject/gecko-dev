@@ -10,9 +10,7 @@
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/non_thread_safe.h"
-#include "base/stats_counters.h"
 #include "base/win_util.h"
-#include "chrome/common/ipc_logging.h"
 #include "chrome/common/ipc_message_utils.h"
 #include "mozilla/ipc/ProtocolUtils.h"
 
@@ -132,9 +130,6 @@ bool Channel::ChannelImpl::Send(Message* message) {
              << " (" << output_queue_.size() << " in queue)";
 #endif
 
-#ifdef IPC_MESSAGE_LOG_ENABLED
-  Logging::current()->OnSendMessage(message, L"");
-#endif
 
   if (closed_) {
     if (mozilla::ipc::LoggingEnabled()) {
@@ -202,9 +197,9 @@ bool Channel::ChannelImpl::CreatePipe(const std::wstring& channel_id,
 }
 
 bool Channel::ChannelImpl::EnqueueHelloMessage() {
-  scoped_ptr<Message> m(new Message(MSG_ROUTING_NONE,
-                                    HELLO_MESSAGE_TYPE,
-                                    IPC::Message::PRIORITY_NORMAL));
+  mozilla::UniquePtr<Message> m = mozilla::MakeUnique<Message>(MSG_ROUTING_NONE,
+                                                               HELLO_MESSAGE_TYPE,
+                                                               IPC::Message::PRIORITY_NORMAL);
   if (!m->WriteInt(GetCurrentProcessId())) {
     CloseHandle(pipe_);
     pipe_ = INVALID_HANDLE_VALUE;

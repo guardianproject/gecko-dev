@@ -5,20 +5,27 @@
 using struct gfxPoint from "gfxPoint.h";
 using struct nsIntRect from "nsRect.h";
 using nsIntRegion from "nsRegion.h";
-using struct nsIntSize from "nsSize.h";
 using struct mozilla::layers::MagicGrallocBufferHandle from "gfxipc/ShadowLayerUtils.h";
 using struct mozilla::layers::GrallocBufferRef from "gfxipc/ShadowLayerUtils.h";
 using struct mozilla::layers::SurfaceDescriptorX11 from "gfxipc/ShadowLayerUtils.h";
 using struct mozilla::null_t from "ipc/IPCMessageUtils.h";
 using mozilla::WindowsHandle from "ipc/IPCMessageUtils.h";
-using mozilla::gl::SharedTextureHandle from "GLContextTypes.h";
-using mozilla::gl::SharedTextureShareType from "GLContextTypes.h";
 using mozilla::gfx::SurfaceFormat from "mozilla/gfx/Types.h";
 using mozilla::gfx::IntSize from "mozilla/gfx/Point.h";
 using gfxImageFormat from "gfxTypes.h";
 
 namespace mozilla {
 namespace layers {
+
+union OverlayHandle {
+  int32_t;
+  null_t;
+};
+
+struct OverlaySource {
+  OverlayHandle handle;
+  IntSize size;
+};
 
 union MaybeMagicGrallocBufferHandle {
   MagicGrallocBufferHandle;
@@ -42,17 +49,30 @@ struct SurfaceDescriptorD3D10 {
   IntSize size;
 };
 
+struct SurfaceDescriptorDXGIYCbCr {
+  WindowsHandle handleY;
+  WindowsHandle handleCb;
+  WindowsHandle handleCr;
+  IntSize size;
+  IntSize sizeY;
+  IntSize sizeCbCr;
+};
+
 struct SurfaceDescriptorMacIOSurface {
   uint32_t surface;
   double scaleFactor;
-  bool hasAlpha;
+  bool isOpaque;
 };
 
-struct SharedTextureDescriptor {
-  SharedTextureShareType shareType;
-  SharedTextureHandle handle;
+struct SurfaceTextureDescriptor {
+  uintptr_t surfTex;
   IntSize size;
-  bool inverted;
+};
+
+struct EGLImageDescriptor {
+  uintptr_t image; // `EGLImage` is a `void*`.
+  uintptr_t fence;
+  IntSize size;
 };
 
 struct NewSurfaceDescriptorGralloc {
@@ -63,11 +83,11 @@ struct NewSurfaceDescriptorGralloc {
    * Extra size member is necessary. See Bug 850566.
    */
   IntSize size;
+  bool isOpaque;
 };
 
-struct SurfaceStreamDescriptor {
-  uintptr_t surfStream;
-  bool yflip;
+struct SharedSurfaceDescriptor {
+  uintptr_t surf;
 };
 
 /**
@@ -92,11 +112,13 @@ union SurfaceDescriptor {
   SurfaceDescriptorD3D9;
   SurfaceDescriptorDIB;
   SurfaceDescriptorD3D10;
+  SurfaceDescriptorDXGIYCbCr;
   SurfaceDescriptorX11;
-  SharedTextureDescriptor;
-  SurfaceStreamDescriptor;
+  SurfaceTextureDescriptor;
+  EGLImageDescriptor;
   SurfaceDescriptorMacIOSurface;
   NewSurfaceDescriptorGralloc;
+  SharedSurfaceDescriptor;
   null_t;
 };
 

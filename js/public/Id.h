@@ -8,7 +8,7 @@
 #define js_Id_h
 
 // A jsid is an identifier for a property or method of an object which is
-// either a 31-bit signed integer, interned string or object.
+// either a 31-bit unsigned integer, interned string or symbol.
 //
 // Also, there is an additional jsid value, JSID_VOID, which does not occur in
 // JS scripts but may be used to indicate the absence of a valid jsid.  A void
@@ -17,10 +17,8 @@
 // entry points expecting a jsid and do not need to handle JSID_VOID in hooks
 // receiving a jsid except when explicitly noted in the API contract.
 //
-// A jsid is not implicitly convertible to or from a jsval; JS_ValueToId or
+// A jsid is not implicitly convertible to or from a Value; JS_ValueToId or
 // JS_IdToValue must be used instead.
-
-#include "mozilla/NullPtr.h"
 
 #include "jstypes.h"
 
@@ -53,12 +51,22 @@ JSID_IS_STRING(jsid id)
     return (JSID_BITS(id) & JSID_TYPE_MASK) == 0;
 }
 
-static MOZ_ALWAYS_INLINE JSString *
+static MOZ_ALWAYS_INLINE JSString*
 JSID_TO_STRING(jsid id)
 {
     MOZ_ASSERT(JSID_IS_STRING(id));
-    return (JSString *)JSID_BITS(id);
+    return (JSString*)JSID_BITS(id);
 }
+
+/*
+ * Only JSStrings that have been interned via the JSAPI can be turned into
+ * jsids by API clients.
+ *
+ * N.B. if a jsid is backed by a string which has not been interned, that
+ * string must be appropriately rooted to avoid being collected by the GC.
+ */
+JS_PUBLIC_API(jsid)
+INTERNED_STRING_TO_JSID(JSContext* cx, JSString* str);
 
 static MOZ_ALWAYS_INLINE bool
 JSID_IS_ZERO(jsid id)
@@ -104,21 +112,20 @@ JSID_IS_SYMBOL(jsid id)
            JSID_BITS(id) != JSID_TYPE_SYMBOL;
 }
 
-static MOZ_ALWAYS_INLINE JS::Symbol *
+static MOZ_ALWAYS_INLINE JS::Symbol*
 JSID_TO_SYMBOL(jsid id)
 {
     MOZ_ASSERT(JSID_IS_SYMBOL(id));
-    return (JS::Symbol *)(JSID_BITS(id) & ~(size_t)JSID_TYPE_MASK);
+    return (JS::Symbol*)(JSID_BITS(id) & ~(size_t)JSID_TYPE_MASK);
 }
 
 static MOZ_ALWAYS_INLINE jsid
-SYMBOL_TO_JSID(JS::Symbol *sym)
+SYMBOL_TO_JSID(JS::Symbol* sym)
 {
     jsid id;
     MOZ_ASSERT(sym != nullptr);
     MOZ_ASSERT((size_t(sym) & JSID_TYPE_MASK) == 0);
-    JS_ASSERT(!js::gc::IsInsideNursery(JS::AsCell(sym)));
-    JS_ASSERT(!JS::IsPoisonedPtr(sym));
+    MOZ_ASSERT(!js::gc::IsInsideNursery(reinterpret_cast<js::gc::Cell*>(sym)));
     JSID_BITS(id) = (size_t(sym) | JSID_TYPE_SYMBOL);
     return id;
 }
@@ -129,10 +136,14 @@ JSID_IS_GCTHING(jsid id)
     return JSID_IS_STRING(id) || JSID_IS_SYMBOL(id);
 }
 
-static MOZ_ALWAYS_INLINE void *
+static MOZ_ALWAYS_INLINE JS::GCCellPtr
 JSID_TO_GCTHING(jsid id)
 {
-    return (void *)(JSID_BITS(id) & ~(size_t)JSID_TYPE_MASK);
+    void* thing = (void*)(JSID_BITS(id) & ~(size_t)JSID_TYPE_MASK);
+    if (JSID_IS_STRING(id))
+        return JS::GCCellPtr(thing, JSTRACE_STRING);
+    MOZ_ASSERT(JSID_IS_SYMBOL(id));
+    return JS::GCCellPtr(thing, JSTRACE_SYMBOL);
 }
 
 static MOZ_ALWAYS_INLINE bool
@@ -140,13 +151,13 @@ JSID_IS_VOID(const jsid id)
 {
     MOZ_ASSERT_IF(((size_t)JSID_BITS(id) & JSID_TYPE_MASK) == JSID_TYPE_VOID,
                  JSID_BITS(id) == JSID_TYPE_VOID);
-    return ((size_t)JSID_BITS(id) == JSID_TYPE_VOID);
+    return (size_t)JSID_BITS(id) == JSID_TYPE_VOID;
 }
 
 static MOZ_ALWAYS_INLINE bool
 JSID_IS_EMPTY(const jsid id)
 {
-    return ((size_t)JSID_BITS(id) == JSID_TYPE_SYMBOL);
+    return (size_t)JSID_BITS(id) == JSID_TYPE_SYMBOL;
 }
 
 extern JS_PUBLIC_DATA(const jsid) JSID_VOID;
@@ -157,25 +168,12 @@ extern JS_PUBLIC_DATA(const JS::HandleId) JSID_EMPTYHANDLE;
 
 namespace js {
 
-inline bool
-IsPoisonedId(jsid id)
-{
-    if (JSID_IS_STRING(id))
-        return JS::IsPoisonedPtr(JSID_TO_STRING(id));
-    if (JSID_IS_SYMBOL(id))
-        return JS::IsPoisonedPtr(JSID_TO_SYMBOL(id));
-    return false;
-}
-
 template <> struct GCMethods<jsid>
 {
     static jsid initial() { return JSID_VOID; }
-    static bool poisoned(jsid id) { return IsPoisonedId(id); }
     static bool needsPostBarrier(jsid id) { return false; }
-#ifdef JSGC_GENERATIONAL
-    static void postBarrier(jsid *idp) {}
-    static void relocate(jsid *idp) {}
-#endif
+    static void postBarrier(jsid* idp) {}
+    static void relocate(jsid* idp) {}
 };
 
 #undef id

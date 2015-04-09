@@ -47,14 +47,14 @@ new_test_uri()
   return testURI.forget();
 }
 
-class VisitURIObserver MOZ_FINAL : public nsIObserver
+class VisitURIObserver final : public nsIObserver
 {
   ~VisitURIObserver() {}
 
 public:
   NS_DECL_ISUPPORTS
 
-  VisitURIObserver(int aExpectedVisits = 1) :
+  explicit VisitURIObserver(int aExpectedVisits = 1) :
     mVisits(0),
     mExpectedVisits(aExpectedVisits)
   {
@@ -75,7 +75,7 @@ public:
 
   NS_IMETHOD Observe(nsISupports* aSubject,
                      const char* aTopic,
-                     const char16_t* aData)
+                     const char16_t* aData) override
   {
     mVisits++;
 
@@ -305,7 +305,7 @@ namespace test_observer_topic_dispatched_helpers {
   #define URI_VISITED "visited"
   #define URI_NOT_VISITED "not visited"
   #define URI_VISITED_RESOLUTION_TOPIC "visited-status-resolution"
-  class statusObserver MOZ_FINAL : public nsIObserver
+  class statusObserver final : public nsIObserver
   {
     ~statusObserver() {}
 
@@ -329,7 +329,7 @@ namespace test_observer_topic_dispatched_helpers {
 
     NS_IMETHOD Observe(nsISupports* aSubject,
                        const char* aTopic,
-                       const char16_t* aData)
+                       const char16_t* aData) override
     {
       // Make sure we got notified of the right topic.
       do_check_false(strcmp(aTopic, URI_VISITED_RESOLUTION_TOPIC));

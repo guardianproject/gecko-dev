@@ -52,7 +52,7 @@ protected:
 public:
   NS_DECL_ISUPPORTS
 
-  Agent(AudioChannel aChannel)
+  explicit Agent(AudioChannel aChannel)
   : mChannel(aChannel)
   , mWaitCallback(false)
   , mRegistered(false)
@@ -103,14 +103,14 @@ public:
     return mAgent->SetVisibilityState(visible);
   }
 
-  NS_IMETHODIMP CanPlayChanged(int32_t canPlay)
+  NS_IMETHODIMP CanPlayChanged(int32_t canPlay) override
   {
     mCanPlay = static_cast<AudioChannelState>(canPlay);
     mWaitCallback = false;
     return NS_OK;
   }
 
-  NS_IMETHODIMP WindowVolumeChanged()
+  NS_IMETHODIMP WindowVolumeChanged() override
   {
     return NS_OK;
   }

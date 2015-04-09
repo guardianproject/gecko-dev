@@ -32,6 +32,7 @@ const PREF_DISCOVER_ENABLED = "extensions.getAddons.showPane";
 const PREF_XPI_ENABLED = "xpinstall.enabled";
 const PREF_UPDATEURL = "extensions.update.url";
 const PREF_GETADDONS_CACHE_ENABLED = "extensions.getAddons.cache.enabled";
+const PREF_CUSTOM_XPINSTALL_CONFIRMATION_UI = "xpinstall.customConfirmationUI";
 
 const MANAGER_URI = "about:addons";
 const INSTALL_URI = "chrome://mozapps/content/xpinstall/xpinstallConfirm.xul";
@@ -62,9 +63,12 @@ var gTestStart = null;
 var gUseInContentUI = !gTestInWindow && ("switchToTabHavingURI" in window);
 
 var gRestorePrefs = [{name: PREF_LOGGING_ENABLED},
+                     {name: PREF_CUSTOM_XPINSTALL_CONFIRMATION_UI},
                      {name: "extensions.webservice.discoverURL"},
                      {name: "extensions.update.url"},
                      {name: "extensions.update.background.url"},
+                     {name: "extensions.update.enabled"},
+                     {name: "extensions.update.autoUpdateDefault"},
                      {name: "extensions.getAddons.get.url"},
                      {name: "extensions.getAddons.getWithPerformance.url"},
                      {name: "extensions.getAddons.search.browseURL"},
@@ -93,6 +97,8 @@ for (let pref of gRestorePrefs) {
 // Turn logging on for all tests
 Services.prefs.setBoolPref(PREF_LOGGING_ENABLED, true);
 
+Services.prefs.setBoolPref(PREF_CUSTOM_XPINSTALL_CONFIRMATION_UI, false);
+
 // Helper to register test failures and close windows if any are left open
 function checkOpenWindows(aWindowID) {
   let windows = Services.wm.getEnumerator(aWindowID);
@@ -106,6 +112,41 @@ function checkOpenWindows(aWindowID) {
   }
   if (found)
     ok(false, "Found unexpected " + aWindowID + " window still open");
+}
+
+// Tools to disable and re-enable the background update and blocklist timers
+// so that tests can protect themselves from unwanted timer events.
+let gCatMan = Components.classes["@mozilla.org/categorymanager;1"]
+                           .getService(Components.interfaces.nsICategoryManager);
+// Default values from toolkit/mozapps/extensions/extensions.manifest, but disable*UpdateTimer()
+// records the actual value so we can put it back in enable*UpdateTimer()
+let backgroundUpdateConfig = "@mozilla.org/addons/integration;1,getService,addon-background-update-timer,extensions.update.interval,86400";
+let blocklistUpdateConfig = "@mozilla.org/extensions/blocklist;1,getService,blocklist-background-update-timer,extensions.blocklist.interval,86400";
+
+let UTIMER = "update-timer";
+let AMANAGER = "addonManager";
+let BLOCKLIST = "nsBlocklistService";
+
+function disableBackgroundUpdateTimer() {
+  info("Disabling " + UTIMER + " " + AMANAGER);
+  backgroundUpdateConfig = gCatMan.getCategoryEntry(UTIMER, AMANAGER);
+  gCatMan.deleteCategoryEntry(UTIMER, AMANAGER, true);
+}
+
+function enableBackgroundUpdateTimer() {
+  info("Enabling " + UTIMER + " " + AMANAGER);
+  gCatMan.addCategoryEntry(UTIMER, AMANAGER, backgroundUpdateConfig, false, true);
+}
+
+function disableBlocklistUpdateTimer() {
+  info("Disabling " + UTIMER + " " + BLOCKLIST);
+  blocklistUpdateConfig = gCatMan.getCategoryEntry(UTIMER, BLOCKLIST);
+  gCatMan.deleteCategoryEntry(UTIMER, BLOCKLIST, true);
+}
+
+function enableBlocklistUpdateTimer() {
+  info("Enabling " + UTIMER + " " + BLOCKLIST);
+  gCatMan.addCategoryEntry(UTIMER, BLOCKLIST, blocklistUpdateConfig, false, true);
 }
 
 registerCleanupFunction(function() {
@@ -357,7 +398,7 @@ function close_manager(aManagerWindow, aCallback, aLongerTimeout) {
 
     aManagerWindow.addEventListener("unload", function() {
       try {
-        dump("Manager window unload handler");
+        dump("Manager window unload handler\n");
         this.removeEventListener("unload", arguments.callee, false);
         resolve();
       } catch(e) {
@@ -1103,7 +1144,7 @@ MockAddon.prototype = {
   get applyBackgroundUpdates() {
     return this._applyBackgroundUpdates;
   },
-  
+
   set applyBackgroundUpdates(val) {
     if (val != AddonManager.AUTOUPDATE_DEFAULT &&
         val != AddonManager.AUTOUPDATE_DISABLE &&

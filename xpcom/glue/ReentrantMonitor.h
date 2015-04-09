@@ -34,14 +34,14 @@ namespace mozilla {
  * When possible, use ReentrantMonitorAutoEnter to hold this monitor within a
  * scope, instead of calling Enter/Exit directly.
  **/
-class NS_COM_GLUE ReentrantMonitor : BlockingResourceBase
+class ReentrantMonitor : BlockingResourceBase
 {
 public:
   /**
    * ReentrantMonitor
    * @param aName A name which can reference this monitor
    */
-  ReentrantMonitor(const char* aName)
+  explicit ReentrantMonitor(const char* aName)
     : BlockingResourceBase(aName, eReentrantMonitor)
 #ifdef DEBUG
     , mEntryCount(0)
@@ -163,7 +163,7 @@ private:
  *
  * MUCH PREFERRED to bare calls to ReentrantMonitor.Enter and Exit.
  */
-class NS_COM_GLUE MOZ_STACK_CLASS ReentrantMonitorAutoEnter
+class MOZ_STACK_CLASS ReentrantMonitorAutoEnter
 {
 public:
   /**
@@ -173,7 +173,7 @@ public:
    *
    * @param aReentrantMonitor A valid mozilla::ReentrantMonitor*.
    **/
-  ReentrantMonitorAutoEnter(mozilla::ReentrantMonitor& aReentrantMonitor)
+  explicit ReentrantMonitorAutoEnter(mozilla::ReentrantMonitor& aReentrantMonitor)
     : mReentrantMonitor(&aReentrantMonitor)
   {
     NS_ASSERTION(mReentrantMonitor, "null monitor");
@@ -198,7 +198,6 @@ private:
   ReentrantMonitorAutoEnter(const ReentrantMonitorAutoEnter&);
   ReentrantMonitorAutoEnter& operator=(const ReentrantMonitorAutoEnter&);
   static void* operator new(size_t) CPP_THROW_NEW;
-  static void operator delete(void*);
 
   mozilla::ReentrantMonitor* mReentrantMonitor;
 };
@@ -222,7 +221,7 @@ public:
    * @param aReentrantMonitor A valid mozilla::ReentrantMonitor*. It
    *                 must be already locked.
    **/
-  ReentrantMonitorAutoExit(ReentrantMonitor& aReentrantMonitor)
+  explicit ReentrantMonitorAutoExit(ReentrantMonitor& aReentrantMonitor)
     : mReentrantMonitor(&aReentrantMonitor)
   {
     NS_ASSERTION(mReentrantMonitor, "null monitor");
@@ -240,7 +239,6 @@ private:
   ReentrantMonitorAutoExit(const ReentrantMonitorAutoExit&);
   ReentrantMonitorAutoExit& operator=(const ReentrantMonitorAutoExit&);
   static void* operator new(size_t) CPP_THROW_NEW;
-  static void operator delete(void*);
 
   ReentrantMonitor* mReentrantMonitor;
 };

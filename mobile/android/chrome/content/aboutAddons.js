@@ -93,7 +93,6 @@ function init() {
   showList();
   ContextMenus.init();
 
-  document.getElementById("header-button").addEventListener("click", openLink, false);
 }
 
 
@@ -239,13 +238,13 @@ var Addons = {
 
   _getElementForAddon: function(aKey) {
     let list = document.getElementById("addons-list");
-    let element = list.querySelector("div[addonID=" + aKey.quote() + "]");
+    let element = list.querySelector("div[addonID=\"" + CSS.escape(aKey) + "\"]");
     return element;
   },
 
   init: function init() {
     let self = this;
-    AddonManager.getAddonsByTypes(["extension", "theme", "locale"], function(aAddons) {
+    AddonManager.getAllAddons(function(aAddons) {
       // Clear all content before filling the addons
       let list = document.getElementById("addons-list");
       list.innerHTML = "";
@@ -349,15 +348,15 @@ var Addons = {
             let event = document.createEvent("Events");
             event.initEvent("AddonOptionsLoad", true, false);
             window.dispatchEvent(event);
-  
-            // Also send a notification to match the behavior of desktop Firefox
-            let id = aListItem.getAttribute("addonID");
-            Services.obs.notifyObservers(document, AddonManager.OPTIONS_NOTIFICATION_DISPLAYED, id);
           } else {
-            // No options, so hide the header and reset the list item
+            // Reset the options URL to hide the options header if there are no
+            // valid settings to show.
             detailItem.setAttribute("optionsURL", "");
-            aListItem.setAttribute("optionsURL", "");
           }
+
+          // Also send a notification to match the behavior of desktop Firefox
+          let id = aListItem.getAttribute("addonID");
+          Services.obs.notifyObservers(document, AddonManager.OPTIONS_NOTIFICATION_DISPLAYED, id);
         }
       }
       xhr.send(null);
@@ -444,15 +443,13 @@ var Addons = {
   },
 
   uninstall: function uninstall(aAddon) {
-    let list = document.getElementById("addons-list");
-
     if (!aAddon) {
-        return;
+      return;
     }
 
     let listItem = this._getElementForAddon(aAddon.id);
-
     aAddon.uninstall();
+
     if (aAddon.pendingOperations & AddonManager.PENDING_UNINSTALL) {
       this.showRestart();
 
@@ -464,9 +461,6 @@ var Addons = {
 
       detailItem.setAttribute("opType", opType);
       listItem.setAttribute("opType", opType);
-    } else {
-      list.removeChild(listItem);
-      history.back();
     }
   },
 
@@ -525,6 +519,40 @@ var Addons = {
 
     if (needsRestart)
       element.setAttribute("opType", "needs-restart");
+  },
+
+  onInstalled: function(aAddon) {
+    let list = document.getElementById("addons-list");
+    let element = this._getElementForAddon(aAddon.id);
+    if (!element) {
+      element = this._createItemForAddon(aAddon);
+
+      // Themes aren't considered active on install, so set existing as disabled, and new one enabled.
+      if (aAddon.type == "theme") {
+        let item = list.firstElementChild;
+        while (item) {
+          if (item.addon && (item.addon.type == "theme")) {
+            item.setAttribute("isDisabled", true);
+          }
+          item = item.nextSibling;
+        }
+        element.setAttribute("isDisabled", false);
+      }
+
+      list.insertBefore(element, list.firstElementChild);
+    }
+  },
+
+  onUninstalled: function(aAddon) {
+    let list = document.getElementById("addons-list");
+    let element = this._getElementForAddon(aAddon.id);
+    list.removeChild(element);
+
+    // Go back if we're in the detail view of the add-on that was uninstalled.
+    let detailItem = document.querySelector("#addons-details > .addon-item");
+    if (detailItem.addon.id == aAddon.id) {
+      history.back();
+    }
   },
 
   onInstallFailed: function(aInstall) {

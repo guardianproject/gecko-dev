@@ -76,24 +76,21 @@ XULColumnItemAccessible::ActionCount()
   return 1;
 }
 
-NS_IMETHODIMP
-XULColumnItemAccessible::GetActionName(uint8_t aIndex, nsAString& aName)
+void
+XULColumnItemAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 {
-  if (aIndex != eAction_Click)
-    return NS_ERROR_INVALID_ARG;
-
-  aName.AssignLiteral("click");
-  return NS_OK;
+  if (aIndex == eAction_Click)
+    aName.AssignLiteral("click");
 }
 
-NS_IMETHODIMP
+bool
 XULColumnItemAccessible::DoAction(uint8_t aIndex)
 {
   if (aIndex != eAction_Click)
-    return NS_ERROR_INVALID_ARG;
+    return false;
 
   DoCommand();
-  return NS_OK;
+  return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -102,7 +99,7 @@ XULColumnItemAccessible::DoAction(uint8_t aIndex)
 
 XULListboxAccessible::
   XULListboxAccessible(nsIContent* aContent, DocAccessible* aDoc) :
-  XULSelectControlAccessible(aContent, aDoc), xpcAccessibleTable(this)
+  XULSelectControlAccessible(aContent, aDoc)
 {
   nsIContent* parentContent = mContent->GetFlattenedTreeParent();
   if (parentContent) {
@@ -111,50 +108,13 @@ XULListboxAccessible::
     if (autoCompletePopupElm)
       mGenericTypes |= eAutoCompletePopup;
   }
-}
 
-NS_IMPL_ADDREF_INHERITED(XULListboxAccessible, XULSelectControlAccessible)
-NS_IMPL_RELEASE_INHERITED(XULListboxAccessible, XULSelectControlAccessible)
-
-nsresult
-XULListboxAccessible::QueryInterface(REFNSIID aIID, void** aInstancePtr)
-{
-  nsresult rv = XULSelectControlAccessible::QueryInterface(aIID, aInstancePtr);
-  if (*aInstancePtr)
-    return rv;
-
-  if (aIID.Equals(NS_GET_IID(nsIAccessibleTable)) && IsMulticolumn()) {
-    *aInstancePtr = static_cast<nsIAccessibleTable*>(this);
-    NS_ADDREF_THIS();
-    return NS_OK;
-  }
-
-  return NS_ERROR_NO_INTERFACE;
+  if (IsMulticolumn())
+    mGenericTypes |= eTable;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Accessible
-
-void
-XULListboxAccessible::Shutdown()
-{
-  mTable = nullptr;
-  XULSelectControlAccessible::Shutdown();
-}
-
-bool
-XULListboxAccessible::IsMulticolumn()
-{
-  int32_t numColumns = 0;
-  nsresult rv = GetColumnCount(&numColumns);
-  if (NS_FAILED(rv))
-    return false;
-
-  return numColumns > 1;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// XULListboxAccessible. nsIAccessible
+// XULListboxAccessible: Accessible
 
 uint64_t
 XULListboxAccessible::NativeState()
@@ -206,7 +166,7 @@ XULListboxAccessible::NativeRole()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// XULListboxAccessible. nsIAccessibleTable
+// XULListboxAccessible: Table
 
 uint32_t
 XULListboxAccessible::ColCount()
@@ -593,7 +553,7 @@ XULListitemAccessible::~XULListitemAccessible()
 NS_IMPL_ISUPPORTS_INHERITED0(XULListitemAccessible, Accessible)
 
 Accessible*
-XULListitemAccessible::GetListAccessible()
+XULListitemAccessible::GetListAccessible() const
 {
   if (IsDefunct())
     return nullptr;
@@ -623,7 +583,7 @@ XULListitemAccessible::Description(nsString& aDesc)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// XULListitemAccessible. nsIAccessible
+// XULListitemAccessible: Accessible
 
 /**
   * If there is a Listcell as a child ( not anonymous ) use it, otherwise
@@ -696,21 +656,16 @@ XULListitemAccessible::NativeInteractiveState() const
     states::UNAVAILABLE : states::FOCUSABLE | states::SELECTABLE;
 }
 
-NS_IMETHODIMP
-XULListitemAccessible::GetActionName(uint8_t aIndex, nsAString& aName)
+void
+XULListitemAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 {
   if (aIndex == eAction_Click && mIsCheckbox) {
-    // check or uncheck
     uint64_t states = NativeState();
-
     if (states & states::CHECKED)
       aName.AssignLiteral("uncheck");
     else
       aName.AssignLiteral("check");
-
-    return NS_OK;
   }
-  return NS_ERROR_INVALID_ARG;
 }
 
 bool
@@ -736,7 +691,7 @@ XULListitemAccessible::ContainerWidget() const
 
 XULListCellAccessible::
   XULListCellAccessible(nsIContent* aContent, DocAccessible* aDoc) :
-  HyperTextAccessibleWrap(aContent, aDoc), xpcAccessibleTableCell(this)
+  HyperTextAccessibleWrap(aContent, aDoc)
 {
   mGenericTypes |= eTableCell;
 }
@@ -744,12 +699,11 @@ XULListCellAccessible::
 ////////////////////////////////////////////////////////////////////////////////
 // nsISupports
 
-NS_IMPL_ISUPPORTS_INHERITED(XULListCellAccessible,
-                            HyperTextAccessible,
-                            nsIAccessibleTableCell)
+NS_IMPL_ISUPPORTS_INHERITED0(XULListCellAccessible,
+                             HyperTextAccessible)
 
 ////////////////////////////////////////////////////////////////////////////////
-// XULListCellAccessible: nsIAccessibleTableCell implementation
+// XULListCellAccessible: TableCell
 
 TableAccessible*
 XULListCellAccessible::Table() const
@@ -851,13 +805,6 @@ XULListCellAccessible::Selected()
 
 ////////////////////////////////////////////////////////////////////////////////
 // XULListCellAccessible. Accessible implementation
-
-void
-XULListCellAccessible::Shutdown()
-{
-  mTableCell = nullptr;
-  HyperTextAccessibleWrap::Shutdown();
-}
 
 role
 XULListCellAccessible::NativeRole()

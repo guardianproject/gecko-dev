@@ -13,11 +13,9 @@ SOURCES += [
     '../nsXPCOMGlue.cpp',
 ]
 
-LIBRARY_NAME = 'xpcomglue_staticruntime'
+Library('xpcomglue_staticruntime')
 
-SDK_LIBRARY = [
-    "%s%s.%s" % (CONFIG['LIB_PREFIX'], 'xpcomglue_staticruntime', CONFIG['LIB_SUFFIX']),
-]
+SDK_LIBRARY = True
 
 # create a static lib
 FORCE_STATIC_LIB = True
@@ -39,3 +37,10 @@ USE_STATIC_LIBS = True
 
 # Don't use STL wrappers here (i.e. wrapped <new>); they require mozalloc
 DISABLE_STL_WRAPPING = True
+
+FAIL_ON_WARNINGS = True
+
+# Include fallible for third party code using the xpcom glue
+USE_LIBS += [
+    'fallible',
+]

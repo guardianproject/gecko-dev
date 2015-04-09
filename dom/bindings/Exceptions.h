@@ -44,6 +44,19 @@ CreateException(JSContext* aCx, nsresult aRv, const char* aMessage = nullptr);
 already_AddRefed<nsIStackFrame>
 GetCurrentJSStack();
 
+// Throwing a TypeError on an ErrorResult may result in SpiderMonkey using its
+// own error reporting mechanism instead of just setting the exception on the
+// context.  This happens if no script is running. Bug 1107777 adds a flag that
+// forcibly turns this behaviour off. This is a stack helper to set the flag.
+class MOZ_STACK_CLASS AutoForceSetExceptionOnContext {
+private:
+  JSContext* mCx;
+  bool mOldValue;
+public:
+  explicit AutoForceSetExceptionOnContext(JSContext* aCx);
+  ~AutoForceSetExceptionOnContext();
+};
+
 // Internal stuff not intended to be widely used.
 namespace exceptions {
 
@@ -51,13 +64,6 @@ namespace exceptions {
 // value is -1, a default maximal depth will be selected.
 already_AddRefed<nsIStackFrame>
 CreateStack(JSContext* aCx, int32_t aMaxDepth = -1);
-
-already_AddRefed<nsIStackFrame>
-CreateStackFrameLocation(uint32_t aLanguage,
-                         const char* aFilename,
-                         const char* aFunctionName,
-                         int32_t aLineNumber,
-                         nsIStackFrame* aCaller);
 
 } // namespace exceptions
 } // namespace dom

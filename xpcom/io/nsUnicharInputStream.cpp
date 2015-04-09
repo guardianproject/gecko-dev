@@ -23,10 +23,10 @@
 
 #define STRING_BUFFER_SIZE 8192
 
-class StringUnicharInputStream MOZ_FINAL : public nsIUnicharInputStream
+class StringUnicharInputStream final : public nsIUnicharInputStream
 {
 public:
-  StringUnicharInputStream(const nsAString& aString) :
+  explicit StringUnicharInputStream(const nsAString& aString) :
     mString(aString), mPos(0), mLen(aString.Length()) { }
 
   NS_DECL_ISUPPORTS
@@ -124,7 +124,7 @@ NS_IMPL_ISUPPORTS(StringUnicharInputStream, nsIUnicharInputStream)
 
 //----------------------------------------------------------------------
 
-class UTF8InputStream MOZ_FINAL : public nsIUnicharInputStream
+class UTF8InputStream final : public nsIUnicharInputStream
 {
 public:
   UTF8InputStream();
@@ -413,26 +413,20 @@ nsSimpleUnicharStreamFactory::CreateInstanceFromString(const nsAString& aString,
                                                        nsIUnicharInputStream** aResult)
 {
   StringUnicharInputStream* it = new StringUnicharInputStream(aString);
-  if (!it) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
 
   NS_ADDREF(*aResult = it);
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsSimpleUnicharStreamFactory::CreateInstanceFromUTF8Stream(nsIInputStream* aStreamToWrap,
-                                                           nsIUnicharInputStream** aResult)
+nsSimpleUnicharStreamFactory::CreateInstanceFromUTF8Stream(
+    nsIInputStream* aStreamToWrap,
+    nsIUnicharInputStream** aResult)
 {
   *aResult = nullptr;
 
   // Create converter input stream
   nsRefPtr<UTF8InputStream> it = new UTF8InputStream();
-  if (!it) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-
   nsresult rv = it->Init(aStreamToWrap);
   if (NS_FAILED(rv)) {
     return rv;

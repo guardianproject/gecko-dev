@@ -25,24 +25,16 @@
 #include <functional>
 #include <vector>
 
-#include "nssgtest.h"
+#include "pkixgtest.h"
 #include "pkix/pkixtypes.h"
 #include "pkixder.h"
 
 using namespace mozilla::pkix;
 using namespace mozilla::pkix::der;
-using namespace mozilla::pkix::test;
 
 namespace {
 
-class pkixder_pki_types_tests : public ::testing::Test
-{
-protected:
-  virtual void SetUp()
-  {
-    PR_SetError(0, 0);
-  }
-};
+class pkixder_pki_types_tests : public ::testing::Test { };
 
 TEST_F(pkixder_pki_types_tests, CertificateSerialNumber)
 {
@@ -51,16 +43,16 @@ TEST_F(pkixder_pki_types_tests, CertificateSerialNumber)
     8,                          // length
     0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef
   };
+  Input input(DER_CERT_SERIAL);
+  Reader reader(input);
 
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER_CERT_SERIAL, sizeof DER_CERT_SERIAL));
+  Input item;
+  ASSERT_EQ(Success, CertificateSerialNumber(reader, item));
 
-  SECItem item;
-  ASSERT_EQ(Success, CertificateSerialNumber(input, item));
-
-  ASSERT_EQ(sizeof DER_CERT_SERIAL - 2, item.len);
-  ASSERT_TRUE(memcmp(item.data, DER_CERT_SERIAL + 2,
-                     sizeof DER_CERT_SERIAL - 2) == 0);
+  Input expected;
+  ASSERT_EQ(Success,
+            expected.Init(DER_CERT_SERIAL + 2, sizeof DER_CERT_SERIAL - 2));
+  ASSERT_TRUE(InputsAreEqual(expected, item));
 }
 
 TEST_F(pkixder_pki_types_tests, CertificateSerialNumberLongest)
@@ -70,17 +62,17 @@ TEST_F(pkixder_pki_types_tests, CertificateSerialNumberLongest)
     20,                         // length
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
   };
+  Input input(DER_CERT_SERIAL_LONGEST);
+  Reader reader(input);
 
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER_CERT_SERIAL_LONGEST,
-                                sizeof DER_CERT_SERIAL_LONGEST));
+  Input item;
+  ASSERT_EQ(Success, CertificateSerialNumber(reader, item));
 
-  SECItem item;
-  ASSERT_EQ(Success, CertificateSerialNumber(input, item));
-
-  ASSERT_EQ(sizeof DER_CERT_SERIAL_LONGEST - 2, item.len);
-  ASSERT_TRUE(memcmp(item.data, DER_CERT_SERIAL_LONGEST + 2,
-                     sizeof DER_CERT_SERIAL_LONGEST - 2) == 0);
+  Input expected;
+  ASSERT_EQ(Success,
+            expected.Init(DER_CERT_SERIAL_LONGEST + 2,
+                          sizeof DER_CERT_SERIAL_LONGEST - 2));
+  ASSERT_TRUE(InputsAreEqual(expected, item));
 }
 
 TEST_F(pkixder_pki_types_tests, CertificateSerialNumberCrazyLong)
@@ -91,13 +83,11 @@ TEST_F(pkixder_pki_types_tests, CertificateSerialNumberCrazyLong)
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
     17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32
   };
+  Input input(DER_CERT_SERIAL_CRAZY_LONG);
+  Reader reader(input);
 
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER_CERT_SERIAL_CRAZY_LONG,
-                                sizeof DER_CERT_SERIAL_CRAZY_LONG));
-
-  SECItem item;
-  ASSERT_EQ(Success, CertificateSerialNumber(input, item));
+  Input item;
+  ASSERT_EQ(Success, CertificateSerialNumber(reader, item));
 }
 
 TEST_F(pkixder_pki_types_tests, CertificateSerialNumberZeroLength)
@@ -106,14 +96,11 @@ TEST_F(pkixder_pki_types_tests, CertificateSerialNumberZeroLength)
     0x02,                       // INTEGER
     0x00                        // length
   };
+  Input input(DER_CERT_SERIAL_ZERO_LENGTH);
+  Reader reader(input);
 
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER_CERT_SERIAL_ZERO_LENGTH,
-                                sizeof DER_CERT_SERIAL_ZERO_LENGTH));
-
-  SECItem item;
-  ASSERT_EQ(Failure, CertificateSerialNumber(input, item));
-  ASSERT_EQ(SEC_ERROR_BAD_DER, PR_GetError());
+  Input item;
+  ASSERT_EQ(Result::ERROR_BAD_DER, CertificateSerialNumber(reader, item));
 }
 
 TEST_F(pkixder_pki_types_tests, OptionalVersionV1ExplicitEncodingAllowed)
@@ -122,18 +109,15 @@ TEST_F(pkixder_pki_types_tests, OptionalVersionV1ExplicitEncodingAllowed)
     0xa0, 0x03,                   // context specific 0
     0x02, 0x01, 0x00              // INTEGER(0)
   };
-
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER_OPTIONAL_VERSION_V1,
-                                sizeof DER_OPTIONAL_VERSION_V1));
+  Input input(DER_OPTIONAL_VERSION_V1);
+  Reader reader(input);
 
   // XXX(bug 1031093): We shouldn't accept an explicit encoding of v1, but we
   // do here for compatibility reasons.
   // Version version;
-  // ASSERT_EQ(Failure, OptionalVersion(input, version));
-  // ASSERT_EQ(SEC_ERROR_BAD_DER, PR_GetError());
+  // ASSERT_EQ(Result::ERROR_BAD_DER, OptionalVersion(reader, version));
   der::Version version = der::Version::v3;
-  ASSERT_EQ(Success, OptionalVersion(input, version));
+  ASSERT_EQ(Success, OptionalVersion(reader, version));
   ASSERT_EQ(der::Version::v1, version);
 }
 
@@ -143,13 +127,11 @@ TEST_F(pkixder_pki_types_tests, OptionalVersionV2)
     0xa0, 0x03,                   // context specific 0
     0x02, 0x01, 0x01              // INTEGER(1)
   };
-
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER_OPTIONAL_VERSION_V2,
-                                sizeof DER_OPTIONAL_VERSION_V2));
+  Input input(DER_OPTIONAL_VERSION_V2);
+  Reader reader(input);
 
   der::Version version = der::Version::v1;
-  ASSERT_EQ(Success, OptionalVersion(input, version));
+  ASSERT_EQ(Success, OptionalVersion(reader, version));
   ASSERT_EQ(der::Version::v2, version);
 }
 
@@ -159,13 +141,11 @@ TEST_F(pkixder_pki_types_tests, OptionalVersionV3)
     0xa0, 0x03,                   // context specific 0
     0x02, 0x01, 0x02              // INTEGER(2)
   };
-
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER_OPTIONAL_VERSION_V3,
-                                sizeof DER_OPTIONAL_VERSION_V3));
+  Input input(DER_OPTIONAL_VERSION_V3);
+  Reader reader(input);
 
   der::Version version = der::Version::v1;
-  ASSERT_EQ(Success, OptionalVersion(input, version));
+  ASSERT_EQ(Success, OptionalVersion(reader, version));
   ASSERT_EQ(der::Version::v3, version);
 }
 
@@ -175,14 +155,11 @@ TEST_F(pkixder_pki_types_tests, OptionalVersionUnknown)
     0xa0, 0x03,                   // context specific 0
     0x02, 0x01, 0x42              // INTEGER(0x42)
   };
-
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER_OPTIONAL_VERSION_INVALID,
-                                sizeof DER_OPTIONAL_VERSION_INVALID));
+  Input input(DER_OPTIONAL_VERSION_INVALID);
+  Reader reader(input);
 
   der::Version version = der::Version::v1;
-  ASSERT_EQ(Failure, OptionalVersion(input, version));
-  ASSERT_EQ(SEC_ERROR_BAD_DER, PR_GetError());
+  ASSERT_EQ(Result::ERROR_BAD_DER, OptionalVersion(reader, version));
 }
 
 TEST_F(pkixder_pki_types_tests, OptionalVersionInvalidTooLong)
@@ -191,14 +168,11 @@ TEST_F(pkixder_pki_types_tests, OptionalVersionInvalidTooLong)
     0xa0, 0x03,                   // context specific 0
     0x02, 0x02, 0x12, 0x34        // INTEGER(0x1234)
   };
-
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER_OPTIONAL_VERSION_INVALID_TOO_LONG,
-                                sizeof DER_OPTIONAL_VERSION_INVALID_TOO_LONG));
+  Input input(DER_OPTIONAL_VERSION_INVALID_TOO_LONG);
+  Reader reader(input);
 
   der::Version version;
-  ASSERT_EQ(Failure, OptionalVersion(input, version));
-  ASSERT_EQ(SEC_ERROR_BAD_DER, PR_GetError());
+  ASSERT_EQ(Result::ERROR_BAD_DER, OptionalVersion(reader, version));
 }
 
 TEST_F(pkixder_pki_types_tests, OptionalVersionMissing)
@@ -206,35 +180,38 @@ TEST_F(pkixder_pki_types_tests, OptionalVersionMissing)
   const uint8_t DER_OPTIONAL_VERSION_MISSING[] = {
     0x02, 0x11, 0x22              // INTEGER
   };
-
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER_OPTIONAL_VERSION_MISSING,
-                                sizeof DER_OPTIONAL_VERSION_MISSING));
+  Input input(DER_OPTIONAL_VERSION_MISSING);
+  Reader reader(input);
 
   der::Version version = der::Version::v3;
-  ASSERT_EQ(Success, OptionalVersion(input, version));
+  ASSERT_EQ(Success, OptionalVersion(reader, version));
   ASSERT_EQ(der::Version::v1, version);
 }
 
 static const size_t MAX_ALGORITHM_OID_DER_LENGTH = 13;
 
-template <typename T>
-struct AlgorithmIdentifierTestInfo
+struct InvalidAlgorithmIdentifierTestInfo
 {
-  T algorithm;
   uint8_t der[MAX_ALGORITHM_OID_DER_LENGTH];
   size_t derLength;
 };
 
-class pkixder_DigestAlgorithmIdentifier
-  : public NSSTest
-  , public ::testing::WithParamInterface<
-                AlgorithmIdentifierTestInfo<DigestAlgorithm>>
+struct ValidDigestAlgorithmIdentifierTestInfo
+{
+  DigestAlgorithm algorithm;
+  uint8_t der[MAX_ALGORITHM_OID_DER_LENGTH];
+  size_t derLength;
+};
+
+class pkixder_DigestAlgorithmIdentifier_Valid
+  : public ::testing::Test
+  , public ::testing::WithParamInterface<ValidDigestAlgorithmIdentifierTestInfo>
 {
 };
 
-static const AlgorithmIdentifierTestInfo<DigestAlgorithm>
-DIGEST_ALGORITHM_TEST_INFO[] = {
+static const ValidDigestAlgorithmIdentifierTestInfo
+  VALID_DIGEST_ALGORITHM_TEST_INFO[] =
+{
   { DigestAlgorithm::sha512,
     { 0x30, 0x0b, 0x06, 0x09,
       0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03 },
@@ -257,17 +234,18 @@ DIGEST_ALGORITHM_TEST_INFO[] = {
   },
 };
 
-TEST_P(pkixder_DigestAlgorithmIdentifier, Valid)
+TEST_P(pkixder_DigestAlgorithmIdentifier_Valid, Valid)
 {
-  const AlgorithmIdentifierTestInfo<DigestAlgorithm>& param(GetParam());
+  const ValidDigestAlgorithmIdentifierTestInfo& param(GetParam());
 
   {
     Input input;
     ASSERT_EQ(Success, input.Init(param.der, param.derLength));
+    Reader reader(input);
     DigestAlgorithm alg;
-    ASSERT_EQ(Success, DigestAlgorithmIdentifier(input, alg));
+    ASSERT_EQ(Success, DigestAlgorithmIdentifier(reader, alg));
     ASSERT_EQ(param.algorithm, alg);
-    ASSERT_EQ(Success, End(input));
+    ASSERT_EQ(Success, End(reader));
   }
 
   {
@@ -279,178 +257,226 @@ TEST_P(pkixder_DigestAlgorithmIdentifier, Valid)
 
     Input input;
     ASSERT_EQ(Success, input.Init(derWithNullParam, param.derLength + 2));
+    Reader reader(input);
     DigestAlgorithm alg;
-    ASSERT_EQ(Success, DigestAlgorithmIdentifier(input, alg));
+    ASSERT_EQ(Success, DigestAlgorithmIdentifier(reader, alg));
     ASSERT_EQ(param.algorithm, alg);
-    ASSERT_EQ(Success, End(input));
+    ASSERT_EQ(Success, End(reader));
   }
 }
 
-INSTANTIATE_TEST_CASE_P(pkixder_DigestAlgorithmIdentifier,
-                        pkixder_DigestAlgorithmIdentifier,
-                        testing::ValuesIn(DIGEST_ALGORITHM_TEST_INFO));
+INSTANTIATE_TEST_CASE_P(pkixder_DigestAlgorithmIdentifier_Valid,
+                        pkixder_DigestAlgorithmIdentifier_Valid,
+                        testing::ValuesIn(VALID_DIGEST_ALGORITHM_TEST_INFO));
 
-TEST_F(pkixder_DigestAlgorithmIdentifier, Invalid_MD5)
+class pkixder_DigestAlgorithmIdentifier_Invalid
+  : public ::testing::Test
+  , public ::testing::WithParamInterface<InvalidAlgorithmIdentifierTestInfo>
 {
-  // The OID identifies MD5 (1.2.840.113549.2.5). It is invalid because we
-  // don't accept MD5 as a hash algorithm.
-  static const uint8_t DER[] = {
-    0x30, 0x0a, 0x06, 0x08,
-    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x05
-  };
+};
 
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER, sizeof(DER)));
-  DigestAlgorithm alg;
-  ASSERT_EQ(Failure, DigestAlgorithmIdentifier(input, alg));
-  ASSERT_EQ(SEC_ERROR_INVALID_ALGORITHM, PR_GetError());
-}
-
-TEST_F(pkixder_DigestAlgorithmIdentifier, Invalid_Digest_ECDSA_WITH_SHA256)
+static const InvalidAlgorithmIdentifierTestInfo
+  INVALID_DIGEST_ALGORITHM_TEST_INFO[] =
 {
-  // The OID identifies ecdsa-with-SHA256 (1.2.840.10045.4.3.2). It is invalid
-  // because ECDSA-with-SHA256 is not a hash algorithm.
-  static const uint8_t DER[] = {
-    0x30, 0x0a, 0x06, 0x08,
-    0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02, //
-  };
-
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER, sizeof(DER)));
-  DigestAlgorithm alg;
-  ASSERT_EQ(Failure, DigestAlgorithmIdentifier(input, alg));
-  ASSERT_EQ(SEC_ERROR_INVALID_ALGORITHM, PR_GetError());
-}
-
-static const AlgorithmIdentifierTestInfo<SignatureAlgorithm>
-  SIGNATURE_ALGORITHM_TEST_INFO[] =
-{
-  { SignatureAlgorithm::ecdsa_with_sha512,
+  { // MD5
     { 0x30, 0x0a, 0x06, 0x08,
-      0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04 },
+      0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x05 },
     12,
   },
-  { SignatureAlgorithm::ecdsa_with_sha384,
-    { 0x30, 0x0a, 0x06, 0x08,
-      0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03 },
-    12,
-  },
-  { SignatureAlgorithm::ecdsa_with_sha256,
+  { // ecdsa-with-SHA256 (1.2.840.10045.4.3.2) (not a hash algorithm)
     { 0x30, 0x0a, 0x06, 0x08,
       0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02 },
     12,
   },
-  { SignatureAlgorithm::ecdsa_with_sha1,
-    { 0x30, 0x09, 0x06, 0x07,
+};
+
+TEST_P(pkixder_DigestAlgorithmIdentifier_Invalid, Invalid)
+{
+  const InvalidAlgorithmIdentifierTestInfo& param(GetParam());
+  Input input;
+  ASSERT_EQ(Success, input.Init(param.der, param.derLength));
+  Reader reader(input);
+  DigestAlgorithm alg;
+  ASSERT_EQ(Result::ERROR_INVALID_ALGORITHM,
+            DigestAlgorithmIdentifier(reader, alg));
+}
+
+INSTANTIATE_TEST_CASE_P(pkixder_DigestAlgorithmIdentifier_Invalid,
+                        pkixder_DigestAlgorithmIdentifier_Invalid,
+                        testing::ValuesIn(INVALID_DIGEST_ALGORITHM_TEST_INFO));
+
+struct ValidSignatureAlgorithmIdentifierValueTestInfo
+{
+  PublicKeyAlgorithm publicKeyAlg;
+  DigestAlgorithm digestAlg;
+  uint8_t der[MAX_ALGORITHM_OID_DER_LENGTH];
+  size_t derLength;
+};
+
+static const ValidSignatureAlgorithmIdentifierValueTestInfo
+  VALID_SIGNATURE_ALGORITHM_VALUE_TEST_INFO[] =
+{
+  // ECDSA
+  { PublicKeyAlgorithm::ECDSA,
+    DigestAlgorithm::sha512,
+    { 0x06, 0x08,
+      0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04 },
+    10,
+  },
+  { PublicKeyAlgorithm::ECDSA,
+    DigestAlgorithm::sha384,
+    { 0x06, 0x08,
+      0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03 },
+    10,
+  },
+  { PublicKeyAlgorithm::ECDSA,
+    DigestAlgorithm::sha256,
+    { 0x06, 0x08,
+      0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02 },
+    10,
+  },
+  { PublicKeyAlgorithm::ECDSA,
+    DigestAlgorithm::sha1,
+    { 0x06, 0x07,
       0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x01 },
-    11,
+    9,
   },
 
   // RSA
-  { SignatureAlgorithm::rsa_pkcs1_with_sha512,
-    { 0x30, 0x0b, 0x06, 0x09,
+  { PublicKeyAlgorithm::RSA_PKCS1,
+    DigestAlgorithm::sha512,
+    { 0x06, 0x09,
       0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0d },
-    13,
-  },
-  { SignatureAlgorithm::rsa_pkcs1_with_sha384,
-    { 0x30, 0x0b, 0x06, 0x09,
-      0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0c },
-    13,
-  },
-  { SignatureAlgorithm::rsa_pkcs1_with_sha256,
-    { 0x30, 0x0b, 0x06, 0x09,
-      0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b },
-    13,
-  },
-  { SignatureAlgorithm::rsa_pkcs1_with_sha1,
-    { 0x30, 0x0b, 0x06, 0x09,
-      0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x05 },
-    13,
-  },
-
-  // DSA
-  { SignatureAlgorithm::dsa_with_sha256,
-    { 0x30, 0x0b, 0x06, 0x09,
-      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x02 },
-    13,
-  },
-  { SignatureAlgorithm::dsa_with_sha1,
-    { 0x30, 0x09, 0x06, 0x07,
-      0x2a, 0x86, 0x48, 0xce, 0x38, 0x04, 0x03 },
     11,
   },
+  { PublicKeyAlgorithm::RSA_PKCS1,
+    DigestAlgorithm::sha384,
+    { 0x06, 0x09,
+      0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0c },
+    11,
+  },
+  { PublicKeyAlgorithm::RSA_PKCS1,
+    DigestAlgorithm::sha256,
+    { 0x06, 0x09,
+      0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b },
+    11,
+  },
+  { PublicKeyAlgorithm::RSA_PKCS1,
+    DigestAlgorithm::sha1,
+    // IETF Standard OID
+    { 0x06, 0x09,
+      0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x05 },
+    11,
+  },
+  { PublicKeyAlgorithm::RSA_PKCS1,
+    DigestAlgorithm::sha1,
+    // Legacy OIW OID (bug 1042479)
+    { 0x06, 0x05,
+      0x2b, 0x0e, 0x03, 0x02, 0x1d },
+    7,
+  },
 };
 
-class pkixder_SignatureAlgorithmIdentifier
-  : public NSSTest
+class pkixder_SignatureAlgorithmIdentifierValue_Valid
+  : public ::testing::Test
   , public ::testing::WithParamInterface<
-                AlgorithmIdentifierTestInfo<SignatureAlgorithm>>
+             ValidSignatureAlgorithmIdentifierValueTestInfo>
 {
 };
 
-TEST_P(pkixder_SignatureAlgorithmIdentifier, Valid)
+TEST_P(pkixder_SignatureAlgorithmIdentifierValue_Valid, Valid)
 {
-  const AlgorithmIdentifierTestInfo<SignatureAlgorithm>& param(GetParam());
+  const ValidSignatureAlgorithmIdentifierValueTestInfo& param(GetParam());
 
   {
     Input input;
     ASSERT_EQ(Success, input.Init(param.der, param.derLength));
-    SignatureAlgorithm alg;
-    ASSERT_EQ(Success, SignatureAlgorithmIdentifier(input, alg));
-    ASSERT_EQ(param.algorithm, alg);
-    ASSERT_EQ(Success, End(input));
+    Reader reader(input);
+    PublicKeyAlgorithm publicKeyAlg;
+    DigestAlgorithm digestAlg;
+    ASSERT_EQ(Success,
+              SignatureAlgorithmIdentifierValue(reader, publicKeyAlg,
+                                                digestAlg));
+    ASSERT_EQ(param.publicKeyAlg, publicKeyAlg);
+    ASSERT_EQ(param.digestAlg, digestAlg);
+    ASSERT_EQ(Success, End(reader));
   }
 
   {
     uint8_t derWithNullParam[MAX_ALGORITHM_OID_DER_LENGTH + 2];
     memcpy(derWithNullParam, param.der, param.derLength);
-    derWithNullParam[1] += 2; // we're going to expand the value by 2 bytes
     derWithNullParam[param.derLength] = 0x05; // NULL tag
     derWithNullParam[param.derLength + 1] = 0x00; // length zero
 
     Input input;
     ASSERT_EQ(Success, input.Init(derWithNullParam, param.derLength + 2));
-    SignatureAlgorithm alg;
-    ASSERT_EQ(Success, SignatureAlgorithmIdentifier(input, alg));
-    ASSERT_EQ(param.algorithm, alg);
-    ASSERT_EQ(Success, End(input));
+    Reader reader(input);
+    PublicKeyAlgorithm publicKeyAlg;
+    DigestAlgorithm digestAlg;
+    ASSERT_EQ(Success,
+              SignatureAlgorithmIdentifierValue(reader, publicKeyAlg,
+                                                digestAlg));
+    ASSERT_EQ(param.publicKeyAlg, publicKeyAlg);
+    ASSERT_EQ(param.digestAlg, digestAlg);
+    ASSERT_EQ(Success, End(reader));
   }
 }
 
-INSTANTIATE_TEST_CASE_P(pkixder_SignatureAlgorithmIdentifier,
-                        pkixder_SignatureAlgorithmIdentifier,
-                        testing::ValuesIn(SIGNATURE_ALGORITHM_TEST_INFO));
+INSTANTIATE_TEST_CASE_P(
+  pkixder_SignatureAlgorithmIdentifierValue_Valid,
+  pkixder_SignatureAlgorithmIdentifierValue_Valid,
+  testing::ValuesIn(VALID_SIGNATURE_ALGORITHM_VALUE_TEST_INFO));
 
-TEST_F(pkixder_SignatureAlgorithmIdentifier, Invalid_RSA_With_MD5)
+static const InvalidAlgorithmIdentifierTestInfo
+  INVALID_SIGNATURE_ALGORITHM_VALUE_TEST_INFO[] =
 {
-  // The OID identifies RSA-with-MD5 (1.2.840.113549.1.1.4). It is invalid
-  // because no MD5-based signatures algorithms are supported by the parser.
-  static const uint8_t DER[] = {
-    0x30, 0x0b, 0x06, 0x09,
-    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x04
-  };
+  // id-dsa-with-sha256 (2.16.840.1.101.3.4.3.2)
+  { { 0x06, 0x09,
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x02 },
+    11,
+  },
 
+  // id-dsa-with-sha1 (1.2.840.10040.4.3)
+  { { 0x06, 0x07,
+      0x2a, 0x86, 0x48, 0xce, 0x38, 0x04, 0x03 },
+    9,
+  },
+
+  // RSA-with-MD5 (1.2.840.113549.1.1.4)
+  { { 0x06, 0x09,
+      0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x04 },
+    11,
+  },
+
+  // id-sha256 (2.16.840.1.101.3.4.2.1). It is invalid because SHA-256 is not
+  // a signature algorithm.
+  { { 0x06, 0x09,
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01 },
+    11,
+  },
+};
+
+class pkixder_SignatureAlgorithmIdentifier_Invalid
+  : public ::testing::Test
+  , public ::testing::WithParamInterface<InvalidAlgorithmIdentifierTestInfo>
+{
+};
+
+TEST_P(pkixder_SignatureAlgorithmIdentifier_Invalid, Invalid)
+{
+  const InvalidAlgorithmIdentifierTestInfo& param(GetParam());
   Input input;
-  ASSERT_EQ(Success, input.Init(DER, sizeof(DER)));
-  SignatureAlgorithm alg;
-  ASSERT_EQ(Failure, SignatureAlgorithmIdentifier(input, alg));
-  ASSERT_EQ(SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED, PR_GetError());
+  ASSERT_EQ(Success, input.Init(param.der, param.derLength));
+  Reader reader(input);
+  der::PublicKeyAlgorithm publicKeyAlg;
+  DigestAlgorithm digestAlg;
+  ASSERT_EQ(Result::ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED,
+            SignatureAlgorithmIdentifierValue(reader, publicKeyAlg, digestAlg));
 }
 
-TEST_F(pkixder_SignatureAlgorithmIdentifier, Invalid_SignatureAlgorithm_SHA256)
-{
-  // The OID identifies id-sha256 (2.16.840.1.101.3.4.2.1). It is invalid
-  // because SHA-256 is not a signature algorithm.
-  static const uint8_t DER[] = {
-    0x30, 0x0b, 0x06, 0x09,
-    0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01
-  };
-
-  Input input;
-  ASSERT_EQ(Success, input.Init(DER, sizeof(DER)));
-  SignatureAlgorithm alg;
-  ASSERT_EQ(Failure, SignatureAlgorithmIdentifier(input, alg));
-  ASSERT_EQ(SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED, PR_GetError());
-}
+INSTANTIATE_TEST_CASE_P(
+  pkixder_SignatureAlgorithmIdentifier_Invalid,
+  pkixder_SignatureAlgorithmIdentifier_Invalid,
+  testing::ValuesIn(INVALID_SIGNATURE_ALGORITHM_VALUE_TEST_INFO));
 
 } // unnamed namespace

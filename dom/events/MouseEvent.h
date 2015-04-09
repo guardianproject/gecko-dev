@@ -30,13 +30,13 @@ public:
   // Forward to base class
   NS_FORWARD_TO_UIEVENT
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE
+  virtual JSObject* WrapObjectInternal(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override
   {
-    return MouseEventBinding::Wrap(aCx, this);
+    return MouseEventBinding::Wrap(aCx, this, aGivenProto);
   }
 
   // Web IDL binding methods
-  virtual uint32_t Which() MOZ_OVERRIDE
+  virtual uint32_t Which() override
   {
     return Button() + 1;
   }
@@ -45,6 +45,8 @@ public:
   int32_t ScreenY();
   int32_t ClientX();
   int32_t ClientY();
+  int32_t OffsetX();
+  int32_t OffsetY();
   bool CtrlKey();
   bool ShiftKey();
   bool AltKey();
@@ -83,6 +85,7 @@ public:
     return GetMovementPoint().y;
   }
   float MozPressure() const;
+  bool HitCluster() const;
   uint16_t MozInputSource() const;
   void InitNSMouseEvent(const nsAString& aType,
                         bool aCanBubble, bool aCancelable,

@@ -8,88 +8,13 @@
 /* global loop:true, React */
 var loop = loop || {};
 loop.shared = loop.shared || {};
-loop.shared.views = (function(_, OT, l10n) {
+loop.shared.views = (function(_, l10n) {
   "use strict";
 
+  var sharedActions = loop.shared.actions;
   var sharedModels = loop.shared.models;
-  var __ = l10n.get;
-
-  /**
-   * L10n view. Translates resulting view DOM fragment once rendered.
-   */
-  var L10nView = (function() {
-    var L10nViewImpl   = Backbone.View.extend(), // Original View constructor
-        originalExtend = L10nViewImpl.extend;    // Original static extend fn
-
-    /**
-     * Patches View extend() method so we can hook and patch any declared render
-     * method.
-     *
-     * @return {Backbone.View} Extended view with patched render() method.
-     */
-    L10nViewImpl.extend = function() {
-      var ExtendedView   = originalExtend.apply(this, arguments),
-          originalRender = ExtendedView.prototype.render;
-
-      /**
-       * Wraps original render() method to translate contents once they're
-       * rendered.
-       *
-       * @return {Backbone.View} Extended view instance.
-       */
-      ExtendedView.prototype.render = function() {
-        if (originalRender) {
-          originalRender.apply(this, arguments);
-          l10n.translate(this.el);
-        }
-        return this;
-      };
-
-      return ExtendedView;
-    };
-
-    return L10nViewImpl;
-  })();
-
-  /**
-   * Base view.
-   */
-  var BaseView = L10nView.extend({
-    /**
-     * Hides view element.
-     *
-     * @return {BaseView}
-     */
-    hide: function() {
-      this.$el.hide();
-      return this;
-    },
-
-    /**
-     * Shows view element.
-     *
-     * @return {BaseView}
-     */
-    show: function() {
-      this.$el.show();
-      return this;
-    },
-
-    /**
-     * Base render implementation: renders an attached template if available.
-     *
-     * Note: You need to override this if you want to do fancier stuff, eg.
-     *       rendering the template using model data.
-     *
-     * @return {BaseView}
-     */
-    render: function() {
-      if (this.template) {
-        this.$el.html(this.template());
-      }
-      return this;
-    }
-  });
+  var sharedMixins = loop.shared.mixins;
+  var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
 
   /**
    * Media control button.
@@ -105,11 +30,12 @@ loop.shared.views = (function(_, OT, l10n) {
       scope: React.PropTypes.string.isRequired,
       type: React.PropTypes.string.isRequired,
       action: React.PropTypes.func.isRequired,
-      enabled: React.PropTypes.bool.isRequired
+      enabled: React.PropTypes.bool.isRequired,
+      visible: React.PropTypes.bool.isRequired
     },
 
     getDefaultProps: function() {
-      return {enabled: true};
+      return {enabled: true, visible: true};
     },
 
     handleClick: function() {
@@ -122,8 +48,10 @@ loop.shared.views = (function(_, OT, l10n) {
       var classesObj = {
         "btn": true,
         "media-control": true,
+        "transparent-button": true,
         "local-media": this.props.scope === "local",
-        "muted": !this.props.enabled
+        "muted": !this.props.enabled,
+        "hide": !this.props.visible
       };
       classesObj["btn-mute-" + this.props.type] = true;
       return cx(classesObj);
@@ -133,14 +61,120 @@ loop.shared.views = (function(_, OT, l10n) {
       var prefix = this.props.enabled ? "mute" : "unmute";
       var suffix = "button_title";
       var msgId = [prefix, this.props.scope, this.props.type, suffix].join("_");
-      return __(msgId);
+      return l10n.get(msgId);
     },
 
     render: function() {
       return (
+        /* jshint ignore:start */
         <button className={this._getClasses()}
                 title={this._getTitle()}
                 onClick={this.handleClick}></button>
+        /* jshint ignore:end */
+      );
+    }
+  });
+
+  /**
+   * Screen sharing control button.
+   *
+   * Required props:
+   * - {loop.Dispatcher} dispatcher  The dispatcher instance
+   * - {Boolean}         visible     Set to true to display the button
+   * - {String}          state       One of the screen sharing states, see
+   *                                 loop.shared.utils.SCREEN_SHARE_STATES
+   */
+  var ScreenShareControlButton = React.createClass({
+    mixins: [sharedMixins.DropdownMenuMixin],
+
+    propTypes: {
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
+      visible: React.PropTypes.bool.isRequired,
+      state: React.PropTypes.string.isRequired,
+    },
+
+    getInitialState: function() {
+      var os = loop.shared.utils.getOS();
+      var osVersion = loop.shared.utils.getOSVersion();
+      // Disable screensharing on older OSX and Windows versions.
+      if ((os.indexOf("mac") > -1 && osVersion.major <= 10 && osVersion.minor <= 6) ||
+          (os.indexOf("win") > -1 && osVersion.major <= 5 && osVersion.minor <= 2)) {
+        return { windowSharingDisabled: true };
+      }
+      return { windowSharingDisabled: false };
+    },
+
+    handleClick: function() {
+      if (this.props.state === SCREEN_SHARE_STATES.ACTIVE) {
+        this.props.dispatcher.dispatch(
+          new sharedActions.EndScreenShare({}));
+      } else {
+        this.toggleDropdownMenu();
+      }
+    },
+
+    _startScreenShare: function(type) {
+      this.props.dispatcher.dispatch(new sharedActions.StartScreenShare({
+        type: type
+      }));
+    },
+
+    _handleShareTabs: function() {
+      this._startScreenShare("browser");
+    },
+
+    _handleShareWindows: function() {
+      this._startScreenShare("window");
+    },
+
+    _getTitle: function() {
+      var prefix = this.props.state === SCREEN_SHARE_STATES.ACTIVE ?
+        "active" : "inactive";
+
+      return l10n.get(prefix + "_screenshare_button_title");
+    },
+
+    render: function() {
+      if (!this.props.visible) {
+        return null;
+      }
+
+      var cx = React.addons.classSet;
+
+      var isActive = this.props.state === SCREEN_SHARE_STATES.ACTIVE;
+      var screenShareClasses = cx({
+        "btn": true,
+        "btn-screen-share": true,
+        "transparent-button": true,
+        "menu-showing": this.state.showMenu,
+        "active": isActive,
+        "disabled": this.props.state === SCREEN_SHARE_STATES.PENDING
+      });
+      var dropdownMenuClasses = cx({
+        "native-dropdown-menu": true,
+        "conversation-window-dropdown": true,
+        "visually-hidden": !this.state.showMenu
+      });
+      var windowSharingClasses = cx({
+        "disabled": this.state.windowSharingDisabled
+      });
+
+      return (
+        <div>
+          <button className={screenShareClasses}
+                  onClick={this.handleClick}
+                  title={this._getTitle()}>
+            {isActive ? null : <span className="chevron"/>}
+          </button>
+          <ul ref="menu" className={dropdownMenuClasses}>
+            <li onClick={this._handleShareTabs}>
+              {l10n.get("share_tabs_button_title2")}
+            </li>
+            <li onClick={this._handleShareWindows} className={windowSharingClasses}>
+              {l10n.get("share_windows_button_title")}
+            </li>
+          </ul>
+        </div>
       );
     }
   });
@@ -151,16 +185,22 @@ loop.shared.views = (function(_, OT, l10n) {
   var ConversationToolbar = React.createClass({
     getDefaultProps: function() {
       return {
-        video: {enabled: true},
-        audio: {enabled: true}
+        video: {enabled: true, visible: true},
+        audio: {enabled: true, visible: true},
+        screenShare: {state: SCREEN_SHARE_STATES.INACTIVE, visible: false},
+        enableHangup: true
       };
     },
 
     propTypes: {
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
       video: React.PropTypes.object.isRequired,
       audio: React.PropTypes.object.isRequired,
+      screenShare: React.PropTypes.object,
       hangup: React.PropTypes.func.isRequired,
-      publishStream: React.PropTypes.func.isRequired
+      publishStream: React.PropTypes.func.isRequired,
+      hangupButtonLabel: React.PropTypes.string,
+      enableHangup: React.PropTypes.bool,
     },
 
     handleClickHangup: function() {
@@ -175,72 +215,121 @@ loop.shared.views = (function(_, OT, l10n) {
       this.props.publishStream("audio", !this.props.audio.enabled);
     },
 
+    _getHangupButtonLabel: function() {
+      return this.props.hangupButtonLabel || l10n.get("hangup_button_caption2");
+    },
+
     render: function() {
       return (
-        <ul className="controls">
-          <li><button className="btn btn-hangup"
-                      onClick={this.handleClickHangup}
-                      title={__("hangup_button_title")}></button></li>
-          <li><MediaControlButton action={this.handleToggleVideo}
-                                  enabled={this.props.video.enabled}
-                                  scope="local" type="video" /></li>
-          <li><MediaControlButton action={this.handleToggleAudio}
-                                  enabled={this.props.audio.enabled}
-                                  scope="local" type="audio" /></li>
+        <ul className="conversation-toolbar">
+          <li className="conversation-toolbar-btn-box btn-hangup-entry">
+            <button className="btn btn-hangup" onClick={this.handleClickHangup}
+                    title={l10n.get("hangup_button_title")}
+                    disabled={!this.props.enableHangup}>
+              {this._getHangupButtonLabel()}
+            </button>
+          </li>
+          <li className="conversation-toolbar-btn-box">
+            <MediaControlButton action={this.handleToggleVideo}
+                                enabled={this.props.video.enabled}
+                                visible={this.props.video.visible}
+                                scope="local" type="video" />
+          </li>
+          <li className="conversation-toolbar-btn-box">
+            <MediaControlButton action={this.handleToggleAudio}
+                                enabled={this.props.audio.enabled}
+                                visible={this.props.audio.visible}
+                                scope="local" type="audio" />
+          </li>
+          <li className="conversation-toolbar-btn-box btn-screen-share-entry">
+            <ScreenShareControlButton dispatcher={this.props.dispatcher}
+                                      visible={this.props.screenShare.visible}
+                                      state={this.props.screenShare.state} />
+          </li>
         </ul>
       );
     }
   });
 
+  /**
+   * Conversation view.
+   */
   var ConversationView = React.createClass({
-    mixins: [Backbone.Events],
+    mixins: [
+      Backbone.Events,
+      sharedMixins.AudioMixin,
+      sharedMixins.MediaSetupMixin
+    ],
 
     propTypes: {
       sdk: React.PropTypes.object.isRequired,
-      model: React.PropTypes.object.isRequired
+      video: React.PropTypes.object,
+      audio: React.PropTypes.object,
+      initiate: React.PropTypes.bool,
+      isDesktop: React.PropTypes.bool
     },
 
-    // height set to "auto" to fix video layout on Google Chrome
-    // @see https://bugzilla.mozilla.org/show_bug.cgi?id=991122
-    publisherConfig: {
-      width: "100%",
-      height: "auto",
-      style: {
-        bugDisplayMode: "off",
-        buttonDisplayMode: "off",
-        nameDisplayMode: "off"
-      }
+    getDefaultProps: function() {
+      return {
+        initiate: true,
+        isDesktop: false,
+        video: {enabled: true, visible: true},
+        audio: {enabled: true, visible: true}
+      };
     },
 
     getInitialState: function() {
       return {
-        video: {enabled: false},
-        audio: {enabled: false}
+        video: this.props.video,
+        audio: this.props.audio
       };
     },
 
     componentDidMount: function() {
-      this.props.model.startSession();
-    },
+      if (this.props.initiate) {
+        /**
+         * XXX This is a workaround for desktop machines that do not have a
+         * camera installed. As we don't yet have device enumeration, when
+         * we do, this can be removed (bug 1138851), and the sdk should handle it.
+         */
+        if (this.props.isDesktop &&
+            !window.MediaStreamTrack.getSources) {
+          // If there's no getSources function, the sdk defines its own and caches
+          // the result. So here we define the "normal" one which doesn't get cached, so
+          // we can change it later.
+          window.MediaStreamTrack.getSources = function(callback) {
+            callback([{kind: "audio"}, {kind: "video"}]);
+          };
+        }
 
-    componentWillMount: function() {
-      this.listenTo(this.props.model, "session:connected",
-                                      this.startPublishing);
-      this.listenTo(this.props.model, "session:stream-created",
-                                      this._streamCreated);
-      this.listenTo(this.props.model, ["session:peer-hungup",
-                                       "session:network-disconnected",
-                                       "session:ended"].join(" "),
-                                       this.stopPublishing);
+        this.listenTo(this.props.sdk, "exception", this._handleSdkException.bind(this));
+
+        this.listenTo(this.props.model, "session:connected",
+                                        this._onSessionConnected);
+        this.listenTo(this.props.model, "session:stream-created",
+                                        this._streamCreated);
+        this.listenTo(this.props.model, ["session:peer-hungup",
+                                         "session:network-disconnected",
+                                         "session:ended"].join(" "),
+                                         this.stopPublishing);
+        this.props.model.startSession();
+      }
     },
 
     componentWillUnmount: function() {
+      // Unregister all local event listeners
+      this.stopListening();
       this.hangup();
     },
 
     hangup: function() {
       this.stopPublishing();
       this.props.model.endSession();
+    },
+
+    _onSessionConnected: function(event) {
+      this.startPublishing(event);
+      this.play("connected");
     },
 
     /**
@@ -254,14 +343,40 @@ loop.shared.views = (function(_, OT, l10n) {
      * @param  {StreamEvent} event
      */
     _streamCreated: function(event) {
-      var incoming = this.getDOMNode().querySelector(".incoming");
-      event.streams.forEach(function(stream) {
-        if (stream.connection.connectionId !==
-            this.props.model.session.connection.connectionId) {
-          this.props.model.session.subscribe(stream, incoming,
-                                             this.publisherConfig);
-        }
-      }, this);
+      var incoming = this.getDOMNode().querySelector(".remote");
+      this.props.model.subscribe(event.stream, incoming,
+        this.getDefaultPublisherConfig({
+          publishVideo: this.props.video.enabled
+        }));
+    },
+
+    /**
+     * Handles the SDK Exception event.
+     *
+     * https://tokbox.com/opentok/libraries/client/js/reference/ExceptionEvent.html
+     *
+     * @param {ExceptionEvent} event
+     */
+    _handleSdkException: function(event) {
+      /**
+       * XXX This is a workaround for desktop machines that do not have a
+       * camera installed. As we don't yet have device enumeration, when
+       * we do, this can be removed (bug 1138851), and the sdk should handle it.
+       */
+      if (this.publisher &&
+          event.code === OT.ExceptionCodes.UNABLE_TO_PUBLISH &&
+          event.message === "GetUserMedia" &&
+          this.state.video.enabled) {
+        this.state.video.enabled = false;
+
+        window.MediaStreamTrack.getSources = function(callback) {
+          callback([{kind: "audio"}]);
+        };
+
+        this.stopListening(this.publisher);
+        this.publisher.destroy();
+        this.startPublishing();
+      }
     },
 
     /**
@@ -272,34 +387,33 @@ loop.shared.views = (function(_, OT, l10n) {
      * @param  {SessionConnectEvent} event
      */
     startPublishing: function(event) {
-      var outgoing = this.getDOMNode().querySelector(".outgoing");
+      var outgoing = this.getDOMNode().querySelector(".local");
 
       // XXX move this into its StreamingVideo component?
       this.publisher = this.props.sdk.initPublisher(
-        outgoing, this.publisherConfig);
+        outgoing, this.getDefaultPublisherConfig({publishVideo: this.props.video.enabled}));
 
       // Suppress OT GuM custom dialog, see bug 1018875
-      function preventOpeningAccessDialog(event) {
-        event.preventDefault();
-      }
-      this.publisher.on("accessDialogOpened", preventOpeningAccessDialog);
-      this.publisher.on("accessDenied", preventOpeningAccessDialog);
+      this.listenTo(this.publisher, "accessDialogOpened accessDenied",
+                    function(event) {
+                      event.preventDefault();
+                    });
 
-      this.publisher.on("streamCreated", function(event) {
+      this.listenTo(this.publisher, "streamCreated", function(event) {
         this.setState({
           audio: {enabled: event.stream.hasAudio},
           video: {enabled: event.stream.hasVideo}
         });
       }.bind(this));
 
-      this.publisher.on("streamDestroyed", function() {
+      this.listenTo(this.publisher, "streamDestroyed", function() {
         this.setState({
           audio: {enabled: false},
           video: {enabled: false}
         });
       }.bind(this));
 
-      this.props.model.session.publish(this.publisher);
+      this.props.model.publish(this.publisher);
     },
 
     /**
@@ -322,23 +436,68 @@ loop.shared.views = (function(_, OT, l10n) {
      * Unpublishes local stream.
      */
     stopPublishing: function() {
-      // Unregister access OT GuM custom dialog listeners, see bug 1018875
-      this.publisher.off("accessDialogOpened");
-      this.publisher.off("accessDenied");
+      if (this.publisher) {
+        // Unregister listeners for publisher events
+        this.stopListening(this.publisher);
 
-      this.props.model.session.unpublish(this.publisher);
+        this.props.model.session.unpublish(this.publisher);
+      }
     },
 
     render: function() {
+      var localStreamClasses = React.addons.classSet({
+        local: true,
+        "local-stream": true,
+        "local-stream-audio": !this.state.video.enabled
+      });
+      /* jshint ignore:start */
       return (
-        <div className="conversation">
-          <ConversationToolbar video={this.state.video}
-                               audio={this.state.audio}
-                               publishStream={this.publishStream}
-                               hangup={this.hangup} />
-          <div className="media nested">
-            <div className="remote"><div className="incoming"></div></div>
-            <div className="local"><div className="outgoing"></div></div>
+        <div className="video-layout-wrapper">
+          <div className="conversation in-call">
+            <div className="media nested">
+              <div className="video_wrapper remote_wrapper">
+                <div className="video_inner remote focus-stream"></div>
+              </div>
+              <div className={localStreamClasses}></div>
+            </div>
+            <ConversationToolbar video={this.state.video}
+                                 audio={this.state.audio}
+                                 publishStream={this.publishStream}
+                                 hangup={this.hangup} />
+          </div>
+        </div>
+      );
+      /* jshint ignore:end */
+    }
+  });
+
+  /**
+   * Notification view.
+   */
+  var NotificationView = React.createClass({
+    mixins: [Backbone.Events],
+
+    propTypes: {
+      notification: React.PropTypes.object.isRequired,
+      key: React.PropTypes.number.isRequired
+    },
+
+    render: function() {
+      var notification = this.props.notification;
+      return (
+        <div className="notificationContainer">
+          <div key={this.props.key}
+               className={"alert alert-" + notification.get("level")}>
+            <span className="message">{notification.get("message")}</span>
+          </div>
+          <div className={"detailsBar details-" + notification.get("level")}
+               hidden={!notification.get("details")}>
+            <button className="detailsButton btn-info"
+                    onClick={notification.get("detailsButtonCallback")}
+                    hidden={!notification.get("detailsButtonLabel") || !notification.get("detailsButtonCallback")}>
+              {notification.get("detailsButtonLabel")}
+            </button>
+            <span className="details">{notification.get("details")}</span>
           </div>
         </div>
       );
@@ -346,175 +505,125 @@ loop.shared.views = (function(_, OT, l10n) {
   });
 
   /**
-   * Notification view.
-   */
-  var NotificationView = BaseView.extend({
-    template: _.template([
-      '<div class="alert alert-<%- level %>">',
-      '  <button class="close"></button>',
-      '  <p class="message"><%- message %></p>',
-      '</div>'
-    ].join("")),
-
-    events: {
-      "click .close": "dismiss"
-    },
-
-    dismiss: function(event) {
-      event.preventDefault();
-      this.$el.addClass("fade-out");
-      setTimeout(function() {
-        this.collection.remove(this.model);
-        this.remove();
-      }.bind(this), 500); // XXX make timeout value configurable
-    },
-
-    render: function() {
-      this.$el.html(this.template(this.model.toJSON()));
-      return this;
-    }
-  });
-
-  /**
    * Notification list view.
    */
-  var NotificationListView = Backbone.View.extend({
+  var NotificationListView = React.createClass({
+    mixins: [Backbone.Events, sharedMixins.DocumentVisibilityMixin],
+
+    propTypes: {
+      notifications: React.PropTypes.object.isRequired,
+      clearOnDocumentHidden: React.PropTypes.bool
+    },
+
+    getDefaultProps: function() {
+      return {clearOnDocumentHidden: false};
+    },
+
+    componentDidMount: function() {
+      this.listenTo(this.props.notifications, "reset add remove", function() {
+        this.forceUpdate();
+      }.bind(this));
+    },
+
+    componentWillUnmount: function() {
+      this.stopListening(this.props.notifications);
+    },
+
     /**
-     * Constructor.
-     *
-     * Available options:
-     * - {loop.shared.models.NotificationCollection} collection Notifications
-     *                                                          collection
-     *
-     * @param  {Object} options Options object
+     * Provided by DocumentVisibilityMixin. Clears notifications stack when the
+     * current document is hidden if the clearOnDocumentHidden prop is set to
+     * true and the collection isn't empty.
      */
-    initialize: function(options) {
-      options = options || {};
-      if (!options.collection) {
-        this.collection = new sharedModels.NotificationCollection();
+    onDocumentHidden: function() {
+      if (this.props.clearOnDocumentHidden &&
+          this.props.notifications.length > 0) {
+        // Note: The `silent` option prevents the `reset` event to be triggered
+        // here, preventing the UI to "jump" a little because of the event
+        // callback being processed in another tick (I think).
+        this.props.notifications.reset([], {silent: true});
+        this.forceUpdate();
       }
-      this.listenTo(this.collection, "reset add remove", this.render);
     },
 
-    /**
-     * Clears the notification stack.
-     */
-    clear: function() {
-      this.collection.reset();
-    },
-
-    /**
-     * Adds a new notification to the stack, triggering rendering of it.
-     *
-     * @param  {Object|NotificationModel} notification Notification data.
-     */
-    notify: function(notification) {
-      this.collection.add(notification);
-    },
-
-    /**
-     * Adds a new notification to the stack using an l10n message identifier,
-     * triggering rendering of it.
-     *
-     * @param  {String} messageId L10n message id
-     * @param  {String} level     Notification level
-     */
-    notifyL10n: function(messageId, level) {
-      this.notify({
-        message: l10n.get(messageId),
-        level: level
-      });
-    },
-
-    /**
-     * Adds a warning notification to the stack and renders it.
-     *
-     * @return {String} message
-     */
-    warn: function(message) {
-      this.notify({level: "warning", message: message});
-    },
-
-    /**
-     * Adds a l10n warning notification to the stack and renders it.
-     *
-     * @param  {String} messageId L10n message id
-     */
-    warnL10n: function(messageId) {
-      this.warn(l10n.get(messageId));
-    },
-
-    /**
-     * Adds an error notification to the stack and renders it.
-     *
-     * @return {String} message
-     */
-    error: function(message) {
-      this.notify({level: "error", message: message});
-    },
-
-    /**
-     * Adds a l10n rror notification to the stack and renders it.
-     *
-     * @param  {String} messageId L10n message id
-     */
-    errorL10n: function(messageId) {
-      this.error(l10n.get(messageId));
-    },
-
-    /**
-     * Renders this view.
-     *
-     * @return {loop.shared.views.NotificationListView}
-     */
     render: function() {
-      this.$el.html(this.collection.map(function(notification) {
-        return new NotificationView({
-          model: notification,
-          collection: this.collection
-        }).render().$el;
-      }.bind(this)));
-      return this;
+      return (
+        <div className="messages">{
+          this.props.notifications.map(function(notification, key) {
+            return <NotificationView key={key} notification={notification}/>;
+          })
+        }
+        </div>
+      );
     }
   });
 
-  /**
-   * Unsupported Browsers view.
-   */
-  var UnsupportedBrowserView = BaseView.extend({
-    template: _.template([
-      '<div>',
-      '  <h2 data-l10n-id="incompatible_browser"></h2>',
-      '  <p data-l10n-id="powered_by_webrtc"></p>',
-      '  <p data-l10n-id="use_latest_firefox" ',
-      '    data-l10n-args=\'{"ff_url": "https://www.mozilla.org/firefox/"}\'>',
-      '  </p>',
-      '</div>'
-    ].join(""))
+  var Button = React.createClass({
+    propTypes: {
+      caption: React.PropTypes.string.isRequired,
+      onClick: React.PropTypes.func.isRequired,
+      disabled: React.PropTypes.bool,
+      additionalClass: React.PropTypes.string,
+      htmlId: React.PropTypes.string,
+    },
+
+    getDefaultProps: function() {
+      return {
+        disabled: false,
+        additionalClass: "",
+        htmlId: "",
+      };
+    },
+
+    render: function() {
+      var cx = React.addons.classSet;
+      var classObject = { button: true, disabled: this.props.disabled };
+      if (this.props.additionalClass) {
+        classObject[this.props.additionalClass] = true;
+      }
+      return (
+        <button onClick={this.props.onClick}
+                disabled={this.props.disabled}
+                id={this.props.htmlId}
+                className={cx(classObject)}>
+          <span className="button-caption">{this.props.caption}</span>
+          {this.props.children}
+        </button>
+      );
+    }
   });
 
-  /**
-   * Unsupported Browsers view.
-   */
-  var UnsupportedDeviceView = BaseView.extend({
-    template: _.template([
-      '<div>',
-      '  <h2 data-l10n-id="incompatible_device"></h2>',
-      '  <p data-l10n-id="sorry_device_unsupported"></p>',
-      '  <p data-l10n-id="use_firefox_windows_mac_linux"></p>',
-      '</div>'
-    ].join(""))
+  var ButtonGroup = React.createClass({
+    PropTypes: {
+      additionalClass: React.PropTypes.string
+    },
+
+    getDefaultProps: function() {
+      return {
+        additionalClass: "",
+      };
+    },
+
+    render: function() {
+      var cx = React.addons.classSet;
+      var classObject = { "button-group": true };
+      if (this.props.additionalClass) {
+        classObject[this.props.additionalClass] = true;
+      }
+      return (
+        <div className={cx(classObject)}>
+          {this.props.children}
+        </div>
+      );
+    }
   });
 
   return {
-    L10nView: L10nView,
-    BaseView: BaseView,
+    Button: Button,
+    ButtonGroup: ButtonGroup,
     ConversationView: ConversationView,
     ConversationToolbar: ConversationToolbar,
     MediaControlButton: MediaControlButton,
-    NotificationListView: NotificationListView,
-    NotificationView: NotificationView,
-    UnsupportedBrowserView: UnsupportedBrowserView,
-    UnsupportedDeviceView: UnsupportedDeviceView
+    ScreenShareControlButton: ScreenShareControlButton,
+    NotificationListView: NotificationListView
   };
-})(_, window.OT, document.webL10n || document.mozL10n);
+})(_, navigator.mozL10n || document.mozL10n);

@@ -77,14 +77,14 @@ GSETTINGS_FUNCTIONS
 
 static PRLibrary *gioLib = nullptr;
 
-class nsGSettingsCollection MOZ_FINAL : public nsIGSettingsCollection
+class nsGSettingsCollection final : public nsIGSettingsCollection
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIGSETTINGSCOLLECTION
 
-  nsGSettingsCollection(GSettings* aSettings) : mSettings(aSettings),
-                                                mKeys(nullptr) {}
+  explicit nsGSettingsCollection(GSettings* aSettings) : mSettings(aSettings),
+                                                         mKeys(nullptr) {}
 private:
   ~nsGSettingsCollection();
 

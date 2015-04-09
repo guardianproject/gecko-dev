@@ -9,20 +9,22 @@
 
 #include "mozilla/dom/FileSystemTaskBase.h"
 #include "nsAutoPtr.h"
+#include "mozilla/ErrorResult.h"
 
 namespace mozilla {
 namespace dom {
 
-class DOMFileImpl;
+class FileImpl;
 
-class GetFileOrDirectoryTask MOZ_FINAL
+class GetFileOrDirectoryTask final
   : public FileSystemTaskBase
 {
 public:
   // If aDirectoryOnly is set, we should ensure that the target is a directory.
   GetFileOrDirectoryTask(FileSystemBase* aFileSystem,
                          const nsAString& aTargetPath,
-                         bool aDirectoryOnly);
+                         bool aDirectoryOnly,
+                         ErrorResult& aRv);
   GetFileOrDirectoryTask(FileSystemBase* aFileSystem,
                          const FileSystemGetFileOrDirectoryParams& aParam,
                          FileSystemRequestParent* aParent);
@@ -34,22 +36,22 @@ public:
   GetPromise();
 
   virtual void
-  GetPermissionAccessType(nsCString& aAccess) const MOZ_OVERRIDE;
+  GetPermissionAccessType(nsCString& aAccess) const override;
 protected:
   virtual FileSystemParams
-  GetRequestParams(const nsString& aFileSystem) const MOZ_OVERRIDE;
+  GetRequestParams(const nsString& aFileSystem) const override;
 
   virtual FileSystemResponseValue
-  GetSuccessRequestResult() const MOZ_OVERRIDE;
+  GetSuccessRequestResult() const override;
 
   virtual void
-  SetSuccessRequestResult(const FileSystemResponseValue& aValue) MOZ_OVERRIDE;
+  SetSuccessRequestResult(const FileSystemResponseValue& aValue) override;
 
   virtual nsresult
-  Work() MOZ_OVERRIDE;
+  Work() override;
 
   virtual void
-  HandlerCallback() MOZ_OVERRIDE;
+  HandlerCallback() override;
 
 private:
   nsRefPtr<Promise> mPromise;
@@ -57,9 +59,9 @@ private:
   // Whether we get a directory.
   bool mIsDirectory;
 
-  // This cannot be a DOMFile bacause this object is created on a different
-  // thread and DOMFile is not thread-safe. Let's use the DOMFileImpl instead.
-  nsRefPtr<DOMFileImpl> mTargetFileImpl;
+  // This cannot be a File bacause this object is created on a different
+  // thread and File is not thread-safe. Let's use the FileImpl instead.
+  nsRefPtr<FileImpl> mTargetFileImpl;
 };
 
 } // namespace dom

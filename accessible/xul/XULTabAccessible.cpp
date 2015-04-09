@@ -11,7 +11,6 @@
 #include "States.h"
 
 // NOTE: alphabetically ordered
-#include "nsIAccessibleRelation.h"
 #include "nsIDocument.h"
 #include "nsIDOMXULSelectCntrlEl.h"
 #include "nsIDOMXULSelectCntrlItemEl.h"
@@ -30,7 +29,7 @@ XULTabAccessible::
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// XULTabAccessible: nsIAccessible
+// XULTabAccessible: Accessible
 
 uint8_t
 XULTabAccessible::ActionCount()
@@ -38,31 +37,24 @@ XULTabAccessible::ActionCount()
   return 1;
 }
 
-/** Return the name of our only action  */
-NS_IMETHODIMP
-XULTabAccessible::GetActionName(uint8_t aIndex, nsAString& aName)
+void
+XULTabAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName)
 {
-  if (aIndex == eAction_Switch) {
-    aName.AssignLiteral("switch"); 
-    return NS_OK;
-  }
-  return NS_ERROR_INVALID_ARG;
+  if (aIndex == eAction_Switch)
+    aName.AssignLiteral("switch");
 }
 
-/** Tell the tab to do its action */
-NS_IMETHODIMP
+bool
 XULTabAccessible::DoAction(uint8_t index)
 {
   if (index == eAction_Switch) {
     nsCOMPtr<nsIDOMXULElement> tab(do_QueryInterface(mContent));
-    if ( tab )
-    {
+    if (tab) {
       tab->Click();
-      return NS_OK;
+      return true;
     }
-    return NS_ERROR_FAILURE;
   }
-  return NS_ERROR_INVALID_ARG;
+  return false;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -105,7 +97,6 @@ XULTabAccessible::NativeInteractiveState() const
   return (state & states::UNAVAILABLE) ? state : state | states::SELECTABLE;
 }
 
-// nsIAccessible
 Relation
 XULTabAccessible::RelationByType(RelationType aType)
 {

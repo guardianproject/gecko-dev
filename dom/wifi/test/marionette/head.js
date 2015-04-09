@@ -1,7 +1,15 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-let Promise = SpecialPowers.Cu.import('resource://gre/modules/Promise.jsm').Promise;
+// Emulate Promise.jsm semantics.
+Promise.defer = function() { return new Deferred(); }
+function Deferred()  {
+  this.promise = new Promise(function(resolve, reject) {
+    this.resolve = resolve;
+    this.reject = reject;
+  }.bind(this));
+  Object.freeze(this);
+}
 
 const STOCK_HOSTAPD_NAME = 'goldfish-hostapd';
 const HOSTAPD_CONFIG_PATH = '/data/misc/wifi/remote-hostapd/';
@@ -209,6 +217,8 @@ let gTestSuite = (function() {
     let permissions = [{ 'type': 'wifi-manage', 'allow': 1, 'context': window.document },
                        { 'type': 'settings-write', 'allow': 1, 'context': window.document },
                        { 'type': 'settings-read', 'allow': 1, 'context': window.document },
+                       { 'type': 'settings-api-write', 'allow': 1, 'context': window.document },
+                       { 'type': 'settings-api-read', 'allow': 1, 'context': window.document },
                        { 'type': 'mobileconnection', 'allow': 1, 'context': window.document }];
 
     SpecialPowers.pushPermissions(permissions, function() {
@@ -258,29 +268,39 @@ let gTestSuite = (function() {
    *
    * @return a resolved promise or deferred promise.
    */
-  function ensureWifiEnabled(aEnabled) {
+  function ensureWifiEnabled(aEnabled, useAPI) {
     if (wifiManager.enabled === aEnabled) {
       log('Already ' + (aEnabled ? 'enabled' : 'disabled'));
       return Promise.resolve();
     }
-    return requestWifiEnabled(aEnabled);
+    return requestWifiEnabled(aEnabled, useAPI);
   }
 
   /**
    * Issue a request to enable/disable wifi.
    *
-   * For current design, this function will attempt to enable/disable wifi by
-   * writing 'wifi.enabled' regardless of the wifi state.
+   * This function will attempt to enable/disable wifi, by calling API or by
+   * writing settings 'wifi.enabled' regardless of the wifi state, based on the
+   * value of |userAPI| parameter.
+   * Default is using settings.
+   *
+   * Note there's a limitation of co-existance of both method, per bug 930355,
+   * that once enable/disable wifi by API, the settings method won't work until
+   * reboot. So the test of wifi enable API should be executed last.
+   * TODO: Remove settings method after enable/disable wifi by settings is
+   *       removed after bug 1050147.
    *
    * Fulfill params: (none)
    * Reject params: (none)
    *
    * @return A deferred promise.
    */
-  function requestWifiEnabled(aEnabled) {
+  function requestWifiEnabled(aEnabled, useAPI) {
     return Promise.all([
       waitForWifiManagerEventOnce(aEnabled ? 'enabled' : 'disabled'),
-      setSettings({ 'wifi.enabled': aEnabled }),
+      useAPI ?
+        wrapDomRequestAsPromise(wifiManager.setWifiEnabled(aEnabled)) :
+        setSettings({ 'wifi.enabled': aEnabled }),
     ]);
   }
 
@@ -431,6 +451,57 @@ let gTestSuite = (function() {
   }
 
   /**
+   * Import a certificate with nickname and password.
+   *
+   * Resolve when we import certificate successfully; reject when any error
+   * occurs.
+   *
+   * Fulfill params: An object of certificate information.
+   * Reject params: (none)
+   *
+   * @return A deferred promise.
+   */
+  function importCert(certBlob, password, nickname) {
+    let request = wifiManager.importCert(certBlob, password, nickname);
+    return wrapDomRequestAsPromise(request)
+      .then(event => event.target.result);
+  }
+
+  /**
+   * Delete certificate of nickname.
+   *
+   * Resolve when we delete certificate successfully; reject when any error
+   * occurs.
+   *
+   * Fulfill params: (none)
+   * Reject params: (none)
+   *
+   * @return A deferred promise.
+   */
+  function deleteCert(nickname) {
+    let request = wifiManager.deleteCert(nickname);
+    return wrapDomRequestAsPromise(request)
+      .then(event => event.target.result);
+  }
+
+  /**
+   * Get list of imported certificates.
+   *
+   * Resolve when we get certificate list successfully; reject when any error
+   * occurs.
+   *
+   * Fulfill params: Nickname of imported certificate arranged by usage.
+   * Reject params: (none)
+   *
+   * @return A deferred promise.
+   */
+  function getImportedCerts() {
+    let request = wifiManager.getImportedCerts();
+    return wrapDomRequestAsPromise(request)
+      .then(event => event.target.result);
+  }
+
+  /**
    * Request wifi scan and verify the scan result as well.
    *
    * Issue a wifi scan request and check if the result is expected.
@@ -572,14 +643,20 @@ let gTestSuite = (function() {
    *
    * @return A deferred promise.
    */
-  function setSettings(aSettings, aAllowError) {
-    let request = window.navigator.mozSettings.createLock().set(aSettings);
-    return wrapDomRequestAsPromise(request)
-      .then(function resolve() {
+  function setSettings(aSettings) {
+    let lock = window.navigator.mozSettings.createLock();
+    let request = lock.set(aSettings);
+    let deferred = Promise.defer();
+    lock.onsettingstransactionsuccess = function () {
         ok(true, "setSettings(" + JSON.stringify(aSettings) + ")");
-      }, function reject() {
-        ok(aAllowError, "setSettings(" + JSON.stringify(aSettings) + ")");
-      });
+      deferred.resolve();
+    };
+    lock.onsettingstransactionfailure = function (aEvent) {
+      ok(false, "setSettings(" + JSON.stringify(aSettings) + ")");
+      deferred.reject();
+      throw aEvent.target.error;
+    };
+    return deferred.promise;
   }
 
   /**
@@ -758,10 +835,21 @@ let gTestSuite = (function() {
    * @return A deferred promise.
    */
   function writeFile(aFilePath, aContent) {
-    if (-1 === aContent.indexOf(' ')) {
-      aContent = '"' + aContent + '"';
+    const CONTENT_MAX_LENGTH = 900;
+    var commands = [];
+    for (var i = 0; i < aContent.length; i += CONTENT_MAX_LENGTH) {
+      var content = aContent.substr(i, CONTENT_MAX_LENGTH);
+      if (-1 === content.indexOf(' ')) {
+        content = '"' + content + '"';
+      }
+      commands.push(['echo', '-n', content, i === 0 ? '>' : '>>', aFilePath]);
     }
-    return runEmulatorShellSafe(['echo', aContent, '>', aFilePath]);
+
+    let chain = Promise.resolve();
+    commands.forEach(function (command) {
+      chain = chain.then(() => runEmulatorShellSafe(command));
+    });
+    return chain;
   }
 
   /**
@@ -1162,6 +1250,10 @@ let gTestSuite = (function() {
   suite.waitForTimeout = waitForTimeout;
   suite.waitForRilDataConnected = waitForRilDataConnected;
   suite.requestTetheringEnabled = requestTetheringEnabled;
+  suite.importCert = importCert;
+  suite.getImportedCerts = getImportedCerts;
+  suite.deleteCert = deleteCert;
+  suite.writeFile = writeFile;
 
   /**
    * Common test routine.
@@ -1259,6 +1351,62 @@ let gTestSuite = (function() {
           return restoreToInitialState()
             .then(() => { throw aReason; }); // Re-throw the orignal reject reason.
         });
+    });
+  };
+
+  /**
+   * Run test with imported certificate.
+   *
+   * Certificate will be imported and confirmed before running test, and be
+   * deleted after running test.
+   *
+   * Fulfill params: (none)
+   *
+   * @param certBlob
+   *        Certificate content as Blob.
+   * @param password
+   *        Password for importing certificate, only used for importing PKCS#12.
+   * @param nickanem
+   *        Nickname for imported certificate.
+   * @param usage
+   *        Expected usage of imported certificate.
+   * @param aTestCaseChain
+   *        The test case entry point, which can be a function or a promise.
+   *
+   * @return A deferred promise.
+   */
+  suite.doTestWithCertificate = function(certBlob, password, nickname, usage, aTestCaseChain) {
+    return suite.doTestWithoutStockAp(function() {
+      return ensureWifiEnabled(true)
+      // Import test certificate.
+      .then(() => importCert(certBlob, password, nickname))
+      .then(function(info) {
+        // Check import result.
+        is(info.nickname, nickname, "Imported nickname");
+        for (let i = 0; i < usage.length; i++) {
+          isnot(info.usage.indexOf(usage[i]), -1, "Usage " + usage[i]);
+        }
+      })
+      // Get imported certificate list.
+      .then(getImportedCerts)
+      // Check if certificate exists in imported certificate list.
+      .then(function(list) {
+        for (let i = 0; i < usage.length; i++) {
+          isnot(list[usage[i]].indexOf(nickname), -1,
+                "Certificate \"" + nickname + "\" of usage " + usage[i] + " is imported");
+        }
+      })
+      // Run test case.
+      .then(aTestCaseChain)
+      // Delete imported certificates.
+      .then(() => deleteCert(nickname))
+      // Check if certificate doesn't exist in imported certificate list.
+      .then(getImportedCerts)
+      .then(function(list) {
+        for (let i = 0; i < usage.length; i++) {
+          is(list[usage[i]].indexOf(nickname), -1, "Certificate is deleted");
+        }
+      })
     });
   };
 

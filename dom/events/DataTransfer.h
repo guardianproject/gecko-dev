@@ -16,8 +16,8 @@
 #include "nsCycleCollectionParticipant.h"
 
 #include "nsAutoPtr.h"
-#include "nsDOMFile.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/dom/File.h"
 
 class nsINode;
 class nsITransferable;
@@ -51,8 +51,8 @@ struct TransferItem {
 { 0x43ee0327, 0xde5d, 0x463d, \
   { 0x9b, 0xd0, 0xf1, 0x79, 0x09, 0x69, 0xf2, 0xfb } }
 
-class DataTransfer MOZ_FINAL : public nsIDOMDataTransfer,
-                               public nsWrapperCache
+class DataTransfer final : public nsIDOMDataTransfer,
+                           public nsWrapperCache
 {
 public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_DATATRANSFER_IID)
@@ -104,7 +104,7 @@ public:
   DataTransfer(nsISupports* aParent, uint32_t aEventType, bool aIsExternal,
                int32_t aClipboardType);
 
-  virtual JSObject* WrapObject(JSContext* aCx);
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
   nsISupports* GetParentObject()
   {
     return mParent;
@@ -143,7 +143,7 @@ public:
                ErrorResult& aRv);
   void ClearData(const mozilla::dom::Optional<nsAString>& aFormat,
                  mozilla::ErrorResult& aRv);
-  nsDOMFileList* GetFiles(mozilla::ErrorResult& aRv);
+  FileList* GetFiles(mozilla::ErrorResult& aRv);
   void AddElement(Element& aElement, mozilla::ErrorResult& aRv);
   uint32_t MozItemCount()
   {
@@ -278,7 +278,7 @@ protected:
   nsTArray<nsTArray<TransferItem> > mItems;
 
   // array of files, containing only the files present in the dataTransfer
-  nsRefPtr<nsDOMFileList> mFiles;
+  nsRefPtr<FileList> mFiles;
 
   // the target of the drag. The drag and dragend events will fire at this.
   nsCOMPtr<mozilla::dom::Element> mDragTarget;

@@ -21,10 +21,6 @@
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 
 namespace mozilla {
-namespace gl{
-class SurfaceStream;
-}
-
 namespace layers {
 
 class CanvasClientWebGL;
@@ -37,11 +33,14 @@ class CopyableCanvasLayer : public CanvasLayer
 {
 public:
   CopyableCanvasLayer(LayerManager* aLayerManager, void *aImplData);
+
+protected:
   virtual ~CopyableCanvasLayer();
 
-  virtual void Initialize(const Data& aData);
+public:
+  virtual void Initialize(const Data& aData) override;
 
-  virtual bool IsDataValid(const Data& aData);
+  virtual bool IsDataValid(const Data& aData) override;
 
   bool IsGLLayer() { return !!mGLContext; }
 
@@ -50,14 +49,13 @@ protected:
 
   RefPtr<gfx::SourceSurface> mSurface;
   nsRefPtr<gl::GLContext> mGLContext;
+  GLuint mCanvasFrontbufferTexID;
   mozilla::RefPtr<mozilla::gfx::DrawTarget> mDrawTarget;
 
-  RefPtr<gl::SurfaceStream> mStream;
-
-  uint32_t mCanvasFramebuffer;
+  UniquePtr<gl::SharedSurface> mGLFrontbuffer;
 
   bool mIsAlphaPremultiplied;
-  bool mNeedsYFlip;
+  gl::OriginPos mOriginPos;
 
   RefPtr<gfx::DataSourceSurface> mCachedTempSurface;
 

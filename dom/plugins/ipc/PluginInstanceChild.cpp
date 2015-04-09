@@ -113,19 +113,26 @@ CreateDrawTargetForSurface(gfxASurface *aSurface)
   }
   RefPtr<DrawTarget> drawTarget =
     Factory::CreateDrawTargetForCairoSurface(aSurface->CairoSurface(),
-                                             ToIntSize(gfxIntSize(aSurface->GetSize())),
+                                             aSurface->GetSize(),
                                              &format);
   aSurface->SetData(&kDrawTarget, drawTarget, nullptr);
   return drawTarget;
 }
 
-PluginInstanceChild::PluginInstanceChild(const NPPluginFuncs* aPluginIface)
+PluginInstanceChild::PluginInstanceChild(const NPPluginFuncs* aPluginIface,
+                                         const nsCString& aMimeType,
+                                         const uint16_t& aMode,
+                                         const InfallibleTArray<nsCString>& aNames,
+                                         const InfallibleTArray<nsCString>& aValues)
     : mPluginIface(aPluginIface)
+    , mMimeType(aMimeType)
+    , mMode(aMode)
+    , mNames(aNames)
+    , mValues(aValues)
 #if defined(XP_MACOSX)
     , mContentsScaleFactor(1.0)
 #endif
     , mDrawingModel(kDefaultDrawingModel)
-    , mCurrentAsyncSurface(0)
     , mAsyncInvalidateMutex("PluginInstanceChild::mAsyncInvalidateMutex")
     , mAsyncInvalidateTask(0)
     , mCachedWindowActor(nullptr)
@@ -166,6 +173,7 @@ PluginInstanceChild::PluginInstanceChild(const NPPluginFuncs* aPluginIface)
     , mDoAlphaExtraction(false)
     , mHasPainted(false)
     , mSurfaceDifferenceRect(0,0,0,0)
+    , mDestroyed(false)
 {
     memset(&mWindow, 0, sizeof(mWindow));
     mWindow.type = NPWindowTypeWindow;
@@ -210,10 +218,58 @@ PluginInstanceChild::~PluginInstanceChild()
 #endif
 }
 
+NPError
+PluginInstanceChild::DoNPP_New()
+{
+    // unpack the arguments into a C format
+    int argc = mNames.Length();
+    NS_ASSERTION(argc == (int) mValues.Length(),
+                 "argn.length != argv.length");
+
+    nsAutoArrayPtr<char*> argn(new char*[1 + argc]);
+    nsAutoArrayPtr<char*> argv(new char*[1 + argc]);
+    argn[argc] = 0;
+    argv[argc] = 0;
+
+    for (int i = 0; i < argc; ++i) {
+        argn[i] = const_cast<char*>(NullableStringGet(mNames[i]));
+        argv[i] = const_cast<char*>(NullableStringGet(mValues[i]));
+    }
+
+    NPP npp = GetNPP();
+
+    NPError rv = mPluginIface->newp((char*)NullableStringGet(mMimeType), npp,
+                                    mMode, argc, argn, argv, 0);
+    if (NPERR_NO_ERROR != rv) {
+        return rv;
+    }
+
+    Initialize();
+
+#if defined(XP_MACOSX) && defined(__i386__)
+    // If an i386 Mac OS X plugin has selected the Carbon event model then
+    // we have to fail. We do not support putting Carbon event model plugins
+    // out of process. Note that Carbon is the default model so out of process
+    // plugins need to actively negotiate something else in order to work
+    // out of process.
+    if (EventModel() == NPEventModelCarbon) {
+      // Send notification that a plugin tried to negotiate Carbon NPAPI so that
+      // users can be notified that restarting the browser in i386 mode may allow
+      // them to use the plugin.
+      SendNegotiatedCarbon();
+
+      // Fail to instantiate.
+      rv = NPERR_MODULE_LOAD_FAILED_ERROR;
+    }
+#endif
+
+    return rv;
+}
+
 int
 PluginInstanceChild::GetQuirks()
 {
-    return PluginModuleChild::current()->GetQuirks();
+    return PluginModuleChild::GetChrome()->GetQuirks();
 }
 
 NPError
@@ -381,25 +437,6 @@ PluginInstanceChild::NPN_GetValue(NPNVariable aVar,
 #endif
     }
 
-    case NPNVsupportsAsyncBitmapSurfaceBool: {
-#ifdef XP_WIN
-        *((NPBool*)aValue) = PluginModuleChild::current()->AsyncDrawingAllowed();
-#else
-        // We do not support non-windows yet.
-        *((NPBool*)aValue) = false;
-#endif
-        return NPERR_NO_ERROR;
-    }
-
-#ifdef XP_WIN
-    case NPNVsupportsAsyncWindowsDXGISurfaceBool: {
-        bool val;
-        CallNPN_GetValue_DrawingModelSupport(NPNVsupportsAsyncWindowsDXGISurfaceBool, &val);
-        *((NPBool*)aValue) = val;
-        return NPERR_NO_ERROR;
-    }
-#endif
-
 #ifdef XP_MACOSX
    case NPNVsupportsCoreGraphicsBool: {
         *((NPBool*)aValue) = true;
@@ -407,12 +444,12 @@ PluginInstanceChild::NPN_GetValue(NPNVariable aVar,
     }
 
     case NPNVsupportsCoreAnimationBool: {
-        *((NPBool*)aValue) = nsCocoaFeatures::SupportCoreAnimationPlugins();
+        *((NPBool*)aValue) = true;
         return NPERR_NO_ERROR;
     }
 
     case NPNVsupportsInvalidatingCoreAnimationBool: {
-        *((NPBool*)aValue) = nsCocoaFeatures::SupportCoreAnimationPlugins();
+        *((NPBool*)aValue) = true;
         return NPERR_NO_ERROR;
     }
 
@@ -543,24 +580,9 @@ PluginInstanceChild::NPN_SetValue(NPPVariable aVar, void* aValue)
         NPError rv;
         int drawingModel = (int16_t) (intptr_t) aValue;
 
-        if (!PluginModuleChild::current()->AsyncDrawingAllowed() &&
-            IsDrawingModelAsync(drawingModel)) {
-            return NPERR_GENERIC_ERROR;
-        }              
-
-        CrossProcessMutexHandle handle;
-        OptionalShmem optionalShmem;
-        if (!CallNPN_SetValue_NPPVpluginDrawingModel(drawingModel, &optionalShmem, &handle, &rv))
+        if (!CallNPN_SetValue_NPPVpluginDrawingModel(drawingModel, &rv))
             return NPERR_GENERIC_ERROR;
 
-        if (IsDrawingModelAsync(drawingModel)) {
-            if (optionalShmem.type() != OptionalShmem::TShmem) {
-                return NPERR_GENERIC_ERROR;
-            }
-            mRemoteImageDataShmem = optionalShmem.get_Shmem();
-            mRemoteImageData = mRemoteImageDataShmem.get<RemoteImageData>();
-            mRemoteImageDataMutex = new CrossProcessMutex(handle);
-        }
         mDrawingModel = drawingModel;
 
 #ifdef XP_MACOSX
@@ -829,7 +851,7 @@ PluginInstanceChild::AnswerNPP_HandleEvent(const NPRemoteEvent& event,
 
 bool
 PluginInstanceChild::AnswerNPP_HandleEvent_Shmem(const NPRemoteEvent& event,
-                                                 Shmem& mem,
+                                                 Shmem&& mem,
                                                  int16_t* handled,
                                                  Shmem* rtnmem)
 {
@@ -893,7 +915,7 @@ PluginInstanceChild::AnswerNPP_HandleEvent_Shmem(const NPRemoteEvent& event,
 #else
 bool
 PluginInstanceChild::AnswerNPP_HandleEvent_Shmem(const NPRemoteEvent& event,
-                                                 Shmem& mem,
+                                                 Shmem&& mem,
                                                  int16_t* handled,
                                                  Shmem* rtnmem)
 {
@@ -1948,7 +1970,7 @@ PluginInstanceChild::SharedSurfacePaint(NPEvent& evcopy)
         break;
         case RENDER_BACK_ONE:
               // Handle a double pass render used in alpha extraction for transparent
-              // plugins. (See nsObjectFrame and gfxWindowsNativeDrawing for details.)
+              // plugins. (See nsPluginFrame and gfxWindowsNativeDrawing for details.)
               // We render twice, once to the shared dib, and once to a cache which
               // we copy back on a second paint. These paints can't be spread across
               // multiple rpc messages as delays cause animation frame changes.
@@ -2268,21 +2290,86 @@ PluginInstanceChild::RecvPPluginScriptableObjectConstructor(
 }
 
 bool
-PluginInstanceChild::AnswerPBrowserStreamConstructor(
+PluginInstanceChild::RecvPBrowserStreamConstructor(
     PBrowserStreamChild* aActor,
     const nsCString& url,
     const uint32_t& length,
     const uint32_t& lastmodified,
     PStreamNotifyChild* notifyData,
-    const nsCString& headers,
-    const nsCString& mimeType,
-    const bool& seekable,
-    NPError* rv,
-    uint16_t* stype)
+    const nsCString& headers)
+{
+    return true;
+}
+
+NPError
+PluginInstanceChild::DoNPP_NewStream(BrowserStreamChild* actor,
+                                     const nsCString& mimeType,
+                                     const bool& seekable,
+                                     uint16_t* stype)
 {
     AssertPluginThread();
-    *rv = static_cast<BrowserStreamChild*>(aActor)
-          ->StreamConstructed(mimeType, seekable, stype);
+    NPError rv = actor->StreamConstructed(mimeType, seekable, stype);
+    return rv;
+}
+
+bool
+PluginInstanceChild::AnswerNPP_NewStream(PBrowserStreamChild* actor,
+                                         const nsCString& mimeType,
+                                         const bool& seekable,
+                                         NPError* rv,
+                                         uint16_t* stype)
+{
+    *rv = DoNPP_NewStream(static_cast<BrowserStreamChild*>(actor), mimeType,
+                          seekable, stype);
+    return true;
+}
+
+class NewStreamAsyncCall : public ChildAsyncCall
+{
+public:
+    NewStreamAsyncCall(PluginInstanceChild* aInstance,
+                       BrowserStreamChild* aBrowserStreamChild,
+                       const nsCString& aMimeType,
+                       const bool aSeekable)
+        : ChildAsyncCall(aInstance, nullptr, nullptr)
+        , mBrowserStreamChild(aBrowserStreamChild)
+        , mMimeType(aMimeType)
+        , mSeekable(aSeekable)
+    {
+    }
+
+    void Run() override
+    {
+        RemoveFromAsyncList();
+
+        uint16_t stype = NP_NORMAL;
+        NPError rv = mInstance->DoNPP_NewStream(mBrowserStreamChild, mMimeType,
+                                                mSeekable, &stype);
+        DebugOnly<bool> sendOk =
+            mBrowserStreamChild->SendAsyncNPP_NewStreamResult(rv, stype);
+        MOZ_ASSERT(sendOk);
+    }
+
+private:
+    BrowserStreamChild* mBrowserStreamChild;
+    const nsCString     mMimeType;
+    const bool          mSeekable;
+};
+
+bool
+PluginInstanceChild::RecvAsyncNPP_NewStream(PBrowserStreamChild* actor,
+                                            const nsCString& mimeType,
+                                            const bool& seekable)
+{
+    // Reusing ChildAsyncCall so that the task is cancelled properly on Destroy
+    BrowserStreamChild* child = static_cast<BrowserStreamChild*>(actor);
+    NewStreamAsyncCall* task = new NewStreamAsyncCall(this, child, mimeType,
+                                                      seekable);
+    {
+        MutexAutoLock lock(mAsyncCallMutex);
+        mPendingAsyncCalls.AppendElement(task);
+    }
+    MessageLoop::current()->PostTask(FROM_HERE, task);
     return true;
 }
 
@@ -2291,16 +2378,12 @@ PluginInstanceChild::AllocPBrowserStreamChild(const nsCString& url,
                                               const uint32_t& length,
                                               const uint32_t& lastmodified,
                                               PStreamNotifyChild* notifyData,
-                                              const nsCString& headers,
-                                              const nsCString& mimeType,
-                                              const bool& seekable,
-                                              NPError* rv,
-                                              uint16_t *stype)
+                                              const nsCString& headers)
 {
     AssertPluginThread();
     return new BrowserStreamChild(this, url, length, lastmodified,
                                   static_cast<StreamNotifyChild*>(notifyData),
-                                  headers, mimeType, seekable, rv, stype);
+                                  headers);
 }
 
 bool
@@ -2357,7 +2440,6 @@ StreamNotifyChild::ActorDestroy(ActorDestroyReason why)
 void
 StreamNotifyChild::SetAssociatedStream(BrowserStreamChild* bs)
 {
-    NS_ASSERTION(bs, "Shouldn't be null");
     NS_ASSERTION(!mBrowserStream, "Two streams for one streamnotify?");
 
     mBrowserStream = bs;
@@ -2428,7 +2510,7 @@ PluginInstanceChild::GetActorForNPObject(NPObject* aObject)
     }
 
     PluginScriptableObjectChild* actor =
-        PluginModuleChild::current()->GetActorForNPObject(aObject);
+        PluginScriptableObjectChild::GetActorForNPObject(aObject);
     if (actor) {
         // Plugin-provided object that we've previously wrapped.
         return actor;
@@ -2483,212 +2565,6 @@ PluginInstanceChild::NPN_URLRedirectResponse(void* notifyData, NPBool allow)
         }
     }
     NS_ASSERTION(false, "Couldn't find stream for redirect response!");
-}
-
-NPError
-PluginInstanceChild::DeallocateAsyncBitmapSurface(NPAsyncSurface *aSurface)
-{
-    AsyncBitmapData* data;
-    
-    if (!mAsyncBitmaps.Get(aSurface, &data)) {
-        return NPERR_INVALID_PARAM;
-    }
-
-    DeallocShmem(data->mShmem);
-    aSurface->bitmap.data = nullptr;
-
-    mAsyncBitmaps.Remove(aSurface);
-    return NPERR_NO_ERROR;
-}
-
-bool
-PluginInstanceChild::IsAsyncDrawing()
-{
-    return IsDrawingModelAsync(mDrawingModel);
-}
-
-NPError
-PluginInstanceChild::NPN_InitAsyncSurface(NPSize *size, NPImageFormat format,
-                                          void *initData, NPAsyncSurface *surface)
-{
-    AssertPluginThread();
-
-    surface->bitmap.data = nullptr;
-
-    if (!IsAsyncDrawing()) {
-        return NPERR_GENERIC_ERROR;
-    }
-
-    switch (mDrawingModel) {
-    case NPDrawingModelAsyncBitmapSurface: {
-            if (mAsyncBitmaps.Get(surface, nullptr)) {
-                return NPERR_INVALID_PARAM;
-            }
-
-            if (size->width < 0 || size->height < 0) {
-                return NPERR_INVALID_PARAM;
-            }
-
-
-            bool result;
-            NPRemoteAsyncSurface remote;
-
-            if (!CallNPN_InitAsyncSurface(gfxIntSize(size->width, size->height), format, &remote, &result) || !result) {
-                return NPERR_OUT_OF_MEMORY_ERROR;
-            }
-
-            NS_ABORT_IF_FALSE(remote.data().get_Shmem().IsWritable(),
-                "Failed to create writable shared memory.");
-            
-            AsyncBitmapData *data = new AsyncBitmapData;
-            mAsyncBitmaps.Put(surface, data);
-
-            data->mRemotePtr = (void*)remote.hostPtr();
-            data->mShmem = remote.data().get_Shmem();
-
-            surface->bitmap.data = data->mShmem.get<unsigned char>();
-            surface->bitmap.stride = remote.stride();
-            surface->format = remote.format();
-            surface->size.width = remote.size().width;
-            surface->size.height = remote.size().height;
-
-            return NPERR_NO_ERROR;
-        }
-#ifdef XP_WIN
-    case NPDrawingModelAsyncWindowsDXGISurface: {
-            if (size->width < 0 || size->height < 0) {
-                return NPERR_INVALID_PARAM;
-            }
-            bool result;
-            NPRemoteAsyncSurface remote;
-
-            if (!CallNPN_InitAsyncSurface(gfxIntSize(size->width, size->height), format, &remote, &result) || !result) {
-                return NPERR_OUT_OF_MEMORY_ERROR;
-            }
-
-            surface->format = remote.format();
-            surface->size.width = remote.size().width;
-            surface->size.height = remote.size().height;
-            surface->sharedHandle = remote.data().get_DXGISharedSurfaceHandle();
-
-            return NPERR_NO_ERROR;
-        }
-#endif
-    }
-
-    return NPERR_GENERIC_ERROR;
-}
-
-NPError
-PluginInstanceChild::NPN_FinalizeAsyncSurface(NPAsyncSurface *surface)
-{
-    AssertPluginThread();
-
-    if (!IsAsyncDrawing()) {
-        return NPERR_GENERIC_ERROR;
-    }
-
-    switch (mDrawingModel) {
-    case NPDrawingModelAsyncBitmapSurface: {
-            AsyncBitmapData *bitmapData;
-
-            if (!mAsyncBitmaps.Get(surface, &bitmapData)) {
-                return NPERR_GENERIC_ERROR;
-            }
-
-            {
-                CrossProcessMutexAutoLock autoLock(*mRemoteImageDataMutex);
-                RemoteImageData *data = mRemoteImageData;
-                if (data->mBitmap.mData == bitmapData->mRemotePtr) {
-                    data->mBitmap.mData = nullptr;
-                    data->mSize = IntSize(0, 0);
-                    data->mWasUpdated = true;
-                }
-            }
-
-            return DeallocateAsyncBitmapSurface(surface);
-        }
-#ifdef XP_WIN
-    case NPDrawingModelAsyncWindowsDXGISurface: {
-            
-            {
-                CrossProcessMutexAutoLock autoLock(*mRemoteImageDataMutex);
-                RemoteImageData *data = mRemoteImageData;
-                if (data->mTextureHandle == surface->sharedHandle) {
-                    data->mTextureHandle = nullptr;
-                    data->mSize = IntSize(0, 0);
-                    data->mWasUpdated = true;
-                }
-            }
-
-            SendReleaseDXGISharedSurface(surface->sharedHandle);
-            return NPERR_NO_ERROR;
-        }
-#endif
-    }
-
-    return NPERR_GENERIC_ERROR;
-}
-
-void
-PluginInstanceChild::NPN_SetCurrentAsyncSurface(NPAsyncSurface *surface, NPRect *changed)
-{
-    if (!IsAsyncDrawing()) {
-        return;
-    }
-
-    RemoteImageData *data = mRemoteImageData;
-
-    if (!surface) {
-        CrossProcessMutexAutoLock autoLock(*mRemoteImageDataMutex);
-        data->mBitmap.mData = nullptr;
-        data->mSize = IntSize(0, 0);
-        data->mWasUpdated = true;
-    } else {
-        switch (mDrawingModel) {
-        case NPDrawingModelAsyncBitmapSurface:
-            {
-                AsyncBitmapData *bitmapData;
-        
-                if (!mAsyncBitmaps.Get(surface, &bitmapData)) {
-                    return;
-                }
-              
-                CrossProcessMutexAutoLock autoLock(*mRemoteImageDataMutex);
-                data->mBitmap.mData = (unsigned char*)bitmapData->mRemotePtr;
-                data->mSize = IntSize(surface->size.width, surface->size.height);
-                data->mFormat = surface->format == NPImageFormatBGRX32 ?
-                                RemoteImageData::BGRX32 : RemoteImageData::BGRA32;
-                data->mBitmap.mStride = surface->bitmap.stride;
-                data->mWasUpdated = true;
-                break;
-            }
-#ifdef XP_WIN
-        case NPDrawingModelAsyncWindowsDXGISurface:
-            {
-                CrossProcessMutexAutoLock autoLock(*mRemoteImageDataMutex);
-                data->mType = RemoteImageData::DXGI_TEXTURE_HANDLE;
-                data->mSize = IntSize(surface->size.width, surface->size.height);
-                data->mFormat = surface->format == NPImageFormatBGRX32 ?
-                                RemoteImageData::BGRX32 : RemoteImageData::BGRA32;
-                data->mTextureHandle = surface->sharedHandle;
-
-                data->mWasUpdated = true;
-                break;
-            }
-#endif
-        }
-    }
-
-    {
-        MutexAutoLock autoLock(mAsyncInvalidateMutex);
-        if (!mAsyncInvalidateTask) {
-            mAsyncInvalidateTask = 
-                NewRunnableMethod<PluginInstanceChild, void (PluginInstanceChild::*)()>
-                    (this, &PluginInstanceChild::DoAsyncRedraw);
-            ProcessChild::message_loop()->PostTask(FROM_HERE, mAsyncInvalidateTask);
-        }
-    }
 }
 
 void
@@ -2789,8 +2665,8 @@ PluginInstanceChild::DoAsyncSetWindow(const gfxSurfaceType& aSurfaceType,
 bool
 PluginInstanceChild::CreateOptSurface(void)
 {
-    NS_ABORT_IF_FALSE(mSurfaceType != gfxSurfaceType::Max,
-                      "Need a valid surface type here");
+    MOZ_ASSERT(mSurfaceType != gfxSurfaceType::Max,
+               "Need a valid surface type here");
     NS_ASSERTION(!mCurrentSurface, "mCurrentSurfaceActor can get out of sync.");
 
     nsRefPtr<gfxASurface> retsurf;
@@ -3198,7 +3074,7 @@ PluginInstanceChild::PaintRectToSurface(const nsIntRect& aRect,
         // Moz2D treats OP_SOURCE operations as unbounded, so we need to
         // clip to the rect that we want to fill:
         dt->PushClipRect(rect);
-        dt->FillRect(rect, ColorPattern(ToColor(aColor)),
+        dt->FillRect(rect, ColorPattern(ToColor(aColor)), // aColor is already a device color
                      DrawOptions(1.f, CompositionOp::OP_SOURCE));
         dt->PopClip();
         dt->Flush();
@@ -3219,8 +3095,8 @@ void
 PluginInstanceChild::PaintRectWithAlphaExtraction(const nsIntRect& aRect,
                                                   gfxASurface* aSurface)
 {
-    NS_ABORT_IF_FALSE(aSurface->GetContentType() == gfxContentType::COLOR_ALPHA,
-                      "Refusing to pointlessly recover alpha");
+    MOZ_ASSERT(aSurface->GetContentType() == gfxContentType::COLOR_ALPHA,
+               "Refusing to pointlessly recover alpha");
 
     nsIntRect rect(aRect);
     // If |aSurface| can be used to paint and can have alpha values
@@ -3299,7 +3175,7 @@ PluginInstanceChild::PaintRectWithAlphaExtraction(const nsIntRect& aRect,
     PaintRectToSurface(rect, blackImage, gfxRGBA(0.0, 0.0, 0.0));
 #endif
 
-    NS_ABORT_IF_FALSE(whiteImage && blackImage, "Didn't paint enough!");
+    MOZ_ASSERT(whiteImage && blackImage, "Didn't paint enough!");
 
     // Extract alpha from black and white image and store to black
     // image
@@ -3517,7 +3393,7 @@ PluginInstanceChild::ShowPluginFrame()
         SharedDIBSurface* s = static_cast<SharedDIBSurface*>(mCurrentSurface.get());
         if (!mCurrentSurfaceActor) {
             base::SharedMemoryHandle handle = nullptr;
-            s->ShareToProcess(PluginModuleChild::current()->OtherProcess(), &handle);
+            s->ShareToProcess(OtherPid(), &handle);
 
             mCurrentSurfaceActor =
                 SendPPluginSurfaceConstructor(handle,
@@ -3663,7 +3539,7 @@ bool
 PluginInstanceChild::RecvUpdateBackground(const SurfaceDescriptor& aBackground,
                                           const nsIntRect& aRect)
 {
-    NS_ABORT_IF_FALSE(mIsTransparent, "Only transparent plugins use backgrounds");
+    MOZ_ASSERT(mIsTransparent, "Only transparent plugins use backgrounds");
 
     if (!mBackground) {
         // XXX refactor me
@@ -3919,22 +3795,13 @@ PluginInstanceChild::ClearAllSurfaces()
 #endif
 }
 
-PLDHashOperator
-PluginInstanceChild::DeleteSurface(NPAsyncSurface* surf, nsAutoPtr<AsyncBitmapData> &data, void* userArg)
+void
+PluginInstanceChild::Destroy()
 {
-    PluginInstanceChild *inst = static_cast<PluginInstanceChild*>(userArg);
-
-    inst->DeallocShmem(data->mShmem);
-
-    return PL_DHASH_REMOVE;
-}
-
-bool
-PluginInstanceChild::AnswerNPP_Destroy(NPError* aResult)
-{
-    PLUGIN_LOG_DEBUG_METHOD;
-    AssertPluginThread();
-    *aResult = NPERR_NO_ERROR;
+    if (mDestroyed) {
+        return;
+    }
+    mDestroyed = true;
 
 #if defined(OS_WIN)
     SetProp(mPluginWindowHWND, kPluginIgnoreSubclassProperty, (HANDLE)1);
@@ -3958,7 +3825,7 @@ PluginInstanceChild::AnswerNPP_Destroy(NPError* aResult)
     // NPP_Destroy() should be a synchronization point for plugin threads
     // calling NPN_AsyncCall: after this function returns, they are no longer
     // allowed to make async calls on this instance.
-    PluginModuleChild::current()->NPP_Destroy(this);
+    static_cast<PluginModuleChild *>(Manager())->NPP_Destroy(this);
     mData.ndata = 0;
 
     if (mCurrentInvalidateTask) {
@@ -3980,7 +3847,7 @@ PluginInstanceChild::AnswerNPP_Destroy(NPError* aResult)
     ClearAllSurfaces();
 
     mDeletingHash = new nsTHashtable<DeletingObjectEntry>;
-    PluginModuleChild::current()->FindNPObjectsForInstance(this);
+    PluginScriptableObjectChild::NotifyOfInstanceShutdown(this);
 
     mDeletingHash->EnumerateEntries(InvalidateObject, nullptr);
     mDeletingHash->EnumerateEntries(DeleteObject, nullptr);
@@ -4004,11 +3871,6 @@ PluginInstanceChild::AnswerNPP_Destroy(NPError* aResult)
 
     mPendingAsyncCalls.Clear();
     
-    if (mAsyncBitmaps.Count()) {
-        NS_ERROR("Not all AsyncBitmaps were finalized by a plugin!");
-        mAsyncBitmaps.Enumerate(DeleteSurface, this);
-    }
-
 #ifdef MOZ_WIDGET_GTK
     if (mWindow.type == NPWindowTypeWindow && !mXEmbed) {
       xt_client_xloop_destroy();
@@ -4017,6 +3879,22 @@ PluginInstanceChild::AnswerNPP_Destroy(NPError* aResult)
 #if defined(MOZ_X11) && defined(XP_UNIX) && !defined(XP_MACOSX)
     DeleteWindow();
 #endif
+}
+
+bool
+PluginInstanceChild::AnswerNPP_Destroy(NPError* aResult)
+{
+    PLUGIN_LOG_DEBUG_METHOD;
+    AssertPluginThread();
+    *aResult = NPERR_NO_ERROR;
+
+    Destroy();
 
     return true;
+}
+
+void
+PluginInstanceChild::ActorDestroy(ActorDestroyReason why)
+{
+    Destroy();
 }

@@ -7,8 +7,9 @@ const { Trait } = require("../deprecated/traits");
 const { EventEmitter } = require("../deprecated/events");
 const { defer } = require("../lang/functional");
 const { has } = require("../util/array");
+const { each } = require("../util/object");
 const { EVENTS } = require("./events");
-const { getThumbnailURIForWindow } = require("../content/thumbnail");
+const { getThumbnailURIForWindow, BLANK } = require("../content/thumbnail");
 const { getFaviconURIForLocation } = require("../io/data");
 const { activateTab, getOwnerWindow, getBrowserForTab, getTabTitle,
         setTabTitle, getTabContentDocument, getTabURL, setTabURL,
@@ -20,10 +21,8 @@ const { deprecateUsage } = require('../util/deprecate');
 const { getURL } = require('../url/utils');
 const { viewFor } = require('../view/core');
 const { observer } = require('./observer');
-
-// cfx doesn't know require() now handles JSM modules
-const FRAMESCRIPT_MANAGER = '../../framescript/FrameScriptManager.jsm';
-require(FRAMESCRIPT_MANAGER).enableTabEvents();
+const { remoteRequire, frames } = require('../remote/parent');
+remoteRequire('sdk/content/tab-events');
 
 // Array of the inner instances of all the wrapped tabs.
 const TABS = [];
@@ -48,7 +47,7 @@ const TabTrait = Trait.compose(EventEmitter, {
     let window = this.window = options.window || require('../windows').BrowserWindow({ window: getOwnerWindow(this._tab) });
 
     // Setting event listener if was passed.
-    for each (let type in EVENTS) {
+    each(EVENTS, (type) => {
       let listener = options[type.listener];
       if (listener) {
         this.on(type.name, options[type.listener]);
@@ -56,12 +55,12 @@ const TabTrait = Trait.compose(EventEmitter, {
       // window spreads this event.
       if (!has(['ready', 'load', 'pageshow'], (type.name)))
         window.tabs.on(type.name, this._onEvent.bind(this, type.name));
-    }
+    });
 
     this.on(EVENTS.close.name, this.destroy.bind(this));
 
     this._onContentEvent = this._onContentEvent.bind(this);
-    this._browser.messageManager.addMessageListener('sdk/tab/event', this._onContentEvent);
+    frames.port.on('sdk/tab/event', this._onContentEvent);
 
     // bug 1024632 - first tab inNewWindow gets events from the synthetic 
     // about:blank document. ignore them unless that is the actual target url.
@@ -85,11 +84,7 @@ const TabTrait = Trait.compose(EventEmitter, {
   destroy: function destroy() {
     this._removeAllListeners();
     if (this._tab) {
-      let browser = this._browser;
-      // The tab may already be removed from DOM -or- not yet added
-      if (browser) {
-        browser.messageManager.removeMessageListener('sdk/tab/event', this._onContentEvent);
-      }
+      frames.port.off('sdk/tab/event', this._onContentEvent);
       this._tab = null;
       TABS.splice(TABS.indexOf(this), 1);
     }
@@ -99,7 +94,10 @@ const TabTrait = Trait.compose(EventEmitter, {
    * internal message listener emits public events (ready, load and pageshow)
    * forwarded from content frame script tab-event.js
    */
-  _onContentEvent: function({ data }) {
+  _onContentEvent: function(frame, event, persisted) {
+    if (frame.frameElement !== this._browser)
+      return;
+
     // bug 1024632 - skip initial events from synthetic about:blank document
     if (this._skipBlankEvents && this.window.tabs.length === 1 && this.url === 'about:blank')
       return;
@@ -107,7 +105,7 @@ const TabTrait = Trait.compose(EventEmitter, {
     // first time we don't skip blank events, disable further skipping
     this._skipBlankEvents = false;
 
-    this._emit(data.type, this._public, data.persisted);
+    this._emit(event, this._public, persisted);
   },
 
   /**
@@ -201,8 +199,15 @@ const TabTrait = Trait.compose(EventEmitter, {
    * Thumbnail data URI of the page currently loaded in this tab.
    * @type {String}
    */
-  getThumbnail: function getThumbnail()
-    this._tab ? getThumbnailURIForWindow(this._contentWindow) : undefined,
+  getThumbnail() {
+    if (!this._tab)
+      return undefined;
+    if (this._tab.getAttribute('remote')) {
+      console.error('This method is not supported with E10S');
+      return BLANK;
+    }
+    return getThumbnailURIForWindow(this._contentWindow);
+  },
   /**
    * Whether or not tab is pinned (Is an app-tab).
    * @type {Boolean}
@@ -281,7 +286,7 @@ const getTabView = tab => viewNS(tab).tab;
 
 function Tab(options, existingOnly) {
   let chromeTab = options.tab;
-  for each (let tab in TABS) {
+  for (let tab of TABS) {
     if (chromeTab == tab._tab)
       return tab._public;
   }

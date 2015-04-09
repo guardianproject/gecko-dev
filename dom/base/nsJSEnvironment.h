@@ -14,7 +14,9 @@
 #include "nsIXPConnect.h"
 #include "nsIArray.h"
 #include "mozilla/Attributes.h"
+#include "nsPIDOMWindow.h"
 #include "nsThreadUtils.h"
+#include "xpcpublic.h"
 
 class nsICycleCollectorListener;
 class nsIXPConnectJSObjectHolder;
@@ -34,6 +36,8 @@ struct CycleCollectorResults;
 // a page) and doing the actual GC.
 #define NS_GC_DELAY                 4000 // ms
 
+#define NS_MAJOR_FORGET_SKIPPABLE_CALLS 5
+
 class nsJSContext : public nsIScriptContext
 {
 public:
@@ -43,26 +47,26 @@ public:
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(nsJSContext,
                                                          nsIScriptContext)
 
-  virtual nsIScriptGlobalObject *GetGlobalObject() MOZ_OVERRIDE;
+  virtual nsIScriptGlobalObject *GetGlobalObject() override;
   inline nsIScriptGlobalObject *GetGlobalObjectRef() { return mGlobalObjectRef; }
 
-  virtual JSContext* GetNativeContext() MOZ_OVERRIDE;
-  virtual nsresult InitContext() MOZ_OVERRIDE;
-  virtual bool IsContextInitialized() MOZ_OVERRIDE;
+  virtual JSContext* GetNativeContext() override;
+  virtual nsresult InitContext() override;
+  virtual bool IsContextInitialized() override;
 
-  virtual nsresult SetProperty(JS::Handle<JSObject*> aTarget, const char* aPropName, nsISupports* aVal) MOZ_OVERRIDE;
+  virtual nsresult SetProperty(JS::Handle<JSObject*> aTarget, const char* aPropName, nsISupports* aVal) override;
 
-  virtual bool GetProcessingScriptTag() MOZ_OVERRIDE;
-  virtual void SetProcessingScriptTag(bool aResult) MOZ_OVERRIDE;
+  virtual bool GetProcessingScriptTag() override;
+  virtual void SetProcessingScriptTag(bool aResult) override;
 
-  virtual nsresult InitClasses(JS::Handle<JSObject*> aGlobalObj) MOZ_OVERRIDE;
+  virtual nsresult InitClasses(JS::Handle<JSObject*> aGlobalObj) override;
 
-  virtual void WillInitializeContext() MOZ_OVERRIDE;
-  virtual void DidInitializeContext() MOZ_OVERRIDE;
+  virtual void WillInitializeContext() override;
+  virtual void DidInitializeContext() override;
 
-  virtual void SetWindowProxy(JS::Handle<JSObject*> aWindowProxy) MOZ_OVERRIDE;
-  virtual JSObject* GetWindowProxy() MOZ_OVERRIDE;
-  virtual JSObject* GetWindowProxyPreserveColor() MOZ_OVERRIDE;
+  virtual void SetWindowProxy(JS::Handle<JSObject*> aWindowProxy) override;
+  virtual JSObject* GetWindowProxy() override;
+  virtual JSObject* GetWindowProxyPreserveColor() override;
 
   static void LoadStart();
   static void LoadEnd();
@@ -112,6 +116,9 @@ public:
   static void PokeShrinkGCBuffers();
   static void KillShrinkGCBuffersTimer();
 
+  static void PokeShrinkingGC();
+  static void KillShrinkingGCTimer();
+
   static void MaybePokeCC();
   static void KillCCTimer();
   static void KillICCTimer();
@@ -120,8 +127,6 @@ public:
 
   // Calling LikelyShortLivingObjectCreated() makes a GC more likely.
   static void LikelyShortLivingObjectCreated();
-
-  virtual void GC(JS::gcreason::Reason aReason) MOZ_OVERRIDE;
 
   static uint32_t CleanupsSinceLastGC();
 
@@ -132,6 +137,8 @@ public:
     JSObject* global = GetWindowProxy();
     return global ? mGlobalObjectRef.get() : nullptr;
   }
+
+  static void NotifyDidPaint();
 protected:
   virtual ~nsJSContext();
 
@@ -141,11 +148,6 @@ protected:
                                    JS::AutoValueVector &aArgsOut);
 
   nsresult AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv);
-
-  // Report the pending exception on our mContext, if any.  This
-  // function will set aside the frame chain on mContext before
-  // reporting.
-  void ReportPendingException();
 
 private:
   void DestroyJSContext();
@@ -189,30 +191,18 @@ class AsyncErrorReporter : public nsRunnable
 {
 public:
   // aWindow may be null if this error report is not associated with a window
-  AsyncErrorReporter(JSRuntime* aRuntime,
-                     JSErrorReport* aErrorReport,
-                     const char* aFallbackMessage,
-                     bool aIsChromeError, // To determine category
-                     nsPIDOMWindow* aWindow);
+  AsyncErrorReporter(JSRuntime* aRuntime, xpc::ErrorReport* aReport)
+    : mReport(aReport)
+  {}
 
-  NS_IMETHOD Run()
+  NS_IMETHOD Run() override
   {
-    ReportError();
+    mReport->LogToConsole();
     return NS_OK;
   }
 
 protected:
-  // Do the actual error reporting
-  void ReportError();
-
-  nsString mErrorMsg;
-  nsString mFileName;
-  nsString mSourceLine;
-  nsCString mCategory;
-  uint32_t mLineNumber;
-  uint32_t mColumn;
-  uint32_t mFlags;
-  uint64_t mInnerWindowID;
+  nsRefPtr<xpc::ErrorReport> mReport;
 };
 
 } // namespace dom
@@ -237,9 +227,6 @@ public:
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIJSArgArray, NS_IJSARGARRAY_IID)
-
-/* prototypes */
-void NS_ScriptErrorReporter(JSContext *cx, const char *message, JSErrorReport *report);
 
 JSObject* NS_DOMReadStructuredClone(JSContext* cx,
                                     JSStructuredCloneReader* reader, uint32_t tag,

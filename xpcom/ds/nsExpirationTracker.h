@@ -6,8 +6,6 @@
 #ifndef NSEXPIRATIONTRACKER_H_
 #define NSEXPIRATIONTRACKER_H_
 
-#include "mozilla/Attributes.h"
-
 #include "prlog.h"
 #include "nsTArray.h"
 #include "nsITimer.h"
@@ -16,8 +14,8 @@
 #include "nsComponentManagerUtils.h"
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
-#include "mozilla/Services.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/Services.h"
 
 /**
  * Data used to track the expiration state of an object. We promise that this
@@ -83,7 +81,7 @@ public:
    * period is zero, then we don't use a timer and rely on someone calling
    * AgeOneGeneration explicitly.
    */
-  nsExpirationTracker(uint32_t aTimerPeriod)
+  explicit nsExpirationTracker(uint32_t aTimerPeriod)
     : mTimerPeriod(aTimerPeriod)
     , mNewestGeneration(0)
     , mInAgeOneGeneration(false)
@@ -109,7 +107,8 @@ public:
   nsresult AddObject(T* aObj)
   {
     nsExpirationState* state = aObj->GetExpirationState();
-    NS_ASSERTION(!state->IsTracked(), "Tried to add an object that's already tracked");
+    NS_ASSERTION(!state->IsTracked(),
+                 "Tried to add an object that's already tracked");
     nsTArray<T*>& generation = mGenerations[mNewestGeneration];
     uint32_t index = generation.Length();
     if (index > nsExpirationState::MAX_INDEX_IN_GENERATION) {
@@ -238,7 +237,7 @@ public:
     uint32_t mGeneration;
     uint32_t mIndex;
   public:
-    Iterator(nsExpirationTracker<T, K>* aTracker)
+    explicit Iterator(nsExpirationTracker<T, K>* aTracker)
       : mTracker(aTracker)
       , mGeneration(0)
       , mIndex(0)
@@ -313,7 +312,7 @@ private:
    * Whenever "memory-pressure" is observed, it calls AgeAllGenerations()
    * to minimize memory usage.
    */
-  class ExpirationTrackerObserver MOZ_FINAL : public nsIObserver
+  class ExpirationTrackerObserver final : public nsIObserver
   {
   public:
     void Init(nsExpirationTracker<T, K>* aObj)

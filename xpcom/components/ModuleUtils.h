@@ -102,21 +102,18 @@ _InstanceClass##Constructor(nsISupports *aOuter, REFNSIID aIID,               \
 
 namespace mozilla {
 
-class GenericModule MOZ_FINAL : public nsIModule
+class GenericModule final : public nsIModule
 {
-    ~GenericModule() {}
+  ~GenericModule() {}
 
 public:
-    GenericModule(const mozilla::Module* aData)
-        : mData(aData)
-    {
-    }
+  explicit GenericModule(const mozilla::Module* aData) : mData(aData) {}
 
-    NS_DECL_THREADSAFE_ISUPPORTS
-    NS_DECL_NSIMODULE
+  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_NSIMODULE
 
 private:
-    const mozilla::Module* mData;
+  const mozilla::Module* mData;
 };
 
 } // namespace mozilla

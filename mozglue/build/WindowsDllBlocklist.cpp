@@ -156,6 +156,22 @@ static DllBlockInfo sWindowsDllBlocklist[] = {
   // Crashes with RoboForm2Go written against old SDK, bug 988311
   { "rf-firefox-22.dll", ALL_VERSIONS },
 
+  // Crashes with DesktopTemperature, bug 1046382
+  { "dtwxsvc.dll", 0x53153234, DllBlockInfo::USE_TIMESTAMP },
+
+  // Startup crashes with Lenovo Onekey Theater, bug 1123778
+  { "activedetect32.dll", UNVERSIONED },
+  { "activedetect64.dll", UNVERSIONED },
+  { "windowsapihookdll32.dll", UNVERSIONED },
+  { "windowsapihookdll64.dll", UNVERSIONED },
+
+  // Flash crashes with RealNetworks RealDownloader, bug 1132663
+  { "rndlnpshimswf.dll", ALL_VERSIONS },
+  { "rndlmainbrowserrecordplugin.dll", ALL_VERSIONS },
+
+  // Crashes with CyberLink YouCam, bug 1136968
+  { "ycwebcamerasource.ax", MAKE_VERSION(2, 0, 0, 1611) },
+
   { nullptr, 0 }
 };
 

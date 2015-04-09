@@ -18,7 +18,6 @@
 #include "nsIHttpProtocolHandler.h"
 #include "nsIObserver.h"
 #include "nsISpeculativeConnect.h"
-#include "nsICache.h"
 
 class nsIHttpChannel;
 class nsIPrefBranch;
@@ -38,15 +37,22 @@ class Tickler;
 class nsHttpConnection;
 class nsHttpConnectionInfo;
 class nsHttpTransaction;
+class AltSvcMapping;
+
+enum FrameCheckLevel {
+    FRAMECHECK_LAX,
+    FRAMECHECK_BARELY,
+    FRAMECHECK_STRICT
+};
 
 //-----------------------------------------------------------------------------
 // nsHttpHandler - protocol handler for HTTP and HTTPS
 //-----------------------------------------------------------------------------
 
-class nsHttpHandler : public nsIHttpProtocolHandler
-                    , public nsIObserver
-                    , public nsSupportsWeakReference
-                    , public nsISpeculativeConnect
+class nsHttpHandler final : public nsIHttpProtocolHandler
+                          , public nsIObserver
+                          , public nsSupportsWeakReference
+                          , public nsISpeculativeConnect
 {
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
@@ -80,6 +86,7 @@ public:
       return mResponseTimeoutEnabled ? mResponseTimeout : 0;
     }
     PRIntervalTime ResponseTimeoutEnabled()  { return mResponseTimeoutEnabled; }
+    uint32_t       NetworkChangedTimeout()   { return mNetworkChangedTimeout; }
     uint16_t       MaxRequestAttempts()      { return mMaxRequestAttempts; }
     const char    *DefaultSocketType()       { return mDefaultSocketType.get(); /* ok to return null */ }
     uint32_t       PhishyUserPassLength()    { return mPhishyUserPassLength; }
@@ -95,22 +102,25 @@ public:
     bool           AllowExperiments() { return mTelemetryEnabled && mAllowExperiments; }
 
     bool           IsSpdyEnabled() { return mEnableSpdy; }
-    bool           IsSpdyV3Enabled() { return mSpdyV3; }
     bool           IsSpdyV31Enabled() { return mSpdyV31; }
     bool           IsHttp2DraftEnabled() { return mHttp2DraftEnabled; }
+    bool           IsHttp2Enabled() { return mHttp2DraftEnabled && mHttp2Enabled; }
     bool           EnforceHttp2TlsProfile() { return mEnforceHttp2TlsProfile; }
     bool           CoalesceSpdy() { return mCoalesceSpdy; }
     bool           UseSpdyPersistentSettings() { return mSpdyPersistentSettings; }
     uint32_t       SpdySendingChunkSize() { return mSpdySendingChunkSize; }
     uint32_t       SpdySendBufferSize()      { return mSpdySendBufferSize; }
     uint32_t       SpdyPushAllowance()       { return mSpdyPushAllowance; }
+    uint32_t       DefaultSpdyConcurrent()   { return mDefaultSpdyConcurrent; }
     PRIntervalTime SpdyPingThreshold() { return mSpdyPingThreshold; }
     PRIntervalTime SpdyPingTimeout() { return mSpdyPingTimeout; }
     bool           AllowPush()   { return mAllowPush; }
+    bool           AllowAltSvc() { return mEnableAltSvc; }
+    bool           AllowAltSvcOE() { return mEnableAltSvcOE; }
     uint32_t       ConnectTimeout()  { return mConnectTimeout; }
     uint32_t       ParallelSpeculativeConnectLimit() { return mParallelSpeculativeConnectLimit; }
     bool           CriticalRequestPrioritization() { return mCriticalRequestPrioritization; }
-    double         BypassCacheLockThreshold() { return mBypassCacheLockThreshold; }
+    bool           UseH2Deps() { return mUseH2Deps; }
 
     uint32_t       MaxConnectionsPerOrigin() { return mMaxPersistentConnectionsPerServer; }
     bool           UseRequestTokenBucket() { return mRequestTokenBucketEnabled; }
@@ -146,6 +156,10 @@ public:
     int32_t GetTCPKeepaliveLongLivedIdleTime() {
       return mTCPKeepaliveLongLivedIdleTimeS;
     }
+
+    // returns the HTTP framing check level preference, as controlled with
+    // network.http.enforce-framing.http1 and network.http.enforce-framing.soft
+    FrameCheckLevel GetEnforceH1Framing() { return mEnforceH1Framing; }
 
     nsHttpAuthCache     *AuthCache(bool aPrivate) {
         return aPrivate ? &mPrivateAuthCache : &mAuthCache;
@@ -217,6 +231,22 @@ public:
     {
         TickleWifi(callbacks);
         return mConnMgr->SpeculativeConnect(ci, callbacks, caps);
+    }
+
+    // Alternate Services Maps are main thread only
+    void UpdateAltServiceMapping(AltSvcMapping *map,
+                                 nsProxyInfo *proxyInfo,
+                                 nsIInterfaceRequestor *callbacks,
+                                 uint32_t caps)
+    {
+        mConnMgr->UpdateAltServiceMapping(map, proxyInfo, callbacks, caps);
+    }
+
+    AltSvcMapping *GetAltServiceMapping(const nsACString &scheme,
+                                        const nsACString &host,
+                                        int32_t port, bool pb)
+    {
+        return mConnMgr->GetAltServiceMapping(scheme, host, port, pb);
     }
 
     //
@@ -296,16 +326,10 @@ public:
     PRIntervalTime GetPipelineTimeout()   { return mPipelineReadTimeout; }
 
     SpdyInformation *SpdyInfo() { return &mSpdyInfo; }
+    bool IsH2MandatorySuiteEnabled() { return mH2MandatorySuiteEnabled; }
 
     // returns true in between Init and Shutdown states
     bool Active() { return mHandlerActive; }
-
-    static void GetCacheSessionNameForStoragePolicy(
-            nsCacheStoragePolicy storagePolicy,
-            bool isPrivate,
-            uint32_t appId,
-            bool inBrowser,
-            nsACString& sessionName);
 
     // When the disk cache is responding slowly its use is suppressed
     // for 1 minute for most requests. Callable from main thread only.
@@ -366,11 +390,12 @@ private:
     PRIntervalTime mSpdyTimeout;
     PRIntervalTime mResponseTimeout;
     bool mResponseTimeoutEnabled;
-
+    uint32_t mNetworkChangedTimeout; // milliseconds
     uint16_t mMaxRequestAttempts;
     uint16_t mMaxRequestDelay;
     uint16_t mIdleSynTimeout;
 
+    bool     mH2MandatorySuiteEnabled;
     bool     mPipeliningEnabled;
     uint16_t mMaxConnections;
     uint8_t  mMaxPersistentConnectionsPerServer;
@@ -420,6 +445,7 @@ private:
     nsCString      mCompatFirefox;
     bool           mCompatFirefoxEnabled;
     nsXPIDLCString mCompatDevice;
+    nsCString      mDeviceModelId;
 
     nsCString      mUserAgent;
     nsXPIDLCString mUserAgentOverride;
@@ -437,7 +463,6 @@ private:
 
     // For broadcasting tracking preference
     bool           mDoNotTrackEnabled;
-    uint8_t        mDoNotTrackValue;
 
     // for broadcasting safe hint;
     bool           mSafeHintEnabled;
@@ -453,13 +478,16 @@ private:
     uint32_t           mHandlerActive : 1;
 
     uint32_t           mEnableSpdy : 1;
-    uint32_t           mSpdyV3 : 1;
     uint32_t           mSpdyV31 : 1;
     uint32_t           mHttp2DraftEnabled : 1;
+    uint32_t           mHttp2Enabled : 1;
+    uint32_t           mUseH2Deps : 1;
     uint32_t           mEnforceHttp2TlsProfile : 1;
     uint32_t           mCoalesceSpdy : 1;
     uint32_t           mSpdyPersistentSettings : 1;
     uint32_t           mAllowPush : 1;
+    uint32_t           mEnableAltSvc : 1;
+    uint32_t           mEnableAltSvcOE : 1;
 
     // Try to use SPDY features instead of HTTP/1.1 over SSL
     SpdyInformation    mSpdyInfo;
@@ -467,6 +495,7 @@ private:
     uint32_t       mSpdySendingChunkSize;
     uint32_t       mSpdySendBufferSize;
     uint32_t       mSpdyPushAllowance;
+    uint32_t       mDefaultSpdyConcurrent;
     PRIntervalTime mSpdyPingThreshold;
     PRIntervalTime mSpdyPingTimeout;
 
@@ -474,15 +503,11 @@ private:
     // established. In milliseconds.
     uint32_t       mConnectTimeout;
 
-    // The maximum amount of time the nsICacheSession lock can be held
-    // before a new transaction bypasses the cache. In milliseconds.
-    double         mBypassCacheLockThreshold;
-
     // The maximum number of current global half open sockets allowable
     // when starting a new speculative connection.
     uint32_t       mParallelSpeculativeConnectLimit;
 
-    // For Rate Pacing of HTTP/1 requests through a netwerk/base/src/EventTokenBucket
+    // For Rate Pacing of HTTP/1 requests through a netwerk/base/EventTokenBucket
     // Active requests <= *MinParallelism are not subject to the rate pacing
     bool           mRequestTokenBucketEnabled;
     uint16_t       mRequestTokenBucketMinParallelism;
@@ -510,6 +535,10 @@ private:
     bool mTCPKeepaliveLongLivedEnabled;
     // Time (secs) before first keepalive probe; between successful probes.
     int32_t mTCPKeepaliveLongLivedIdleTimeS;
+
+    // if true, generate NS_ERROR_PARTIAL_TRANSFER for h1 responses with
+    // incorrect content lengths or malformed chunked encodings
+    FrameCheckLevel mEnforceH1Framing;
 
 private:
     // For Rate Pacing Certain Network Events. Only assign this pointer on

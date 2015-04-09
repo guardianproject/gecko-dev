@@ -10,8 +10,8 @@ MOZ_PHOENIX=1
 
 if test "$OS_ARCH" = "WINNT"; then
   MOZ_MAINTENANCE_SERVICE=1
+  MOZ_VERIFY_MAR_SIGNATURE=1
   if ! test "$HAVE_64BIT_BUILD"; then
-    MOZ_VERIFY_MAR_SIGNATURE=1
     if test "$MOZ_UPDATE_CHANNEL" = "nightly" -o \
             "$MOZ_UPDATE_CHANNEL" = "aurora" -o \
             "$MOZ_UPDATE_CHANNEL" = "beta" -o \
@@ -21,7 +21,12 @@ if test "$OS_ARCH" = "WINNT"; then
       fi
     fi
   fi
+elif test "$OS_ARCH" = "Darwin"; then
+  MOZ_VERIFY_MAR_SIGNATURE=1
 fi
+
+# Enable building ./signmar and running libmar signature tests
+MOZ_ENABLE_SIGNMAR=1
 
 MOZ_CHROME_FILE_FORMAT=omni
 MOZ_DISABLE_EXPORT_JS=1
@@ -31,6 +36,7 @@ MOZ_SERVICES_CRYPTO=1
 MOZ_SERVICES_HEALTHREPORT=1
 MOZ_SERVICES_METRICS=1
 MOZ_SERVICES_SYNC=1
+MOZ_SERVICES_CLOUDSYNC=1
 MOZ_APP_VERSION=$FIREFOX_VERSION
 MOZ_EXTENSIONS_DEFAULT=" gio"
 # MOZ_APP_DISPLAYNAME will be set by branding/configure.sh
@@ -51,13 +57,9 @@ ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-central
 # The MAR_CHANNEL_ID must not contain the following 3 characters: ",\t "
 MAR_CHANNEL_ID=firefox-mozilla-central
 MOZ_PROFILE_MIGRATOR=1
-MOZ_EXTENSION_MANAGER=1
 MOZ_APP_STATIC_INI=1
 MOZ_WEBAPP_RUNTIME=1
 MOZ_MEDIA_NAVIGATOR=1
-if test "$OS_TARGET" = "WINNT" -o "$OS_TARGET" = "Darwin"; then
-  MOZ_FOLD_LIBS=1
-fi
 MOZ_WEBGL_CONFORMANT=1
 # Enable navigator.mozPay
 MOZ_PAY=1
@@ -65,6 +67,3 @@ MOZ_PAY=1
 MOZ_ACTIVITIES=1
 MOZ_JSDOWNLOADS=1
 MOZ_WEBM_ENCODER=1
-# Enable exact rooting and generational GC on desktop.
-JSGC_USE_EXACT_ROOTING=1
-JSGC_GENERATIONAL=1

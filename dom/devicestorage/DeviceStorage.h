@@ -23,7 +23,6 @@
 #define DEVICESTORAGE_SDCARD     "sdcard"
 #define DEVICESTORAGE_CRASHES    "crashes"
 
-class DeviceStorageFile;
 class nsIInputStream;
 class nsIOutputStream;
 
@@ -39,16 +38,9 @@ class DeviceStorageFileSystem;
 namespace ipc {
 class FileDescriptor;
 }
-
-template<>
-struct HasDangerousPublicDestructor<DeviceStorageFile>
-{
-  static const bool value = true;
-};
-
 } // namespace mozilla
 
-class DeviceStorageFile MOZ_FINAL
+class DeviceStorageFile final
   : public nsISupports {
 public:
   nsCOMPtr<nsIFile> mFile;
@@ -126,6 +118,7 @@ public:
   nsresult CreateFileDescriptor(mozilla::ipc::FileDescriptor& aFileDescriptor);
 
 private:
+  ~DeviceStorageFile() {}
   void Init();
   void NormalizeFilePath();
   void AppendRelativePath(const nsAString& aPath);
@@ -149,7 +142,7 @@ private:
     * ContentParent::Init (for IPC)
     * nsDOMDeviceStorage::Init (for non-ipc)
 */
-class FileUpdateDispatcher MOZ_FINAL
+class FileUpdateDispatcher final
   : public nsIObserver
 {
   ~FileUpdateDispatcher() {}
@@ -163,7 +156,7 @@ class FileUpdateDispatcher MOZ_FINAL
   static mozilla::StaticRefPtr<FileUpdateDispatcher> sSingleton;
 };
 
-class nsDOMDeviceStorage MOZ_FINAL
+class nsDOMDeviceStorage final
   : public mozilla::DOMEventTargetHelper
   , public nsIDOMDeviceStorage
   , public nsIObserver
@@ -185,23 +178,23 @@ public:
   NS_DECL_NSIDOMEVENTTARGET
 
   virtual mozilla::EventListenerManager*
-    GetExistingListenerManager() const MOZ_OVERRIDE;
+    GetExistingListenerManager() const override;
   virtual mozilla::EventListenerManager*
-    GetOrCreateListenerManager() MOZ_OVERRIDE;
+    GetOrCreateListenerManager() override;
 
   virtual void
   AddEventListener(const nsAString& aType,
                    mozilla::dom::EventListener* aListener,
                    bool aUseCapture,
                    const mozilla::dom::Nullable<bool>& aWantsUntrusted,
-                   ErrorResult& aRv) MOZ_OVERRIDE;
+                   ErrorResult& aRv) override;
 
   virtual void RemoveEventListener(const nsAString& aType,
                                    mozilla::dom::EventListener* aListener,
                                    bool aUseCapture,
-                                   ErrorResult& aRv) MOZ_OVERRIDE;
+                                   ErrorResult& aRv) override;
 
-  nsDOMDeviceStorage(nsPIDOMWindow* aWindow);
+  explicit nsDOMDeviceStorage(nsPIDOMWindow* aWindow);
 
   nsresult Init(nsPIDOMWindow* aWindow, const nsAString& aType,
                 const nsAString& aVolName);
@@ -222,7 +215,7 @@ public:
     return GetOwner();
   }
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   IMPL_EVENT_HANDLER(change)
 
@@ -279,12 +272,13 @@ public:
   bool CanBeMounted();
   bool CanBeFormatted();
   bool CanBeShared();
+  bool IsRemovable();
   bool Default();
 
   // Uses XPCOM GetStorageName
 
   already_AddRefed<Promise>
-  GetRoot();
+  GetRoot(ErrorResult& aRv);
 
   static void
   CreateDeviceStorageFor(nsPIDOMWindow* aWin,
@@ -329,6 +323,7 @@ private:
   nsCOMPtr<nsIFile> mRootDirectory;
   nsString mStorageName;
   bool mIsShareable;
+  bool mIsRemovable;
 
   already_AddRefed<nsDOMDeviceStorage> GetStorage(const nsAString& aFullPath,
                                                   nsAString& aOutStoragePath);
@@ -339,6 +334,8 @@ private:
 
   bool mIsWatchingFile;
   bool mAllowedToWatchFile;
+  bool mIsDefaultLocation;
+  void DispatchDefaultChangeEvent();
 
   nsresult Notify(const char* aReason, class DeviceStorageFile* aFile);
 
@@ -349,8 +346,9 @@ private:
 
 #ifdef MOZ_WIDGET_GONK
   nsString mLastStatus;
+  nsString mLastStorageStatus;
   void DispatchStatusChangeEvent(nsAString& aStatus);
-  void DispatchStorageStatusChangeEvent(nsAString& aVolumeStatus);
+  void DispatchStorageStatusChangeEvent(nsAString& aStorageStatus);
 #endif
 
   // nsIDOMDeviceStorage.type

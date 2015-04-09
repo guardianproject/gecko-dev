@@ -15,26 +15,24 @@ class HTMLLinkAccessible : public HyperTextAccessibleWrap
 {
 public:
   HTMLLinkAccessible(nsIContent* aContent, DocAccessible* aDoc);
- 
+
   NS_DECL_ISUPPORTS_INHERITED
 
-  // nsIAccessible
-  NS_IMETHOD GetActionName(uint8_t aIndex, nsAString& aName);
-  NS_IMETHOD DoAction(uint8_t aIndex);
-
   // Accessible
-  virtual void Value(nsString& aValue);
-  virtual a11y::role NativeRole();
-  virtual uint64_t NativeState();
-  virtual uint64_t NativeLinkState() const;
-  virtual uint64_t NativeInteractiveState() const;
+  virtual void Value(nsString& aValue) override;
+  virtual a11y::role NativeRole() override;
+  virtual uint64_t NativeState() override;
+  virtual uint64_t NativeLinkState() const override;
+  virtual uint64_t NativeInteractiveState() const override;
 
   // ActionAccessible
-  virtual uint8_t ActionCount();
+  virtual uint8_t ActionCount() override;
+  virtual void ActionNameAt(uint8_t aIndex, nsAString& aName) override;
+  virtual bool DoAction(uint8_t aIndex) override;
 
   // HyperLinkAccessible
-  virtual bool IsLink();
-  virtual already_AddRefed<nsIURI> AnchorURIAt(uint32_t aAnchorIndex);
+  virtual bool IsLink() override;
+  virtual already_AddRefed<nsIURI> AnchorURIAt(uint32_t aAnchorIndex) override;
 
 protected:
   virtual ~HTMLLinkAccessible() {}
@@ -44,7 +42,7 @@ protected:
   /**
    * Returns true if the link has href attribute.
    */
-  bool IsLinked();
+  bool IsLinked() const;
 };
 
 } // namespace a11y

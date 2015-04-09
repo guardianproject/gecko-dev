@@ -6,10 +6,10 @@
 /* Implementation of xptiInterfaceEntry and xptiInterfaceInfo. */
 
 #include "xptiprivate.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/XPTInterfaceInfoManager.h"
 #include "mozilla/PodOperations.h"
-#include "nsCxPusher.h"
 #include "jsapi.h"
 
 using namespace mozilla;
@@ -107,6 +107,19 @@ xptiInterfaceEntry::ResolveLocked()
         }
 
         mParent = parent;
+        if (parent->GetHasNotXPCOMFlag()) {
+            SetHasNotXPCOMFlag();
+        } else {
+            for (uint16_t idx = 0; idx < mDescriptor->num_methods; ++idx) {
+                nsXPTMethodInfo* method = reinterpret_cast<nsXPTMethodInfo*>(
+                    mDescriptor->method_descriptors + idx);
+                if (method->IsNotXPCOM()) {
+                    SetHasNotXPCOMFlag();
+                    break;
+                }
+            }
+        }
+
 
         mMethodBaseIndex =
             parent->mMethodBaseIndex + 
@@ -671,12 +684,12 @@ xptiInterfaceInfo::BuildParent()
 {
     mozilla::ReentrantMonitorAutoEnter monitor(XPTInterfaceInfoManager::GetSingleton()->
                                     mWorkingSet.mTableReentrantMonitor);
-    NS_ASSERTION(mEntry && 
-                 mEntry->IsFullyResolved() && 
+    NS_ASSERTION(mEntry &&
+                 mEntry->IsFullyResolved() &&
                  !mParent &&
                  mEntry->Parent(),
                 "bad BuildParent call");
-    mParent = mEntry->Parent()->InterfaceInfo().take();
+    mParent = mEntry->Parent()->InterfaceInfo();
     return true;
 }
 
@@ -685,7 +698,7 @@ xptiInterfaceInfo::BuildParent()
 NS_IMPL_QUERY_INTERFACE(xptiInterfaceInfo, nsIInterfaceInfo)
 
 xptiInterfaceInfo::xptiInterfaceInfo(xptiInterfaceEntry* entry)
-    : mEntry(entry), mParent(nullptr)
+    : mEntry(entry)
 {
     LOG_INFO_CREATE(this);
 }
@@ -693,8 +706,14 @@ xptiInterfaceInfo::xptiInterfaceInfo(xptiInterfaceEntry* entry)
 xptiInterfaceInfo::~xptiInterfaceInfo() 
 {
     LOG_INFO_DESTROY(this);
-    NS_IF_RELEASE(mParent); 
     NS_ASSERTION(!mEntry, "bad state in dtor");
+}
+
+void
+xptiInterfaceInfo::Invalidate()
+{
+  mParent = nullptr;
+  mEntry = nullptr;
 }
 
 MozExternalRefCountType

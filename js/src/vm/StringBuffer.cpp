@@ -15,21 +15,20 @@
 using namespace js;
 
 template <typename CharT, class Buffer>
-static CharT *
-ExtractWellSized(ExclusiveContext *cx, Buffer &cb)
+static CharT*
+ExtractWellSized(ExclusiveContext* cx, Buffer& cb)
 {
     size_t capacity = cb.capacity();
     size_t length = cb.length();
 
-    CharT *buf = cb.extractRawBuffer();
+    CharT* buf = cb.extractRawBuffer();
     if (!buf)
         return nullptr;
 
     /* For medium/big buffers, avoid wasting more than 1/4 of the memory. */
-    JS_ASSERT(capacity >= length);
+    MOZ_ASSERT(capacity >= length);
     if (length > Buffer::sMaxInlineStorage && capacity - length > length / 4) {
-        size_t bytes = sizeof(CharT) * (length + 1);
-        CharT *tmp = (CharT *)cx->realloc_(buf, bytes);
+        CharT* tmp = cx->zone()->pod_realloc<CharT>(buf, capacity, length + 1);
         if (!tmp) {
             js_free(buf);
             return nullptr;
@@ -40,13 +39,13 @@ ExtractWellSized(ExclusiveContext *cx, Buffer &cb)
     return buf;
 }
 
-jschar *
+char16_t*
 StringBuffer::stealChars()
 {
     if (isLatin1() && !inflateChars())
         return nullptr;
 
-    return ExtractWellSized<jschar>(cx, twoByteChars());
+    return ExtractWellSized<char16_t>(cx, twoByteChars());
 }
 
 bool
@@ -73,8 +72,8 @@ StringBuffer::inflateChars()
 }
 
 template <typename CharT, class Buffer>
-static JSFlatString *
-FinishStringFlat(ExclusiveContext *cx, StringBuffer &sb, Buffer &cb)
+static JSFlatString*
+FinishStringFlat(ExclusiveContext* cx, StringBuffer& sb, Buffer& cb)
 {
     size_t len = sb.length();
     if (!sb.append('\0'))
@@ -84,15 +83,21 @@ FinishStringFlat(ExclusiveContext *cx, StringBuffer &sb, Buffer &cb)
     if (!buf)
         return nullptr;
 
-    JSFlatString *str = NewStringDontDeflate<CanGC>(cx, buf.get(), len);
+    JSFlatString* str = NewStringDontDeflate<CanGC>(cx, buf.get(), len);
     if (!str)
         return nullptr;
+
+    /*
+     * The allocation was made on a TempAllocPolicy, so account for the string
+     * data on the string's zone.
+     */
+    str->zone()->updateMallocCounter(sizeof(CharT) * len);
 
     buf.forget();
     return str;
 }
 
-JSFlatString *
+JSFlatString*
 StringBuffer::finishString()
 {
     size_t len = length();
@@ -106,23 +111,23 @@ StringBuffer::finishString()
     JS_STATIC_ASSERT(JSFatInlineString::MAX_LENGTH_LATIN1 < Latin1CharBuffer::InlineLength);
 
     if (isLatin1()) {
-        if (JSFatInlineString::latin1LengthFits(len)) {
+        if (JSInlineString::lengthFits<Latin1Char>(len)) {
             mozilla::Range<const Latin1Char> range(latin1Chars().begin(), len);
-            return NewFatInlineString<CanGC>(cx, range);
+            return NewInlineString<CanGC>(cx, range);
         }
     } else {
-        if (JSFatInlineString::twoByteLengthFits(len)) {
-            mozilla::Range<const jschar> range(twoByteChars().begin(), len);
-            return NewFatInlineString<CanGC>(cx, range);
+        if (JSInlineString::lengthFits<char16_t>(len)) {
+            mozilla::Range<const char16_t> range(twoByteChars().begin(), len);
+            return NewInlineString<CanGC>(cx, range);
         }
     }
 
     return isLatin1()
         ? FinishStringFlat<Latin1Char>(cx, *this, latin1Chars())
-        : FinishStringFlat<jschar>(cx, *this, twoByteChars());
+        : FinishStringFlat<char16_t>(cx, *this, twoByteChars());
 }
 
-JSAtom *
+JSAtom*
 StringBuffer::finishAtom()
 {
     size_t len = length();
@@ -130,18 +135,18 @@ StringBuffer::finishAtom()
         return cx->names().empty;
 
     if (isLatin1()) {
-        JSAtom *atom = AtomizeChars(cx, latin1Chars().begin(), len);
+        JSAtom* atom = AtomizeChars(cx, latin1Chars().begin(), len);
         latin1Chars().clear();
         return atom;
     }
 
-    JSAtom *atom = AtomizeChars(cx, twoByteChars().begin(), len);
+    JSAtom* atom = AtomizeChars(cx, twoByteChars().begin(), len);
     twoByteChars().clear();
     return atom;
 }
 
 bool
-js::ValueToStringBufferSlow(JSContext *cx, const Value &arg, StringBuffer &sb)
+js::ValueToStringBufferSlow(JSContext* cx, const Value& arg, StringBuffer& sb)
 {
     RootedValue v(cx, arg);
     if (!ToPrimitive(cx, JSTYPE_STRING, &v))
@@ -156,9 +161,9 @@ js::ValueToStringBufferSlow(JSContext *cx, const Value &arg, StringBuffer &sb)
     if (v.isNull())
         return sb.append(cx->names().null);
     if (v.isSymbol()) {
-        JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr, JSMSG_SYMBOL_TO_STRING);
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_SYMBOL_TO_STRING);
         return false;
     }
-    JS_ASSERT(v.isUndefined());
+    MOZ_ASSERT(v.isUndefined());
     return sb.append(cx->names().undefined);
 }

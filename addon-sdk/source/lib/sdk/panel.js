@@ -3,23 +3,22 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-// The panel module currently supports only Firefox.
+// The panel module currently supports only Firefox and SeaMonkey.
 // See: https://bugzilla.mozilla.org/show_bug.cgi?id=jetpack-panel-apps
 module.metadata = {
   "stability": "stable",
   "engines": {
-    "Firefox": "*"
+    "Firefox": "*",
+    "SeaMonkey": "*"
   }
 };
 
 const { Ci } = require("chrome");
 const { setTimeout } = require('./timers');
-const { isPrivateBrowsingSupported } = require('./self');
-const { isWindowPBSupported } = require('./private-browsing/utils');
 const { Class } = require("./core/heritage");
 const { merge } = require("./util/object");
 const { WorkerHost } = require("./content/utils");
-const { Worker } = require("./content/worker");
+const { Worker } = require("./deprecated/sync-worker");
 const { Disposable } = require("./core/disposable");
 const { WeakReference } = require('./core/reference');
 const { contract: loaderContract } = require("./content/loader");
@@ -137,6 +136,7 @@ const Panel = Class({
       position: Object.freeze({}),
       contextMenu: false
     }, panelContract(options));
+    model.ready = false;
     models.set(this, model);
 
     if (model.contentStyle || model.contentStyleFile) {
@@ -153,7 +153,7 @@ const Panel = Class({
 
     // Load panel content.
     domPanel.setURL(view, model.contentURL);
-    
+
     // Allow context menu
     domPanel.allowContextMenu(view, model.contextMenu);
 
@@ -193,7 +193,7 @@ const Panel = Class({
 
   /* Public API: Panel.position */
   get position() modelFor(this).position,
-  
+
   /* Public API: Panel.contextMenu */
   get contextMenu() modelFor(this).contextMenu,
   set contextMenu(allow) {
@@ -201,7 +201,7 @@ const Panel = Class({
     model.contextMenu = panelContract({ contextMenu: allow }).contextMenu;
     domPanel.allowContextMenu(viewFor(this), model.contextMenu);
   },
-    
+
   get contentURL() modelFor(this).contentURL,
   set contentURL(value) {
     let model = modelFor(this);
@@ -295,25 +295,47 @@ let hides = filter(panelEvents, ({type}) => type === "popuphidden");
 let ready = filter(panelEvents, ({type, target}) =>
   getAttachEventType(modelFor(panelFor(target))) === type);
 
+// Panel event emitted when the contents of the panel has been loaded.
+let readyToShow = filter(panelEvents, ({type}) => type === "DOMContentLoaded");
+
 // Styles should be always added as soon as possible, and doesn't makes them
 // depends on `contentScriptWhen`
 let start = filter(panelEvents, ({type}) => type === "document-element-inserted");
 
 // Forward panel show / hide events to panel's own event listeners.
-on(shows, "data", ({target}) => emit(panelFor(target), "show"));
+on(shows, "data", ({target}) => {
+  let panel = panelFor(target);
+  if (modelFor(panel).ready)
+    emit(panel, "show");
+});
 
-on(hides, "data", ({target}) => emit(panelFor(target), "hide"));
+on(hides, "data", ({target}) => {
+  let panel = panelFor(target);
+  if (modelFor(panel).ready)
+    emit(panel, "hide");
+});
 
 on(ready, "data", ({target}) => {
   let panel = panelFor(target);
   let window = domPanel.getContentDocument(target).defaultView;
-  
+
   workerFor(panel).attach(window);
+});
+
+on(readyToShow, "data", ({target}) => {
+  let panel = panelFor(target);
+
+  if (!modelFor(panel).ready) {
+    modelFor(panel).ready = true;
+
+    if (viewFor(panel).state == "open")
+      emit(panel, "show");
+  }
 });
 
 on(start, "data", ({target}) => {
   let panel = panelFor(target);
   let window = domPanel.getContentDocument(target).defaultView;
-  
+
   attach(styleFor(panel), window);
 });

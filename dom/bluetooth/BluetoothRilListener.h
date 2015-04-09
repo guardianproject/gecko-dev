@@ -11,8 +11,9 @@
 
 #include "nsAutoPtr.h"
 
-#include "nsIIccProvider.h"
-#include "nsIMobileConnectionProvider.h"
+#include "nsIIccService.h"
+#include "nsIMobileConnectionService.h"
+#include "nsITelephonyCallInfo.h"
 #include "nsITelephonyService.h"
 
 BEGIN_BLUETOOTH_NAMESPACE
@@ -26,10 +27,12 @@ public:
   NS_DECL_NSIICCLISTENER
 
   IccListener() { }
-  virtual ~IccListener() { }
 
   bool Listen(bool aStart);
   void SetOwner(BluetoothRilListener *aOwner);
+
+protected:
+  virtual ~IccListener() { }
 
 private:
   BluetoothRilListener* mOwner;
@@ -43,9 +46,11 @@ public:
 
   MobileConnectionListener(uint32_t aClientId)
   : mClientId(aClientId) { }
-  virtual ~MobileConnectionListener() { }
 
   bool Listen(bool aStart);
+
+protected:
+  virtual ~MobileConnectionListener() { }
 
 private:
   uint32_t mClientId;
@@ -58,9 +63,14 @@ public:
   NS_DECL_NSITELEPHONYLISTENER
 
   TelephonyListener() { }
-  virtual ~TelephonyListener() { }
 
   bool Listen(bool aStart);
+
+protected:
+  virtual ~TelephonyListener() { }
+
+private:
+  nsresult HandleCallInfo(nsITelephonyCallInfo* aInfo, bool aSend);
 };
 
 class BluetoothRilListener

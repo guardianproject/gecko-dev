@@ -10,23 +10,24 @@
 #include "mozilla/ErrorResult.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsWrapperCache.h"
-#include "nsClassHashtable.h"
-#include "nsHashKeys.h"
 #include "nsISupports.h"
+#include "nsIUnicodeDecoder.h"
 
 namespace mozilla {
 namespace dom {
+
+class URLSearchParams;
 
 class URLSearchParamsObserver : public nsISupports
 {
 public:
   virtual ~URLSearchParamsObserver() {}
 
-  virtual void URLSearchParamsUpdated() = 0;
+  virtual void URLSearchParamsUpdated(URLSearchParams* aFromThis) = 0;
 };
 
-class URLSearchParams MOZ_FINAL : public nsISupports,
-                                  public nsWrapperCache
+class URLSearchParams final : public nsISupports,
+                              public nsWrapperCache
 {
   ~URLSearchParams();
 
@@ -43,7 +44,7 @@ public:
   }
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   static already_AddRefed<URLSearchParams>
   Constructor(const GlobalObject& aGlobal, const nsAString& aInit,
@@ -58,6 +59,7 @@ public:
 
   void AddObserver(URLSearchParamsObserver* aObserver);
   void RemoveObserver(URLSearchParamsObserver* aObserver);
+  void RemoveObservers();
 
   void Serialize(nsAString& aValue) const;
 
@@ -73,9 +75,20 @@ public:
 
   void Delete(const nsAString& aName);
 
-  void Stringify(nsString& aRetval)
+  void Stringify(nsString& aRetval) const
   {
     Serialize(aRetval);
+  }
+
+  typedef void (*ParamFunc)(const nsString& aName, const nsString& aValue,
+                            void* aClosure);
+
+  void
+  ForEach(ParamFunc aFunc, void* aClosure)
+  {
+    for (uint32_t i = 0; i < mSearchParams.Length(); ++i) {
+      aFunc(mSearchParams[i].mKey, mSearchParams[i].mValue, aClosure);
+    }
   }
 
 private:
@@ -83,21 +96,21 @@ private:
 
   void DeleteAll();
 
-  void DecodeString(const nsACString& aInput, nsACString& aOutput);
+  void DecodeString(const nsACString& aInput, nsAString& aOutput);
+  void ConvertString(const nsACString& aInput, nsAString& aOutput);
 
   void NotifyObservers(URLSearchParamsObserver* aExceptObserver);
 
-  static PLDHashOperator
-  CopyEnumerator(const nsAString& aName, nsTArray<nsString>* aArray,
-                 void *userData);
+  struct Param
+  {
+    nsString mKey;
+    nsString mValue;
+  };
 
-  static PLDHashOperator
-  SerializeEnumerator(const nsAString& aName, nsTArray<nsString>* aArray,
-                      void *userData);
-
-  nsClassHashtable<nsStringHashKey, nsTArray<nsString>> mSearchParams;
+  nsTArray<Param> mSearchParams;
 
   nsTArray<nsRefPtr<URLSearchParamsObserver>> mObservers;
+  nsCOMPtr<nsIUnicodeDecoder> mDecoder;
 };
 
 } // namespace dom

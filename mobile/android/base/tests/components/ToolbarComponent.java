@@ -9,10 +9,14 @@ import static org.mozilla.gecko.tests.helpers.AssertionHelper.fAssertFalse;
 import static org.mozilla.gecko.tests.helpers.AssertionHelper.fAssertNotNull;
 import static org.mozilla.gecko.tests.helpers.AssertionHelper.fAssertTrue;
 
+import org.mozilla.gecko.NewTabletUI;
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.tests.StringHelper;
 import org.mozilla.gecko.tests.UITestContext;
 import org.mozilla.gecko.tests.helpers.DeviceHelper;
+import org.mozilla.gecko.tests.helpers.NavigationHelper;
 import org.mozilla.gecko.tests.helpers.WaitHelper;
+import org.mozilla.gecko.toolbar.PageActionLayout;
 
 import android.view.View;
 import android.widget.EditText;
@@ -26,6 +30,13 @@ import com.jayway.android.robotium.solo.Solo;
  * A class representing any interactions that take place on the Toolbar.
  */
 public class ToolbarComponent extends BaseComponent {
+
+    private static final String URL_HTTP_PREFIX = "http://";
+
+    // We are waiting up to 30 seconds instead of the default waiting time because reader mode
+    // parsing can take quite some time on slower devices (Bug 1142699)
+    private static final int READER_MODE_WAIT_MS = 30000;
+
     public ToolbarComponent(final UITestContext testContext) {
         super(testContext);
     }
@@ -40,7 +51,20 @@ public class ToolbarComponent extends BaseComponent {
         return this;
     }
 
-    public ToolbarComponent assertTitle(final String expected) {
+    public ToolbarComponent assertTitle(final String url) {
+        fAssertNotNull("The url argument is not null", url);
+
+        final String expected;
+        final String absoluteURL = NavigationHelper.adjustUrl(url);
+
+        if (StringHelper.get().ABOUT_HOME_URL.equals(absoluteURL)) {
+            expected = StringHelper.get().ABOUT_HOME_TITLE;
+        } else if (absoluteURL.startsWith(URL_HTTP_PREFIX)) {
+            expected = absoluteURL.substring(URL_HTTP_PREFIX.length());
+        } else {
+            expected = absoluteURL;
+        }
+
         fAssertEquals("The Toolbar title is " + expected, expected, getTitle());
         return this;
     }
@@ -51,10 +75,21 @@ public class ToolbarComponent extends BaseComponent {
         return this;
     }
 
+    public ToolbarComponent assertIsUrlEditTextSelected() {
+        fAssertTrue("The edit text is selected", isUrlEditTextSelected());
+        return this;
+    }
+
+    public ToolbarComponent assertIsUrlEditTextNotSelected() {
+        fAssertFalse("The edit text is not selected", isUrlEditTextSelected());
+        return this;
+    }
+
     /**
      * Returns the root View for the browser toolbar.
      */
     private View getToolbarView() {
+        mSolo.waitForView(R.id.browser_toolbar);
         return mSolo.getView(R.id.browser_toolbar);
     }
 
@@ -84,14 +119,33 @@ public class ToolbarComponent extends BaseComponent {
         DeviceHelper.assertIsTablet();
         return (ImageButton) getToolbarView().findViewById(R.id.reload);
     }
+
+    private PageActionLayout getPageActionLayout() {
+        return (PageActionLayout) getToolbarView().findViewById(R.id.page_action_layout);
+    }
+
+    private ImageButton getReaderModeButton() {
+        final PageActionLayout pageActionLayout = getPageActionLayout();
+        final int count = pageActionLayout.getChildCount();
+
+        for (int i = 0; i < count; i++) {
+            final View view = pageActionLayout.getChildAt(i);
+            if (StringHelper.get().CONTENT_DESCRIPTION_READER_MODE_BUTTON.equals(view.getContentDescription())) {
+                return (ImageButton) view;
+            }
+        }
+
+        return null;
+    }
+
     /**
      * Returns the View for the edit cancel button in the browser toolbar.
      */
-    private ImageButton getEditCancelButton() {
-        return (ImageButton) getToolbarView().findViewById(R.id.edit_cancel);
+    private View getEditCancelButton() {
+        return getToolbarView().findViewById(R.id.edit_cancel);
     }
 
-    private CharSequence getTitle() {
+    private String getTitle() {
         return getTitleHelper(true);
     }
 
@@ -100,16 +154,16 @@ public class ToolbarComponent extends BaseComponent {
      * may return a value that may never be visible to the user. Callers likely want to use
      * {@link assertTitle} instead.
      */
-    public CharSequence getPotentiallyInconsistentTitle() {
+    public String getPotentiallyInconsistentTitle() {
         return getTitleHelper(false);
     }
 
-    private CharSequence getTitleHelper(final boolean shouldAssertNotEditing) {
+    private String getTitleHelper(final boolean shouldAssertNotEditing) {
         if (shouldAssertNotEditing) {
             assertIsNotEditing();
         }
 
-        return getUrlTitleText().getText();
+        return getUrlTitleText().getText().toString();
     }
 
     private boolean isEditing() {
@@ -150,7 +204,15 @@ public class ToolbarComponent extends BaseComponent {
     public ToolbarComponent dismissEditingMode() {
         assertIsEditing();
 
-        mSolo.clickOnView(getEditCancelButton());
+        if (DeviceHelper.isTablet()) {
+            final EditText urlEditText = getUrlEditText();
+            if (urlEditText.isFocused()) {
+                mSolo.goBack();
+            }
+            mSolo.goBack();
+        } else {
+            mSolo.clickOnView(getEditCancelButton());
+        }
 
         waitForNotEditing();
 
@@ -167,7 +229,7 @@ public class ToolbarComponent extends BaseComponent {
                 urlEditText.isInputMethodTarget());
 
         mSolo.clearEditText(urlEditText);
-        mSolo.enterText(urlEditText, url);
+        mSolo.typeText(urlEditText, url);
 
         return this;
     }
@@ -185,6 +247,13 @@ public class ToolbarComponent extends BaseComponent {
     public ToolbarComponent pressReloadButton() {
         final ImageButton reloadButton = getReloadButton();
         return pressButton(reloadButton, "reload");
+    }
+
+    public ToolbarComponent pressReaderModeButton() {
+        final ImageButton readerModeButton = waitForReaderModeButton();
+        pressButton(readerModeButton, "reader mode");
+
+        return this;
     }
 
     private ToolbarComponent pressButton(final View view, final String buttonName) {
@@ -220,5 +289,22 @@ public class ToolbarComponent extends BaseComponent {
                 return !isEditing();
             }
         });
+    }
+
+    private ImageButton waitForReaderModeButton() {
+        final ImageButton[] readerModeButton = new ImageButton[1];
+
+        WaitHelper.waitFor("the Reader mode button to be visible", new Condition() {
+            @Override
+            public boolean isSatisfied() {
+                return (readerModeButton[0] = getReaderModeButton()) != null;
+            }
+        }, READER_MODE_WAIT_MS);
+
+        return readerModeButton[0];
+    }
+
+    private boolean isUrlEditTextSelected() {
+        return getUrlEditText().isSelected();
     }
 }

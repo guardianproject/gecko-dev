@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 package org.mozilla.gecko.tests;
 
 import android.view.View;
@@ -6,22 +10,24 @@ import android.widget.ListView;
 
 import org.mozilla.gecko.home.HomePager;
 
+import com.jayway.android.robotium.solo.Condition;
+
 public class testHistory extends AboutHomeTest {
     private View mFirstChild;
 
     public void testHistory() {
         blockForGeckoReady();
 
-        String url = getAbsoluteUrl("/robocop/robocop_blank_01.html");
-        String url2 = getAbsoluteUrl("/robocop/robocop_blank_02.html");
-        String url3 = getAbsoluteUrl("/robocop/robocop_blank_03.html");
+        String url = getAbsoluteUrl(mStringHelper.ROBOCOP_BLANK_PAGE_01_URL);
+        String url2 = getAbsoluteUrl(mStringHelper.ROBOCOP_BLANK_PAGE_02_URL);
+        String url3 = getAbsoluteUrl(mStringHelper.ROBOCOP_BLANK_PAGE_03_URL);
 
         inputAndLoadUrl(url);
-        verifyPageTitle("Browser Blank Page 01");
+        verifyUrlBarTitle(url);
         inputAndLoadUrl(url2);
-        verifyPageTitle("Browser Blank Page 02");
+        verifyUrlBarTitle(url2);
         inputAndLoadUrl(url3);
-        verifyPageTitle("Browser Blank Page 03");
+        verifyUrlBarTitle(url3);
 
         openAboutHomeTab(AboutHomeTabs.HISTORY);
 
@@ -31,9 +37,9 @@ public class testHistory extends AboutHomeTest {
         // Click on the history item and wait for the page to load
         // wait for the history list to be populated
         mFirstChild = null;
-        boolean success = waitForTest(new BooleanTest() {
+        boolean success = waitForCondition(new Condition() {
             @Override
-            public boolean test() {
+            public boolean isSatisfied() {
                 mFirstChild = hList.getChildAt(1);
                 if (mFirstChild == null) {
                     return false;
@@ -61,8 +67,8 @@ public class testHistory extends AboutHomeTest {
         mSolo.clickOnView(mFirstChild);
 
         // The first item here (since it was just visited) should be a "Switch to tab" item
-        // i.e. don't expect a DOMCOntentLoaded event
-        verifyPageTitle("Browser Blank Page 03");
+        // i.e. don't expect a DOMContentLoaded event
+        verifyUrlBarTitle(mStringHelper.ROBOCOP_BLANK_PAGE_03_URL);
         verifyUrl(url3);
     }
 }

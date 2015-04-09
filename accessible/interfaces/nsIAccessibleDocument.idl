@@ -5,10 +5,8 @@
 
 #include "nsISupports.idl"
 
-interface nsIAccessible;
 interface nsIAccessiblePivot;
 interface nsIDOMDocument;
-interface nsIDOMNode;
 interface nsIDOMWindow;
 
 /**
@@ -18,11 +16,10 @@ interface nsIDOMWindow;
  * there is an nsIAccessibleDocument for each document
  * whether it is XUL, HTML or whatever.
  * You can QueryInterface to nsIAccessibleDocument from the nsIAccessible for
- * the root node of a document. You can also get one from 
- * nsIAccessible::GetAccessibleDocument() or 
- * nsIAccessibleEvent::GetAccessibleDocument()
+ * the root node of a document or you can get one from
+ * nsIAccessible::GetDocument().
  */
-[scriptable, uuid(fe5b3886-2b6a-491a-80cd-a3e6342c451d)]
+[scriptable, uuid(2be938df-0210-4609-9ece-26b197a517e5)]
 interface nsIAccessibleDocument : nsISupports
 {
   /**
@@ -54,17 +51,6 @@ interface nsIAccessibleDocument : nsISupports
    * The nsIDOMWindow that the document resides in.
    */
   readonly attribute nsIDOMWindow window;
-
-  /**
-   * The namespace for each ID that is handed back.
-   */
-  AString getNameSpaceURIForID(in short nameSpaceID);
-
-  /**
-   * The window handle for the OS window the document is being displayed in.
-   * For example, in Windows you can static cast it to an HWND.
-   */
-  [noscript] readonly attribute voidPtr windowHandle;
 
   /**
    * Return the parent document accessible.

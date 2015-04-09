@@ -1,10 +1,14 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/Pair.h"
+#include "mozilla/TypeTraits.h"
 
+using mozilla::IsSame;
+using mozilla::MakePair;
 using mozilla::Pair;
 
 // Sizes aren't part of the guaranteed Pair interface, but we want to verify our
@@ -28,21 +32,21 @@ using mozilla::Pair;
 INSTANTIATE(int, int, prim1, 2 * sizeof(int));
 INSTANTIATE(int, long, prim2, 2 * sizeof(long));
 
-struct EmptyClass { EmptyClass(int) {} };
-struct NonEmpty { char c; NonEmpty(int) {} };
+struct EmptyClass { explicit EmptyClass(int) {} };
+struct NonEmpty { char mC; explicit NonEmpty(int) {} };
 
 INSTANTIATE(int, EmptyClass, both1, sizeof(int));
 INSTANTIATE(int, NonEmpty, both2, 2 * sizeof(int));
 INSTANTIATE(EmptyClass, NonEmpty, both3, 1);
 
-struct A { char dummy; A(int) {} };
-struct B : A { B(int i) : A(i) {} };
+struct A { char dummy; explicit A(int) {} };
+struct B : A { explicit B(int aI) : A(aI) {} };
 
 INSTANTIATE(A, A, class1, 2);
 INSTANTIATE(A, B, class2, 2);
 INSTANTIATE(A, EmptyClass, class3, 1);
 
-struct OtherEmpty : EmptyClass { OtherEmpty(int i) : EmptyClass(i) {} };
+struct OtherEmpty : EmptyClass { explicit OtherEmpty(int aI) : EmptyClass(aI) {} };
 
 // C++11 requires distinct objects of the same type, within the same "most
 // derived object", to have different addresses.  Pair allocates its elements as
@@ -58,4 +62,22 @@ struct OtherEmpty : EmptyClass { OtherEmpty(int i) : EmptyClass(i) {} };
 int
 main()
 {
+  A a(0);
+  B b(0);
+  const A constA(0);
+  const B constB(0);
+
+  // Check that MakePair generates Pair objects of the correct types.
+  static_assert(IsSame<decltype(MakePair(A(0), B(0))), Pair<A, B>>::value,
+                "MakePair should strip rvalue references");
+  static_assert(IsSame<decltype(MakePair(a, b)), Pair<A, B>>::value,
+                "MakePair should strip lvalue references");
+  static_assert(IsSame<decltype(MakePair(constA, constB)), Pair<A, B>>::value,
+                "MakePair should strip CV-qualifiers");
+
+  // Check that copy assignment and move assignment work.
+  a = constA;
+  a = A(0);
+
+  return 0;
 }

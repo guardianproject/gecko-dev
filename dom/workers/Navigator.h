@@ -7,6 +7,7 @@
 #define mozilla_dom_workers_navigator_h__
 
 #include "Workers.h"
+#include "RuntimeService.h"
 #include "nsString.h"
 #include "nsWrapperCache.h"
 
@@ -22,27 +23,19 @@ class Promise;
 
 BEGIN_WORKERS_NAMESPACE
 
-class WorkerNavigator MOZ_FINAL : public nsWrapperCache
+class WorkerNavigator final : public nsWrapperCache
 {
-  nsString mAppName;
-  nsString mAppVersion;
-  nsString mPlatform;
-  nsString mUserAgent;
+  typedef struct RuntimeService::NavigatorProperties NavigatorProperties;
+
+  NavigatorProperties mProperties;
   bool mOnline;
 
-  WorkerNavigator(const nsAString& aAppName,
-                  const nsAString& aAppVersion,
-                  const nsAString& aPlatform,
-                  const nsAString& aUserAgent,
+  WorkerNavigator(const NavigatorProperties& aProperties,
                   bool aOnline)
-    : mAppName(aAppName)
-    , mAppVersion(aAppVersion)
-    , mPlatform(aPlatform)
-    , mUserAgent(aUserAgent)
+    : mProperties(aProperties)
     , mOnline(aOnline)
   {
     MOZ_COUNT_CTOR(WorkerNavigator);
-    SetIsDOMBinding();
   }
 
   ~WorkerNavigator()
@@ -59,7 +52,7 @@ public:
   Create(bool aOnLine);
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   nsISupports* GetParentObject() const {
     return nullptr;
@@ -69,33 +62,37 @@ public:
   {
     aAppCodeName.AssignLiteral("Mozilla");
   }
-  void GetAppName(nsString& aAppName) const
-  {
-    aAppName = mAppName;
-  }
+  void GetAppName(nsString& aAppName) const;
 
-  void GetAppVersion(nsString& aAppVersion) const
-  {
-    aAppVersion = mAppVersion;
-  }
+  void GetAppVersion(nsString& aAppVersion) const;
 
-  void GetPlatform(nsString& aPlatform) const
-  {
-    aPlatform = mPlatform;
-  }
+  void GetPlatform(nsString& aPlatform) const;
+
   void GetProduct(nsString& aProduct) const
   {
     aProduct.AssignLiteral("Gecko");
   }
+
   bool TaintEnabled() const
   {
     return false;
   }
 
-  void GetUserAgent(nsString& aUserAgent) const
+  void GetLanguage(nsString& aLanguage) const
   {
-    aUserAgent = mUserAgent;
+    if (mProperties.mLanguages.Length() >= 1) {
+      aLanguage.Assign(mProperties.mLanguages[0]);
+    } else {
+      aLanguage.Truncate();
+    }
   }
+
+  void GetLanguages(nsTArray<nsString>& aLanguages) const
+  {
+    aLanguages = mProperties.mLanguages;
+  }
+
+  void GetUserAgent(nsString& aUserAgent) const;
 
   bool OnLine() const
   {
@@ -108,8 +105,11 @@ public:
     mOnline = aOnline;
   }
 
+  void SetLanguages(const nsTArray<nsString>& aLanguages);
+
   already_AddRefed<Promise> GetDataStores(JSContext* aCx,
                                           const nsAString& aName,
+                                          const nsAString& aOwner,
                                           ErrorResult& aRv);
 };
 

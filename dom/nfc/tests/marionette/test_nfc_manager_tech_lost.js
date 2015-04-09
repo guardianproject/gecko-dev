@@ -14,17 +14,15 @@ function handleTechnologyLost(msg) {
 function handleTechnologyDiscoveredRE0(msg) {
   log('Received \'nfc-manager-tech-discovered\'');
   is(msg.type, 'techDiscovered', 'check for correct message type');
-  is(msg.techList[0], 'P2P', 'check for correct tech type');
+  is(msg.isP2P, 'P2P', 'check for correct tech type');
 
   NCI.deactivate();
 }
 
 function testTechLost() {
   log('Running \'testTechLost\'');
-  window.navigator.mozSetMessageHandler(
-    'nfc-manager-tech-discovered', handleTechnologyDiscoveredRE0);
-  window.navigator.mozSetMessageHandler(
-    'nfc-manager-tech-lost', handleTechnologyLost);
+  sysMsgHelper.waitForTechDiscovered(handleTechnologyDiscoveredRE0);
+  sysMsgHelper.waitForTechLost(handleTechnologyLost);
 
   toggleNFC(true).then(() => NCI.activateRE(emulator.P2P_RE_INDEX_0));
 }

@@ -38,19 +38,6 @@ ToJSValue(JSContext* aCx, const nsAString& aArgument,
 }
 
 
-namespace tojsvalue_detail {
-
-bool
-ISupportsToJSValue(JSContext* aCx,
-                   nsISupports* aArgument,
-                   JS::MutableHandle<JS::Value> aValue)
-{
-  nsresult rv = nsContentUtils::WrapNative(aCx, aArgument, aValue);
-  return NS_SUCCEEDED(rv);
-}
-
-} // namespace tojsvalue_detail
-
 bool
 ToJSValue(JSContext* aCx,
           nsresult aArgument,
@@ -58,6 +45,23 @@ ToJSValue(JSContext* aCx,
 {
   nsRefPtr<Exception> exception = CreateException(aCx, aArgument);
   return ToJSValue(aCx, exception, aValue);
+}
+
+bool
+ToJSValue(JSContext* aCx,
+          ErrorResult& aArgument,
+          JS::MutableHandle<JS::Value> aValue)
+{
+  MOZ_ASSERT(aArgument.Failed());
+  MOZ_ASSERT(!aArgument.IsUncatchableException(),
+             "Doesn't make sense to convert uncatchable exception to a JS value!");
+  AutoForceSetExceptionOnContext forceExn(aCx);
+  DebugOnly<bool> throwResult = ThrowMethodFailedWithDetails(aCx, aArgument, "", "");
+  MOZ_ASSERT(!throwResult);
+  DebugOnly<bool> getPendingResult = JS_GetPendingException(aCx, aValue);
+  MOZ_ASSERT(getPendingResult);
+  JS_ClearPendingException(aCx);
+  return true;
 }
 
 } // namespace dom

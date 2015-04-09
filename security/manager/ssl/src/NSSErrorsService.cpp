@@ -6,6 +6,7 @@
 
 #include "nsNSSComponent.h"
 #include "nsServiceManagerUtils.h"
+#include "pkix/pkixnss.h"
 #include "secerr.h"
 #include "sslerr.h"
 
@@ -15,31 +16,20 @@
 namespace mozilla {
 namespace psm {
 
-static const struct PRErrorMessage PSMErrorTableText[] = {
-  { "PSM_ERROR_KEY_PINNING_FAILURE",
-    "The server uses key pinning (HPKP) but no trusted certificate chain "
-    "could be constructed that matches the pinset. Key pinning violations "
-    "cannot be overridden." }
-};
-
-static const struct PRErrorTable PSMErrorTable = {
-  PSMErrorTableText,
-  "psmerrors",
-  nsINSSErrorsService::PSM_ERROR_BASE,
-  PR_ARRAY_SIZE(PSMErrorTableText)
-};
-
-void
-RegisterPSMErrorTable()
-{
-  PR_ErrorInstallTable(&PSMErrorTable);
-}
+static_assert(mozilla::pkix::ERROR_BASE ==
+                nsINSSErrorsService::MOZILLA_PKIX_ERROR_BASE,
+              "MOZILLA_PKIX_ERROR_BASE and "
+                "nsINSSErrorsService::MOZILLA_PKIX_ERROR_BASE do not match.");
+static_assert(mozilla::pkix::ERROR_LIMIT ==
+                nsINSSErrorsService::MOZILLA_PKIX_ERROR_LIMIT,
+              "MOZILLA_PKIX_ERROR_LIMIT and "
+                "nsINSSErrorsService::MOZILLA_PKIX_ERROR_LIMIT do not match.");
 
 static bool
 IsPSMError(PRErrorCode error)
 {
-  return (error >= nsINSSErrorsService::PSM_ERROR_BASE &&
-          error < nsINSSErrorsService::PSM_ERROR_LIMIT);
+  return (error >= mozilla::pkix::ERROR_BASE &&
+          error < mozilla::pkix::ERROR_LIMIT);
 }
 
 NS_IMPL_ISUPPORTS(NSSErrorsService, nsINSSErrorsService)
@@ -141,24 +131,38 @@ NSSErrorsService::GetErrorClass(nsresult aXPCOMErrorCode, uint32_t *aErrorClass)
     return NS_ERROR_FAILURE;
   }
 
-  switch (aNSPRCode)
+  if (mozilla::psm::ErrorIsOverridable(aNSPRCode)) {
+    *aErrorClass = ERROR_CLASS_BAD_CERT;
+  } else {
+    *aErrorClass = ERROR_CLASS_SSL_PROTOCOL;
+  }
+
+  return NS_OK;
+}
+
+bool
+ErrorIsOverridable(PRErrorCode code)
+{
+  switch (code)
   {
     // Overridable errors.
-    case SEC_ERROR_UNKNOWN_ISSUER:
-    case SEC_ERROR_UNTRUSTED_ISSUER:
-    case SEC_ERROR_EXPIRED_ISSUER_CERTIFICATE:
-    case SEC_ERROR_UNTRUSTED_CERT:
-    case SSL_ERROR_BAD_CERT_DOMAIN:
-    case SEC_ERROR_EXPIRED_CERTIFICATE:
+    case mozilla::pkix::MOZILLA_PKIX_ERROR_CA_CERT_USED_AS_END_ENTITY:
+    case mozilla::pkix::MOZILLA_PKIX_ERROR_INADEQUATE_KEY_SIZE:
+    case mozilla::pkix::MOZILLA_PKIX_ERROR_NOT_YET_VALID_CERTIFICATE:
+    case mozilla::pkix::MOZILLA_PKIX_ERROR_NOT_YET_VALID_ISSUER_CERTIFICATE:
+    case mozilla::pkix::MOZILLA_PKIX_ERROR_V1_CERT_USED_AS_CA:
+    case SEC_ERROR_CA_CERT_INVALID:
     case SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED:
-      *aErrorClass = ERROR_CLASS_BAD_CERT;
-      break;
+    case SEC_ERROR_EXPIRED_CERTIFICATE:
+    case SEC_ERROR_EXPIRED_ISSUER_CERTIFICATE:
+    case SEC_ERROR_INVALID_TIME:
+    case SEC_ERROR_UNKNOWN_ISSUER:
+    case SSL_ERROR_BAD_CERT_DOMAIN:
+      return true;
     // Non-overridable errors.
     default:
-      *aErrorClass = ERROR_CLASS_SSL_PROTOCOL;
-      break;
+      return false;
   }
-  return NS_OK;
 }
 
 NS_IMETHODIMP

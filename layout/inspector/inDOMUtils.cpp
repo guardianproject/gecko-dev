@@ -39,9 +39,12 @@
 #include "nsCSSRuleProcessor.h"
 #include "mozilla/dom/InspectorUtilsBinding.h"
 #include "mozilla/dom/ToJSValue.h"
+#include "nsCSSParser.h"
 #include "nsCSSProps.h"
+#include "nsCSSValue.h"
 #include "nsColor.h"
 #include "nsStyleSet.h"
+#include "nsStyleUtil.h"
 
 using namespace mozilla;
 using namespace mozilla::css;
@@ -153,7 +156,7 @@ inDOMUtils::GetParentForNode(nsIDOMNode* aNode,
   } else if (aShowingAnonymousContent) {
     nsCOMPtr<nsIContent> content = do_QueryInterface(aNode);
     if (content) {
-      nsIContent* bparent = content->GetXBLInsertionParent();
+      nsIContent* bparent = content->GetFlattenedTreeParent();
       parent = do_QueryInterface(bparent);
     }
   }
@@ -360,6 +363,7 @@ NS_IMETHODIMP
 inDOMUtils::SelectorMatchesElement(nsIDOMElement* aElement,
                                    nsIDOMCSSStyleRule* aRule,
                                    uint32_t aSelectorIndex,
+                                   const nsAString& aPseudo,
                                    bool* aMatches)
 {
   nsCOMPtr<Element> element = do_QueryInterface(aElement);
@@ -374,13 +378,27 @@ inDOMUtils::SelectorMatchesElement(nsIDOMElement* aElement,
   // We want just the one list item, not the whole list tail
   nsAutoPtr<nsCSSSelectorList> sel(tail->Clone(false));
 
-  // SelectorListMatches does not handle selectors that begin with a
-  // pseudo-element, which you can get from selectors like
-  // |input::-moz-placeholder:hover|.  This function doesn't take
-  // a pseudo-element nsIAtom*, so we know we can't match.
-  if (sel->mSelectors->IsPseudoElement()) {
+  // Do not attempt to match if a pseudo element is requested and this is not
+  // a pseudo element selector, or vice versa.
+  if (aPseudo.IsEmpty() == sel->mSelectors->IsPseudoElement()) {
     *aMatches = false;
     return NS_OK;
+  }
+
+  if (!aPseudo.IsEmpty()) {
+    // We need to make sure that the requested pseudo element type
+    // matches the selector pseudo element type before proceeding.
+    nsCOMPtr<nsIAtom> pseudoElt = do_GetAtom(aPseudo);
+    if (sel->mSelectors->PseudoType() !=
+        nsCSSPseudoElements::GetPseudoType(pseudoElt)) {
+      *aMatches = false;
+      return NS_OK;
+    }
+
+    // We have a matching pseudo element, now remove it so we can compare
+    // directly against |element| when proceeding into SelectorListMatches.
+    // It's OK to do this - we just cloned sel and nothing else is using it.
+    sel->RemoveRightmostSelector();
   }
 
   element->OwnerDoc()->FlushPendingLinkUpdates();
@@ -438,7 +456,7 @@ inDOMUtils::GetCSSPropertyNames(uint32_t aFlags, uint32_t* aCount,
   }
 
   char16_t** props =
-    static_cast<char16_t**>(nsMemory::Alloc(maxCount * sizeof(char16_t*)));
+    static_cast<char16_t**>(moz_xmalloc(maxCount * sizeof(char16_t*)));
 
 #define DO_PROP(_prop)                                                  \
   PR_BEGIN_MACRO                                                        \
@@ -504,7 +522,7 @@ static void GetKeywordsForProperty(const nsCSSProperty aProperty,
   }
   const nsCSSProps::KTableValue *keywordTable =
     nsCSSProps::kKeywordTableTable[aProperty];
-  if (keywordTable && keywordTable != nsCSSProps::kBoxPropSourceKTable) {
+  if (keywordTable) {
     size_t i = 0;
     while (nsCSSKeyword(keywordTable[i]) != eCSSKeyword_UNKNOWN) {
       nsCSSKeyword word = nsCSSKeyword(keywordTable[i]);
@@ -591,13 +609,14 @@ inDOMUtils::GetSubpropertiesForCSSProperty(const nsAString& aProperty,
   nsCSSProperty propertyID =
     nsCSSProps::LookupProperty(aProperty, nsCSSProps::eEnabledForAllContent);
 
-  if (propertyID == eCSSProperty_UNKNOWN) {
+  if (propertyID == eCSSProperty_UNKNOWN ||
+      propertyID == eCSSPropertyExtra_variable) {
     return NS_ERROR_FAILURE;
   }
 
   nsTArray<nsString> array;
   if (!nsCSSProps::IsShorthand(propertyID)) {
-    *aValues = static_cast<char16_t**>(nsMemory::Alloc(sizeof(char16_t*)));
+    *aValues = static_cast<char16_t**>(moz_xmalloc(sizeof(char16_t*)));
     (*aValues)[0] = ToNewUnicode(nsCSSProps::GetStringValue(propertyID));
     *aLength = 1;
     return NS_OK;
@@ -611,7 +630,7 @@ inDOMUtils::GetSubpropertiesForCSSProperty(const nsAString& aProperty,
   }
 
   *aValues =
-    static_cast<char16_t**>(nsMemory::Alloc(subpropCount * sizeof(char16_t*)));
+    static_cast<char16_t**>(moz_xmalloc(subpropCount * sizeof(char16_t*)));
   *aLength = subpropCount;
   for (const nsCSSProperty *props = nsCSSProps::SubpropertyEntryFor(propertyID),
                            *props_start = props;
@@ -729,7 +748,8 @@ inDOMUtils::GetCSSValuesForProperty(const nsAString& aProperty,
     GetOtherValuesForProperty(propertyParserVariant, array);
   } else {
     // Property is shorthand.
-    CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(subproperty, propertyID) {
+    CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(subproperty, propertyID,
+                                         nsCSSProps::eEnabledForAllContent) {
       // Get colors (once) first.
       uint32_t propertyParserVariant = nsCSSProps::ParserVariant(*subproperty);
       if (propertyParserVariant & VARIANT_COLOR) {
@@ -737,7 +757,8 @@ inDOMUtils::GetCSSValuesForProperty(const nsAString& aProperty,
         break;
       }
     }
-    CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(subproperty, propertyID) {
+    CSSPROPS_FOR_SHORTHAND_SUBPROPERTIES(subproperty, propertyID,
+                                         nsCSSProps::eEnabledForAllContent) {
       uint32_t propertyParserVariant = nsCSSProps::ParserVariant(*subproperty);
       if (propertyParserVariant & VARIANT_KEYWORD) {
         GetKeywordsForProperty(*subproperty, array);
@@ -792,6 +813,71 @@ inDOMUtils::RgbToColorName(uint8_t aR, uint8_t aG, uint8_t aB,
   }
 
   aColorName.AssignASCII(color);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+inDOMUtils::ColorToRGBA(const nsAString& aColorString, JSContext* aCx,
+                        JS::MutableHandle<JS::Value> aValue)
+{
+  nscolor color = 0;
+  nsCSSParser cssParser;
+  nsCSSValue cssValue;
+
+  bool isColor = cssParser.ParseColorString(aColorString, nullptr, 0,
+                                            cssValue, true);
+
+  if (!isColor) {
+    aValue.setNull();
+    return NS_OK;
+  }
+
+  nsRuleNode::ComputeColor(cssValue, nullptr, nullptr, color);
+
+  InspectorRGBATuple tuple;
+  tuple.mR = NS_GET_R(color);
+  tuple.mG = NS_GET_G(color);
+  tuple.mB = NS_GET_B(color);
+  tuple.mA = nsStyleUtil::ColorComponentToFloat(NS_GET_A(color));
+
+  if (!ToJSValue(aCx, tuple, aValue)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+inDOMUtils::IsValidCSSColor(const nsAString& aColorString, bool *_retval)
+{
+  nsCSSParser cssParser;
+  nsCSSValue cssValue;
+  *_retval = cssParser.ParseColorString(aColorString, nullptr, 0, cssValue, true);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+inDOMUtils::CssPropertyIsValid(const nsAString& aPropertyName,
+                               const nsAString& aPropertyValue,
+                               bool *_retval)
+{
+  nsCSSProperty propertyID =
+    nsCSSProps::LookupProperty(aPropertyName, nsCSSProps::eIgnoreEnabledState);
+
+  if (propertyID == eCSSProperty_UNKNOWN) {
+    *_retval = false;
+    return NS_OK;
+  }
+
+  if (propertyID == eCSSPropertyExtra_variable) {
+    *_retval = true;
+    return NS_OK;
+  }
+
+  // Get a parser, parse the property.
+  nsCSSParser parser;
+  *_retval = parser.IsValueValidForProperty(propertyID, aPropertyValue);
+
   return NS_OK;
 }
 
@@ -864,7 +950,7 @@ inDOMUtils::GetRuleNodeForElement(dom::Element* aElement,
   *aRuleNode = nullptr;
   *aStyleContext = nullptr;
 
-  nsIDocument* doc = aElement->GetDocument();
+  nsIDocument* doc = aElement->GetComposedDoc();
   NS_ENSURE_TRUE(doc, NS_ERROR_UNEXPECTED);
 
   nsIPresShell *presShell = doc->GetShell();
@@ -897,9 +983,9 @@ GetStatesForPseudoClass(const nsAString& aStatePseudo)
   // An array of the states that are relevant for various pseudoclasses.
   // XXXbz this duplicates code in nsCSSRuleProcessor
   static const EventStates sPseudoClassStates[] = {
-#define CSS_PSEUDO_CLASS(_name, _value, _pref)	\
+#define CSS_PSEUDO_CLASS(_name, _value, _flags, _pref) \
     EventStates(),
-#define CSS_STATE_PSEUDO_CLASS(_name, _value, _pref, _states)	\
+#define CSS_STATE_PSEUDO_CLASS(_name, _value, _flags, _pref, _states) \
     _states,
 #include "nsCSSPseudoClassList.h"
 #undef CSS_STATE_PSEUDO_CLASS

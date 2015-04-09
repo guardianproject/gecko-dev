@@ -6,6 +6,9 @@
 #define PublicKeyPinningService_h
 
 #include "cert.h"
+#include "nsString.h"
+#include "nsTArray.h"
+#include "pkix/Time.h"
 
 namespace mozilla {
 namespace psm {
@@ -26,8 +29,22 @@ public:
    */
   static bool ChainHasValidPins(const CERTCertList* certList,
                                 const char* hostname,
-                                const PRTime time,
+                                mozilla::pkix::Time time,
                                 bool enforceTestMode);
+  /**
+   * Returns true if there is any intersection between the certificate list
+   * and the pins specified in the aSHA256key array. Values passed in are
+   * assumed to be in base64 encoded form
+   */
+  static bool ChainMatchesPinset(const CERTCertList* certList,
+                                 const nsTArray<nsCString>& aSHA256keys);
+
+  /**
+   * Given a hostname of potentially mixed case with potentially multiple
+   * trailing '.' (see bug 1118522), canonicalizes it to lowercase with no
+   * trailing '.'.
+   */
+  static nsAutoCString CanonicalizeHostname(const char* hostname);
 };
 
 }} // namespace mozilla::psm

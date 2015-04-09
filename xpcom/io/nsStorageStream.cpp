@@ -17,6 +17,7 @@
 #include "nsSegmentedBuffer.h"
 #include "nsStreamUtils.h"
 #include "nsCOMPtr.h"
+#include "nsICloneableInputStream.h"
 #include "nsIInputStream.h"
 #include "nsIIPCSerializableInputStream.h"
 #include "nsISeekableStream.h"
@@ -76,10 +77,6 @@ NS_IMETHODIMP
 nsStorageStream::Init(uint32_t aSegmentSize, uint32_t aMaxSize)
 {
   mSegmentedBuffer = new nsSegmentedBuffer();
-  if (!mSegmentedBuffer) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-
   mSegmentSize = aSegmentSize;
   mSegmentSizeLog2 = mozilla::FloorLog2(aSegmentSize);
 
@@ -341,10 +338,11 @@ nsStorageStream::Seek(int32_t aPosition)
 ////////////////////////////////////////////////////////////////////////////////
 
 // There can be many nsStorageInputStreams for a single nsStorageStream
-class nsStorageInputStream MOZ_FINAL
+class nsStorageInputStream final
   : public nsIInputStream
   , public nsISeekableStream
   , public nsIIPCSerializableInputStream
+  , public nsICloneableInputStream
 {
 public:
   nsStorageInputStream(nsStorageStream* aStorageStream, uint32_t aSegmentSize)
@@ -360,6 +358,7 @@ public:
   NS_DECL_NSIINPUTSTREAM
   NS_DECL_NSISEEKABLESTREAM
   NS_DECL_NSIIPCSERIALIZABLEINPUTSTREAM
+  NS_DECL_NSICLONEABLEINPUTSTREAM
 
 private:
   ~nsStorageInputStream()
@@ -394,7 +393,8 @@ private:
 NS_IMPL_ISUPPORTS(nsStorageInputStream,
                   nsIInputStream,
                   nsISeekableStream,
-                  nsIIPCSerializableInputStream)
+                  nsIIPCSerializableInputStream,
+                  nsICloneableInputStream)
 
 NS_IMETHODIMP
 nsStorageStream::NewInputStream(int32_t aStartingOffset,
@@ -406,10 +406,6 @@ nsStorageStream::NewInputStream(int32_t aStartingOffset,
 
   nsStorageInputStream* inputStream =
     new nsStorageInputStream(this, mSegmentSize);
-  if (!inputStream) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-
   NS_ADDREF(inputStream);
 
   nsresult rv = inputStream->Seek(aStartingOffset);
@@ -479,7 +475,7 @@ nsStorageInputStream::ReadSegments(nsWriteSegmentFun aWriter, void* aClosure,
 
     count = XPCOM_MIN(availableInSegment, remainingCapacity);
     rv = aWriter(this, aClosure, cur + mReadCursor, aCount - remainingCapacity,
-                count, &bytesConsumed);
+                 count, &bytesConsumed);
     if (NS_FAILED(rv) || (bytesConsumed == 0)) {
       break;
     }
@@ -609,10 +605,24 @@ nsStorageInputStream::Serialize(InputStreamParams& aParams, FileDescriptorArray&
 }
 
 bool
-nsStorageInputStream::Deserialize(const InputStreamParams& aParams, const FileDescriptorArray&)
+nsStorageInputStream::Deserialize(const InputStreamParams& aParams,
+                                  const FileDescriptorArray&)
 {
   NS_NOTREACHED("We should never attempt to deserialize a storage input stream.");
   return false;
+}
+
+NS_IMETHODIMP
+nsStorageInputStream::GetCloneable(bool* aCloneableOut)
+{
+  *aCloneableOut = true;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsStorageInputStream::Clone(nsIInputStream** aCloneOut)
+{
+  return mStorageStream->NewInputStream(mLogicalCursor, aCloneOut);
 }
 
 nsresult
@@ -620,10 +630,6 @@ NS_NewStorageStream(uint32_t aSegmentSize, uint32_t aMaxSize,
                     nsIStorageStream** aResult)
 {
   nsStorageStream* storageStream = new nsStorageStream();
-  if (!storageStream) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-
   NS_ADDREF(storageStream);
   nsresult rv = storageStream->Init(aSegmentSize, aMaxSize);
   if (NS_FAILED(rv)) {

@@ -20,36 +20,28 @@ namespace a11y {
  * the inner document root.
  */
 
-class OuterDocAccessible : public AccessibleWrap
+class OuterDocAccessible final : public AccessibleWrap
 {
 public:
   OuterDocAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
   NS_DECL_ISUPPORTS_INHERITED
 
-  // nsIAccessible
-  NS_IMETHOD GetActionName(uint8_t aIndex, nsAString& aName);
-  NS_IMETHOD GetActionDescription(uint8_t aIndex, nsAString& aDescription);
-  NS_IMETHOD DoAction(uint8_t aIndex);
-
   // Accessible
-  virtual void Shutdown();
-  virtual mozilla::a11y::role NativeRole();
+  virtual void Shutdown() override;
+  virtual mozilla::a11y::role NativeRole() override;
   virtual Accessible* ChildAtPoint(int32_t aX, int32_t aY,
-                                   EWhichChildAtPoint aWhichChild);
+                                   EWhichChildAtPoint aWhichChild) override;
 
-  virtual void InvalidateChildren();
-  virtual bool InsertChildAt(uint32_t aIdx, Accessible* aChild) MOZ_OVERRIDE;
-  virtual bool RemoveChild(Accessible* aAccessible);
-
-  // ActionAccessible
-  virtual uint8_t ActionCount();
+  virtual void InvalidateChildren() override;
+  virtual bool InsertChildAt(uint32_t aIdx, Accessible* aChild) override;
+  virtual bool RemoveChild(Accessible* aAccessible) override;
 
 protected:
-  virtual ~OuterDocAccessible();
+  virtual ~OuterDocAccessible() override;
 
   // Accessible
-  virtual void CacheChildren();
+  virtual void CacheChildren() override;
 };
 
 } // namespace a11y

@@ -46,6 +46,11 @@ Tests of DOM Worker Navigator
       return;
     }
 
+    if (args.name === "languages") {
+      is(navigator.languages.toString(), args.value.toString(), "languages matches");
+      return;
+    }
+
     is(navigator[args.name], args.value,
        "Mismatched navigator string for " + args.name + "!");
   };
@@ -54,6 +59,8 @@ Tests of DOM Worker Navigator
     ok(false, "Worker had an error: " + event.message);
     SimpleTest.finish();
   }
+
+  worker.postMessage({ 'isB2G': SpecialPowers.isB2G });
 
   SimpleTest.waitForExplicitFinish();
 

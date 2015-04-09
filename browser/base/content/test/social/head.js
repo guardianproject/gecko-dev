@@ -11,10 +11,10 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
   "resource://gre/modules/PlacesUtils.jsm");
 
-function waitForCondition(condition, nextTest, errorMsg) {
+function waitForCondition(condition, nextTest, errorMsg, numTries = 30) {
   var tries = 0;
   var interval = setInterval(function() {
-    if (tries >= 30) {
+    if (tries >= numTries) {
       ok(false, errorMsg);
       moveOn();
     }
@@ -31,6 +31,16 @@ function waitForCondition(condition, nextTest, errorMsg) {
     tries++;
   }, 100);
   var moveOn = function() { clearInterval(interval); nextTest(); };
+}
+
+
+function promiseObserverNotified(aTopic) {
+  let deferred = Promise.defer();
+  Services.obs.addObserver(function onNotification(aSubject, aTopic, aData) {
+    Services.obs.removeObserver(onNotification, aTopic);
+      deferred.resolve({subject: aSubject, data: aData});
+    }, aTopic, false);
+  return deferred.promise;
 }
 
 // Check that a specified (string) URL hasn't been "remembered" (ie, is not
@@ -63,13 +73,11 @@ function checkProviderPrefsEmpty(isError) {
 }
 
 function defaultFinishChecks() {
-  PopupNotifications.transitionsEnabled = true;
   checkProviderPrefsEmpty(true);
   finish();
 }
 
 function runSocialTestWithProvider(manifest, callback, finishcallback) {
-  PopupNotifications.transitionsEnabled = false;
 
   let SocialService = Cu.import("resource://gre/modules/SocialService.jsm", {}).SocialService;
 
@@ -81,7 +89,7 @@ function runSocialTestWithProvider(manifest, callback, finishcallback) {
     SessionStore.setWindowValue(window, "socialSidebar", "");
     for (let i = 0; i < manifests.length; i++) {
       let m = manifests[i];
-      for (let what of ['sidebarURL', 'workerURL', 'iconURL']) {
+      for (let what of ['sidebarURL', 'workerURL', 'iconURL', 'shareURL', 'markURL']) {
         if (m[what]) {
           yield promiseSocialUrlNotRemembered(m[what]);
         }
@@ -106,14 +114,14 @@ function runSocialTestWithProvider(manifest, callback, finishcallback) {
       // If we're "cleaning up", don't call finish when done.
       let callback = cleanup ? function () {} : finishIfDone;
       // Similarly, if we're cleaning up, catch exceptions from removeProvider
-      let removeProvider = SocialService.removeProvider.bind(SocialService);
+      let removeProvider = SocialService.disableProvider.bind(SocialService);
       if (cleanup) {
         removeProvider = function (origin, cb) {
           try {
-            SocialService.removeProvider(origin, cb);
+            SocialService.disableProvider(origin, cb);
           } catch (ex) {
             // Ignore "provider doesn't exist" errors.
-            if (ex.message.indexOf("SocialService.removeProvider: no provider with origin") == 0)
+            if (ex.message.indexOf("SocialService.disableProvider: no provider with origin") == 0)
               return;
             info("Failed to clean up provider " + origin + ": " + ex);
           }
@@ -157,11 +165,17 @@ function runSocialTestWithProvider(manifest, callback, finishcallback) {
 }
 
 function runSocialTests(tests, cbPreTest, cbPostTest, cbFinish) {
-  let testIter = Iterator(tests);
+  let testIter = (function*() {
+    for (let name in tests) {
+      if (tests.hasOwnProperty(name)) {
+        yield [name, tests[name]];
+      }
+    }
+  })();
   let providersAtStart = Social.providers.length;
   info("runSocialTests: start test run with " + providersAtStart + " providers");
+  window.focus();
 
-  PopupNotifications.transitionsEnabled = false;
 
   if (cbPreTest === undefined) {
     cbPreTest = function(cb) {cb()};
@@ -171,16 +185,15 @@ function runSocialTests(tests, cbPreTest, cbPostTest, cbFinish) {
   }
 
   function runNextTest() {
-    let name, func;
-    try {
-      [name, func] = testIter.next();
-    } catch (err if err instanceof StopIteration) {
+    let result = testIter.next();
+    if (result.done) {
       // out of items:
       (cbFinish || defaultFinishChecks)();
       is(providersAtStart, Social.providers.length,
          "runSocialTests: finish test run with " + Social.providers.length + " providers");
       return;
     }
+    let [name, func] = result.value;
     // We run on a timeout as the frameworker also makes use of timeouts, so
     // this helps keep the debug messages sane.
     executeSoon(function() {
@@ -384,6 +397,15 @@ function selectBrowserTab(tab, callback) {
   gBrowser.selectedTab = tab;
 }
 
+function ensureEventFired(elem, event) {
+  let deferred = Promise.defer();
+  elem.addEventListener(event, function handler() {
+    elem.removeEventListener(event, handler, true);
+    deferred.resolve()
+  }, true);
+  return deferred.promise;
+}
+
 function loadIntoTab(tab, url, callback) {
   tab.linkedBrowser.addEventListener("load", function tabLoad(event) {
     tab.linkedBrowser.removeEventListener("load", tabLoad, true);
@@ -392,6 +414,24 @@ function loadIntoTab(tab, url, callback) {
   tab.linkedBrowser.loadURI(url);
 }
 
+function ensureBrowserTabClosed(tab) {
+  let promise = ensureEventFired(gBrowser.tabContainer, "TabClose");
+  gBrowser.removeTab(tab);
+  return promise;
+}
+
+function ensureFrameLoaded(frame) {
+  let deferred = Promise.defer();
+  if (frame.contentDocument && frame.contentDocument.readyState == "complete") {
+    deferred.resolve();
+  } else {
+    frame.addEventListener("load", function handler() {
+      frame.removeEventListener("load", handler, true);
+      deferred.resolve()
+    }, true);
+  }
+  return deferred.promise;
+}
 
 // chat test help functions
 
@@ -581,4 +621,46 @@ function closeAllChats() {
   while (chatbar.selectedChat) {
     chatbar.selectedChat.close();
   }
+}
+
+
+// Support for going on and offline.
+// (via browser/base/content/test/browser_bookmark_titles.js)
+let origProxyType = Services.prefs.getIntPref('network.proxy.type');
+
+function toggleOfflineStatus(goOffline) {
+  // Bug 968887 fix.  when going on/offline, wait for notification before continuing
+  let deferred = Promise.defer();
+  if (!goOffline) {
+    Services.prefs.setIntPref('network.proxy.type', origProxyType);
+  }
+  if (goOffline != Services.io.offline) {
+    info("initial offline state " + Services.io.offline);
+    let expect = !Services.io.offline;
+    Services.obs.addObserver(function offlineChange(subject, topic, data) {
+      Services.obs.removeObserver(offlineChange, "network:offline-status-changed");
+      info("offline state changed to " + Services.io.offline);
+      is(expect, Services.io.offline, "network:offline-status-changed successful toggle");
+      deferred.resolve();
+    }, "network:offline-status-changed", false);
+    BrowserOffline.toggleOfflineStatus();
+  } else {
+    deferred.resolve();
+  }
+  if (goOffline) {
+    Services.prefs.setIntPref('network.proxy.type', 0);
+    // LOAD_FLAGS_BYPASS_CACHE isn't good enough. So clear the cache.
+    Services.cache2.clear();
+  }
+  return deferred.promise;
+}
+
+function goOffline() {
+  // Simulate a network outage with offline mode. (Localhost is still
+  // accessible in offline mode, so disable the test proxy as well.)
+  return toggleOfflineStatus(true);
+}
+
+function goOnline(callback) {
+  return toggleOfflineStatus(false);
 }

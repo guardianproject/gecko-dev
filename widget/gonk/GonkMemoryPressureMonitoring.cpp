@@ -60,7 +60,7 @@ namespace {
  * between read()s, we sleep by Wait()'ing on a monitor, which we notify on
  * shutdown.
  */
-class MemoryPressureWatcher
+class MemoryPressureWatcher final
   : public nsIRunnable
   , public nsIObserver
 {
@@ -126,6 +126,8 @@ public:
       NuwaMarkCurrentThread(nullptr, nullptr);
     }
 #endif
+
+    NS_SetIgnoreStatusOfCurrentThread();
 
     int lowMemFd = open("/sys/kernel/mm/lowmemkiller/notify_trigger_active",
                         O_RDONLY | O_CLOEXEC);
@@ -214,6 +216,9 @@ public:
 
     return NS_OK;
   }
+
+protected:
+  ~MemoryPressureWatcher() {}
 
 private:
   /**

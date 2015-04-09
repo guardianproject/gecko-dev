@@ -1,8 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/licenses/publicdomain/ */
 
-// ES6 draft rev 25 (2014 May 22), 9.1.12 "[[OwnPropertyKeys]] ()":
-// 
+// Symbols follow all other property keys in the result list.
 var log;
 function LoggingProxy() {
     return new Proxy({}, {

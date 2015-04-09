@@ -48,14 +48,16 @@ var Resource = Class({
   },
 
   /**
-   * Return the trailing name component of this.uri.
-   */
-  get basename() { return this.uri.path.replace(/\/+$/, '').replace(/\\/g,'/').replace( /.*\//, '' ); },
-
-  /**
    * Is there more than 1 child Resource?
    */
   get hasChildren() { return this.children && this.children.size > 0; },
+
+  /**
+   * Is this Resource the root (top level for the store)?
+   */
+  get isRoot() {
+    return !this.parent
+  },
 
   /**
    * Sorted array of children for display
@@ -117,6 +119,20 @@ var Resource = Class({
     this.store.notifyAdd(resource);
     emit(this, "children-changed", this);
     return resource;
+  },
+
+  /**
+   * Checks if current object has child with specific name.
+   *
+   * @param string name
+   */
+  hasChild: function(name) {
+    for (let child of this.children) {
+      if (child.basename === name) {
+        return true;
+      }
+    }
+    return false;
   },
 
   /**
@@ -218,6 +234,13 @@ var FileResource = Class({
   },
 
   /**
+   * Return the trailing name component of this Resource
+   */
+  get basename() {
+    return this.path.replace(/\/+$/, '').replace(/\\/g,'/').replace( /.*\//, '' );
+  },
+
+  /**
    * A string to be used when displaying this Resource in views
    */
   get displayName() {
@@ -286,6 +309,27 @@ var FileResource = Class({
     return OS.File.writeAtomic(newPath, buffer, {
       noOverwrite: true
     }).then(() => {
+      return this.store.refresh();
+    }).then(() => {
+      let resource = this.store.resources.get(newPath);
+      if (!resource) {
+        throw new Error("Error creating " + newPath);
+      }
+      return resource;
+    });
+  },
+
+  /**
+   * Rename the file from the filesystem
+   *
+   * @returns Promise
+   *          Resolves with the renamed FileResource.
+   */
+  rename: function(oldName, newName) {
+    let oldPath = OS.Path.join(this.path, oldName);
+    let newPath = OS.Path.join(this.path, newName);
+
+    return OS.File.move(oldPath, newPath).then(() => {
       return this.store.refresh();
     }).then(() => {
       let resource = this.store.resources.get(newPath);

@@ -18,13 +18,13 @@ const originalValue = "#00F";
 // }
 const testData = [
   {value: "red", commitKey: "VK_ESCAPE", modifiers: {}, expected: originalValue},
-  {value: "red", commitKey: "VK_RETURN", modifiers: {}, expected: "#F00"},
+  {value: "red", commitKey: "VK_RETURN", modifiers: {}, expected: "red"},
   {value: "invalid", commitKey: "VK_RETURN", modifiers: {}, expected: "invalid"},
   {value: "blue", commitKey: "VK_TAB", modifiers: {shiftKey: true}, expected: "blue"}
 ];
 
-let test = asyncTest(function*() {
-  yield addTab("data:text/html,test escaping property change reverts back to original value");
+add_task(function*() {
+  yield addTab("data:text/html;charset=utf-8,test escaping property change reverts back to original value");
 
   info("Creating the test document");
   createDocument();
@@ -78,7 +78,7 @@ function* runTestData(view, {value, commitKey, modifiers, expected}) {
   if (commitKey === "VK_ESCAPE") {
     is(propEditor.valueSpan.textContent, expected, "Value is as expected: " + expected);
   } else {
-    yield once(view.element, "CssRuleViewChanged");
+    yield once(view, "ruleview-changed");
     is(propEditor.valueSpan.textContent, expected, "Value is as expected: " + expected);
   }
 }

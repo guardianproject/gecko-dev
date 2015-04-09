@@ -4,26 +4,26 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-PARALLEL_DIRS += [
+DIRS += [
     'about',
     'customizableui',
     'dirprovider',
     'downloads',
     'feeds',
+    'loop',
+    'migration',
     'places',
     'preferences',
     'privatebrowsing',
+    'readinglist',
     'search',
     'sessionstore',
     'shell',
-    'sidebar',
+    'selfsupport',
     'tabview',
+    'uitour',
     'translation',
-    'migration',
 ]
-
-if CONFIG['MOZ_LOOP']:
-    PARALLEL_DIRS += ['loop']
 
 DIRS += ['build']
 
@@ -50,3 +50,6 @@ BROWSER_CHROME_MANIFESTS += [
 
 if CONFIG['MOZ_SAFE_BROWSING']:
     BROWSER_CHROME_MANIFESTS += ['safebrowsing/content/test/browser.ini']
+
+with Files('safebrowsing/*'):
+    BUG_COMPONENT = ('Toolkit', 'Phishing Protection')

@@ -137,10 +137,10 @@ BrowserCLH.prototype = {
 #endif
     // Instantiate the search service so the search engine cache is created now
     // instead when the application is running. The install process will register
-    // this component by using the -silent command line flag, thereby creating
+    // this component by using the --silent command line flag, thereby creating
     // the cache during install, not runtime.
     // NOTE: This code assumes this CLH is run before the nsDefaultCLH, which
-    // consumes the "-silent" flag.
+    // consumes the "--silent" flag.
     if (aCmdLine.findFlag("silent", false) > -1) {
       let searchService = Services.search;
       let autoComplete = Cc["@mozilla.org/autocomplete/search;1?name=history"].
@@ -193,7 +193,7 @@ BrowserCLH.prototype = {
     if (searchParam) {
       var ss = Components.classes["@mozilla.org/browser/search-service;1"]
                          .getService(nsIBrowserSearchService);
-      var submission = ss.defaultEngine.getSubmission(searchParam.replace("\"", "", "g"));
+      var submission = ss.defaultEngine.getSubmission(searchParam.replace(/\"/g, ""));
       uris.push(submission.uri);
     }
 

@@ -4,51 +4,19 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  * The origin of this IDL file is
- * http://www.w3.org/TR/WebCryptoAPI/
+ * https://dvcs.w3.org/hg/webcrypto-api/raw-file/tip/spec/Overview.html#crypto-interface
  */
 
 [NoInterfaceObject]
-interface RandomSource {
-  [Throws]
-  ArrayBufferView getRandomValues(ArrayBufferView array);
+interface GlobalCrypto {
+  [Throws] readonly attribute Crypto crypto;
 };
 
-Crypto implements RandomSource;
-
+//[Exposed=(Window,Worker)]
 interface Crypto {
   [Pref="dom.webcrypto.enabled"]
   readonly attribute SubtleCrypto subtle;
-};
-
-#ifndef MOZ_DISABLE_CRYPTOLEGACY
-[NoInterfaceObject]
-interface CryptoLegacy {
-  readonly attribute DOMString version;
-
-  [SetterThrows]
-  attribute boolean enableSmartCardEvents;
-
-  [Throws,NewObject]
-  CRMFObject? generateCRMFRequest(ByteString? reqDN,
-                                  ByteString? regToken,
-                                  ByteString? authenticator,
-                                  ByteString? eaCert,
-                                  ByteString? jsCallback,
-                                  any... args);
 
   [Throws]
-  DOMString importUserCertificates(DOMString nickname,
-                                   DOMString cmmfResponse,
-                                   boolean doForcedBackup);
-
-  DOMString signText(DOMString stringToSign,
-                     DOMString caOption,
-                     ByteString... args);
-
-  [Throws]
-  void logout();
+  ArrayBufferView getRandomValues(ArrayBufferView array);
 };
-
-Crypto implements CryptoLegacy;
-#endif // !MOZ_DISABLE_CRYPTOLEGACY
-

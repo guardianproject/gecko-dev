@@ -1107,7 +1107,7 @@ public:
   }
 
 private:
-  self_type& operator=(const self_type& aString) MOZ_DELETE;
+  self_type& operator=(const self_type& aString) = delete;
 };
 
 class nsDependentCString : public nsCString
@@ -1131,7 +1131,7 @@ public:
   }
 
 private:
-  self_type& operator=(const self_type& aString) MOZ_DELETE;
+  self_type& operator=(const self_type& aString) = delete;
 };
 
 
@@ -1163,7 +1163,7 @@ CopyASCIItoUTF16(const nsACString& aSource, nsAString& aDest)
   NS_CStringToUTF16(aSource, NS_CSTRING_ENCODING_ASCII, aDest);
 }
 
-NS_COM_GLUE char*
+char*
 ToNewUTF8String(const nsAString& aSource);
 
 class NS_ConvertASCIItoUTF16 : public nsString
@@ -1184,7 +1184,7 @@ public:
   }
 
 private:
-  self_type& operator=(const self_type& aString) MOZ_DELETE;
+  self_type& operator=(const self_type& aString) = delete;
 };
 
 class NS_ConvertUTF8toUTF16 : public nsString
@@ -1205,7 +1205,7 @@ public:
   }
 
 private:
-  self_type& operator=(const self_type& aString) MOZ_DELETE;
+  self_type& operator=(const self_type& aString) = delete;
 };
 
 class NS_ConvertUTF16toUTF8 : public nsCString
@@ -1226,7 +1226,7 @@ public:
   }
 
 private:
-  self_type& operator=(const self_type& aString) MOZ_DELETE;
+  self_type& operator=(const self_type& aString) = delete;
 };
 
 class NS_LossyConvertUTF16toASCII : public nsCString
@@ -1247,7 +1247,7 @@ public:
   }
 
 private:
-  self_type& operator=(const self_type& aString) MOZ_DELETE;
+  self_type& operator=(const self_type& aString) = delete;
 };
 
 
@@ -1307,7 +1307,7 @@ class nsGetterCopies
 public:
   typedef char16_t char_type;
 
-  nsGetterCopies(nsString& aStr)
+  explicit nsGetterCopies(nsString& aStr)
     : mString(aStr)
     , mData(nullptr)
   {
@@ -1333,7 +1333,7 @@ class nsCGetterCopies
 public:
   typedef char char_type;
 
-  nsCGetterCopies(nsCString& aStr)
+  explicit nsCGetterCopies(nsCString& aStr)
     : mString(aStr)
     , mData(nullptr)
   {
@@ -1359,7 +1359,7 @@ getter_Copies(nsCString& aString)
 * substrings
 */
 
-class NS_COM_GLUE nsDependentSubstring : public nsStringContainer
+class nsDependentSubstring : public nsStringContainer
 {
 public:
   typedef nsDependentSubstring self_type;
@@ -1389,10 +1389,10 @@ public:
   }
 
 private:
-  self_type& operator=(const self_type& aString) MOZ_DELETE;
+  self_type& operator=(const self_type& aString) = delete;
 };
 
-class NS_COM_GLUE nsDependentCSubstring : public nsCStringContainer
+class nsDependentCSubstring : public nsCStringContainer
 {
 public:
   typedef nsDependentCSubstring self_type;
@@ -1422,7 +1422,7 @@ public:
   }
 
 private:
-  self_type& operator=(const self_type& aString) MOZ_DELETE;
+  self_type& operator=(const self_type& aString) = delete;
 };
 
 
@@ -1446,8 +1446,8 @@ Substring(const nsAString& aStr, uint32_t aStartPos, uint32_t aLength)
 inline const nsDependentSubstring
 Substring(const char16_t* aStart, const char16_t* aEnd)
 {
-  NS_ABORT_IF_FALSE(uint32_t(aEnd - aStart) == uintptr_t(aEnd - aStart),
-                    "string too long");
+  MOZ_ASSERT(uint32_t(aEnd - aStart) == uintptr_t(aEnd - aStart),
+             "string too long");
   return nsDependentSubstring(aStart, uint32_t(aEnd - aStart));
 }
 
@@ -1485,8 +1485,8 @@ Substring(const nsACString& aStr, uint32_t aStartPos, uint32_t aLength)
 inline const nsDependentCSubstring
 Substring(const char* aStart, const char* aEnd)
 {
-  NS_ABORT_IF_FALSE(uint32_t(aEnd - aStart) == uintptr_t(aEnd - aStart),
-                    "string too long");
+  MOZ_ASSERT(uint32_t(aEnd - aStart) == uintptr_t(aEnd - aStart),
+             "string too long");
   return nsDependentCSubstring(aStart, uint32_t(aEnd - aStart));
 }
 

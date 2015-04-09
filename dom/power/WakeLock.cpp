@@ -39,7 +39,6 @@ WakeLock::WakeLock()
   , mHidden(true)
   , mContentParentID(CONTENT_PROCESS_ID_UNKNOWN)
 {
-  SetIsDOMBinding();
 }
 
 WakeLock::~WakeLock()
@@ -49,9 +48,9 @@ WakeLock::~WakeLock()
 }
 
 JSObject*
-WakeLock::WrapObject(JSContext* aCx)
+WakeLock::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return MozWakeLockBinding::Wrap(aCx, this);
+  return MozWakeLockBinding::Wrap(aCx, this, aGivenProto);
 }
 
 nsresult

@@ -22,7 +22,7 @@ namespace devicestorage {
 class DeviceStorageRequestParent : public PDeviceStorageRequestParent
 {
 public:
-  DeviceStorageRequestParent(const DeviceStorageParams& aParams);
+  explicit DeviceStorageRequestParent(const DeviceStorageParams& aParams);
 
   NS_IMETHOD_(MozExternalRefCountType) AddRef();
   NS_IMETHOD_(MozExternalRefCountType) Release();
@@ -43,7 +43,7 @@ private:
   class CancelableRunnable : public nsRunnable
   {
   public:
-    CancelableRunnable(DeviceStorageRequestParent* aParent)
+    explicit CancelableRunnable(DeviceStorageRequestParent* aParent)
       : mParent(aParent)
     {
       mCanceled = !(mParent->AddRunnable(this));
@@ -52,7 +52,7 @@ private:
     virtual ~CancelableRunnable() {
     }
 
-    NS_IMETHOD Run() MOZ_OVERRIDE {
+    NS_IMETHOD Run() override {
       nsresult rv = NS_OK;
       if (!mCanceled) {
         rv = CancelableRun();
@@ -86,7 +86,7 @@ private:
   class PostSuccessEvent : public CancelableRunnable
   {
     public:
-      PostSuccessEvent(DeviceStorageRequestParent* aParent);
+      explicit PostSuccessEvent(DeviceStorageRequestParent* aParent);
       virtual ~PostSuccessEvent();
       virtual nsresult CancelableRun();
   };
@@ -294,7 +294,7 @@ private:
 protected:
   bool AddRunnable(CancelableRunnable* aRunnable) {
     MutexAutoLock lock(mMutex);
-    if (mActorDestoryed)
+    if (mActorDestroyed)
       return false;
 
     mRunnables.AppendElement(aRunnable);
@@ -307,7 +307,7 @@ protected:
   }
 
   Mutex mMutex;
-  bool mActorDestoryed;
+  bool mActorDestroyed;
   nsTArray<nsRefPtr<CancelableRunnable> > mRunnables;
 };
 

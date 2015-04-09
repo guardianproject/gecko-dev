@@ -222,7 +222,8 @@ NativeApp.prototype = {
 
   _copyPrebuiltFiles: function(aDir) {
     let destDir = getFile(aDir, this.macOSDir);
-    let stub = getFile(this.runtimeFolder, "webapprt-stub");
+    let stub = getFile(OS.Path.join(OS.Path.dirname(this.runtimeFolder),
+                                    "Resources"), "webapprt-stub");
     stub.copyTo(destDir, "webapprt");
   },
 
@@ -241,7 +242,7 @@ NativeApp.prototype = {
     writer.setString("Webapp", "Name", this.appLocalizedName);
     writer.setString("Webapp", "Profile", this.uniqueName);
     writer.writeFile();
-    applicationINI.permissions = PERMS_FILE;
+    yield OS.File.setPermissions(applicationINI.path, { unixMode: PERMS_FILE });
 
     // ${InstallDir}/Contents/Info.plist
     let infoPListContent = '<?xml version="1.0" encoding="UTF-8"?>\n\
@@ -267,6 +268,8 @@ NativeApp.prototype = {
     <key>CFBundleVersion</key>\n\
     <string>0</string>\n\
     <key>NSHighResolutionCapable</key>\n\
+    <true/>\n\
+    <key>NSSupportsAutomaticGraphicsSwitching</key>\n\
     <true/>\n\
     <key>NSPrincipalClass</key>\n\
     <string>GeckoNSApplication</string>\n\

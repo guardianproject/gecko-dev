@@ -19,6 +19,8 @@ namespace layers {
 class Image;
 class PlanarYCbCrImage;
 class GrallocImage;
+class SurfaceTextureImage;
+class EGLImageImage;
 }
 
 namespace gl {
@@ -68,7 +70,7 @@ void CreateRenderbuffersForOffscreen(GLContext* aGL, const GLFormats& aFormats,
 
 
 /** Buffer blitting helper */
-class GLBlitHelper MOZ_FINAL
+class GLBlitHelper final
 {
     enum Channel
     {
@@ -97,6 +99,8 @@ class GLBlitHelper MOZ_FINAL
         BlitTexRect,
         ConvertGralloc,
         ConvertPlanarYCbCr,
+        ConvertSurfaceTexture,
+        ConvertEGLImage
     };
     // The GLContext is the sole owner of the GLBlitHelper.
     GLContext* mGL;
@@ -109,6 +113,8 @@ class GLBlitHelper MOZ_FINAL
     GLuint mTex2DRectBlit_Program;
 
     GLint mYFlipLoc;
+
+    GLint mTextureTransformLoc;
 
     // Data for image blit path
     GLuint mTexExternalBlit_FragShader;
@@ -136,16 +142,21 @@ class GLBlitHelper MOZ_FINAL
     bool InitTexQuadProgram(BlitType target = BlitTex2D);
     void DeleteTexBlitProgram();
     void BindAndUploadYUVTexture(Channel which, uint32_t width, uint32_t height, void* data, bool allocation);
+    void BindAndUploadEGLImage(EGLImage image, GLuint target);
 
 #ifdef MOZ_WIDGET_GONK
-    void BindAndUploadExternalTexture(EGLImage image);
-    bool BlitGrallocImage(layers::GrallocImage* grallocImage, bool yFlip = false);
+    bool BlitGrallocImage(layers::GrallocImage* grallocImage, bool yflip);
 #endif
-    bool BlitPlanarYCbCrImage(layers::PlanarYCbCrImage* yuvImage, bool yFlip = false);
+    bool BlitPlanarYCbCrImage(layers::PlanarYCbCrImage* yuvImage, bool yflip);
+#ifdef MOZ_WIDGET_ANDROID
+    // Blit onto the current FB.
+    bool BlitSurfaceTextureImage(layers::SurfaceTextureImage* stImage, bool yflip);
+    bool BlitEGLImageImage(layers::EGLImageImage* eglImage, bool yflip);
+#endif
 
 public:
 
-    GLBlitHelper(GLContext* gl);
+    explicit GLBlitHelper(GLContext* gl);
     ~GLBlitHelper();
 
     // If you don't have |srcFormats| for the 2nd definition,
@@ -153,30 +164,38 @@ public:
     // the first BlitFramebufferToFramebuffer.
     void BlitFramebufferToFramebuffer(GLuint srcFB, GLuint destFB,
                                       const gfx::IntSize& srcSize,
-                                      const gfx::IntSize& destSize);
+                                      const gfx::IntSize& destSize,
+                                      bool internalFBs = false);
     void BlitFramebufferToFramebuffer(GLuint srcFB, GLuint destFB,
                                       const gfx::IntSize& srcSize,
                                       const gfx::IntSize& destSize,
-                                      const GLFormats& srcFormats);
+                                      const GLFormats& srcFormats,
+                                      bool internalFBs = false);
     void BlitTextureToFramebuffer(GLuint srcTex, GLuint destFB,
                                   const gfx::IntSize& srcSize,
                                   const gfx::IntSize& destSize,
-                                  GLenum srcTarget = LOCAL_GL_TEXTURE_2D);
+                                  GLenum srcTarget = LOCAL_GL_TEXTURE_2D,
+                                  bool internalFBs = false);
     void BlitFramebufferToTexture(GLuint srcFB, GLuint destTex,
                                   const gfx::IntSize& srcSize,
                                   const gfx::IntSize& destSize,
-                                  GLenum destTarget = LOCAL_GL_TEXTURE_2D);
+                                  GLenum destTarget = LOCAL_GL_TEXTURE_2D,
+                                  bool internalFBs = false);
     void BlitTextureToTexture(GLuint srcTex, GLuint destTex,
                               const gfx::IntSize& srcSize,
                               const gfx::IntSize& destSize,
                               GLenum srcTarget = LOCAL_GL_TEXTURE_2D,
                               GLenum destTarget = LOCAL_GL_TEXTURE_2D);
+    bool BlitImageToFramebuffer(layers::Image* srcImage, const gfx::IntSize& destSize,
+                                GLuint destFB, bool yflip = false, GLuint xoffset = 0,
+                                GLuint yoffset = 0, GLuint width = 0, GLuint height = 0);
     bool BlitImageToTexture(layers::Image* srcImage, const gfx::IntSize& destSize,
-                            GLuint destTex, GLenum destTarget, bool yFlip = false, GLuint xoffset = 0,
-                            GLuint yoffset = 0, GLuint width = 0, GLuint height = 0);
+                            GLuint destTex, GLenum destTarget, bool yflip = false,
+                            GLuint xoffset = 0, GLuint yoffset = 0, GLuint width = 0,
+                            GLuint height = 0);
 };
 
-}
-}
+} // namespace gl
+} // namespace mozilla
 
 #endif // GLBLITHELPER_H_

@@ -44,7 +44,7 @@ public:
   // aWindow can be null if this DOMError is not associated with a particular
   // window.
 
-  DOMError(nsPIDOMWindow* aWindow);
+  explicit DOMError(nsPIDOMWindow* aWindow);
 
   DOMError(nsPIDOMWindow* aWindow, nsresult aValue);
 
@@ -59,7 +59,7 @@ public:
   }
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   static already_AddRefed<DOMError>
   Constructor(const GlobalObject& global, const nsAString& name,
@@ -73,12 +73,6 @@ public:
   void GetMessage(nsString& aRetval) const
   {
     aRetval = mMessage;
-  }
-
-  void Init(const nsAString& aName, const nsAString& aMessage)
-  {
-    mName = aName;
-    mMessage = aMessage;
   }
 };
 

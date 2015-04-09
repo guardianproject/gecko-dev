@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 package org.mozilla.gecko.tests;
 
 import static org.mozilla.gecko.tests.helpers.AssertionHelper.fAssertEquals;
@@ -24,8 +28,9 @@ public class testInputConnection extends UITest {
     public void testInputConnection() throws InterruptedException {
         GeckoHelper.blockForReady();
 
-        NavigationHelper.enterAndLoadUrl(StringHelper.ROBOCOP_INPUT_URL + "#" + INITIAL_TEXT);
-        mToolbar.assertTitle(StringHelper.ROBOCOP_INPUT_TITLE);
+        final String url = mStringHelper.ROBOCOP_INPUT_URL + "#" + INITIAL_TEXT;
+        NavigationHelper.enterAndLoadUrl(url);
+        mToolbar.assertTitle(url);
 
         mGeckoView.mTextInput
             .waitForInputConnection()
@@ -84,6 +89,26 @@ public class testInputConnection extends UITest {
 
             // Test getTextAfterCursor
             fAssertEquals("Can retrieve text after cursor", "", ic.getTextAfterCursor(3, 0));
+
+            ic.deleteSurroundingText(6, 0);
+            assertTextAndSelectionAt("Can clear text", ic, "", 0);
+
+            // Bug 1133802, duplication when setting the same composing text more than once.
+            ic.setComposingText("foo", 1);
+            assertTextAndSelectionAt("Can set the composing text", ic, "foo", 3);
+            ic.setComposingText("foo", 1);
+            assertTextAndSelectionAt("Can set the same composing text", ic, "foo", 3);
+            ic.setComposingText("bar", 1);
+            assertTextAndSelectionAt("Can set different composing text", ic, "bar", 3);
+            ic.setComposingText("bar", 1);
+            assertTextAndSelectionAt("Can set the same composing text", ic, "bar", 3);
+            ic.setComposingText("bar", 1);
+            assertTextAndSelectionAt("Can set the same composing text again", ic, "bar", 3);
+            ic.finishComposingText();
+            assertTextAndSelectionAt("Can finish composing text", ic, "bar", 3);
+
+            ic.deleteSurroundingText(3, 0);
+            assertTextAndSelectionAt("Can clear text", ic, "", 0);
         }
     }
 }

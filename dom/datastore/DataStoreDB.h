@@ -28,7 +28,7 @@ class IDBTransaction;
 
 class DataStoreDBCallback;
 
-class DataStoreDB MOZ_FINAL : public nsIDOMEventListener
+class DataStoreDB final : public nsIDOMEventListener
 {
 public:
   NS_DECL_ISUPPORTS
@@ -43,14 +43,14 @@ public:
   indexedDB::IDBTransaction* Transaction() const;
 
   // nsIDOMEventListener
-  NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent);
+  NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent) override;
 
 private:
   ~DataStoreDB();
 
   nsresult CreateFactoryIfNeeded();
 
-  nsresult UpgradeSchema();
+  nsresult UpgradeSchema(nsIDOMEvent* aEvent);
 
   nsresult DatabaseOpened();
 
@@ -75,6 +75,7 @@ private:
 
   IDBTransactionMode mTransactionMode;
   Sequence<nsString> mObjectStores;
+  bool mCreatedSchema;
 };
 
 } // namespace dom

@@ -61,12 +61,12 @@ public:
 
 class nsDequeIterator;
 
-class NS_COM_GLUE nsDeque
+class nsDeque
 {
   friend class nsDequeIterator;
   typedef mozilla::fallible_t fallible_t;
 public:
-  nsDeque(nsDequeFunctor* aDeallocator = nullptr);
+  explicit nsDeque(nsDequeFunctor* aDeallocator = nullptr);
   ~nsDeque();
 
   /**
@@ -84,8 +84,8 @@ public:
    */
   void Push(void* aItem)
   {
-    if (!Push(aItem, fallible_t())) {
-      NS_ABORT_OOM(mSize);
+    if (!Push(aItem, mozilla::fallible)) {
+      NS_ABORT_OOM(mSize * sizeof(void*));
     }
   }
 
@@ -98,8 +98,8 @@ public:
    */
   void PushFront(void* aItem)
   {
-    if (!PushFront(aItem, fallible_t())) {
-      NS_ABORT_OOM(mSize);
+    if (!PushFront(aItem, mozilla::fallible)) {
+      NS_ABORT_OOM(mSize * sizeof(void*));
     }
   }
 
@@ -236,7 +236,7 @@ private:
  * Here comes the nsDequeIterator class...
  ******************************************************/
 
-class NS_COM_GLUE nsDequeIterator
+class nsDequeIterator
 {
 public:
   /**
@@ -256,7 +256,7 @@ public:
    * @param   aQueue is the deque object to be iterated
    * @param   aIndex is the starting position for your iteration
    */
-  nsDequeIterator(const nsDeque& aQueue, int aIndex = 0);
+  explicit nsDequeIterator(const nsDeque& aQueue, int aIndex = 0);
 
   /**
    * Create a copy of a DequeIterator

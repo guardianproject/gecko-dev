@@ -6,38 +6,32 @@
 
 <html>
 <head>
-  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
-  <script type="application/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
-  <script type="application/javascript" src="head.js"></script>
   <script type="application/javascript" src="long.js"></script>
-  <script type="application/javascript" src="mediaStreamPlayback.js"></script>
   <script type="application/javascript" src="pc.js"></script>
-  <script type="application/javascript" src="templates.js"></script>
-  <script type="application/javascript" src="turnConfig.js"></script>
 </head>
 <body>
 <pre id="test">
 <script type="application/javascript">
   createHTML({
     bug: "1014328",
-    title: "Basic audio/video (combined) peer connection, long running"
+    title: "Basic audio/video (combined) peer connection, long running",
+    visible: true
   });
 
-  FAKE_ENABLED = false;
-
   var test;
-  runTest(function (options) {
+  runNetworkTest(function (options) {
     options = options || {};
     options.commands = commandsPeerConnection.slice(0);
-    options.commands.push(generateIntervalCommand(verifyConnectionStatus));
+    options.commands.push(generateIntervalCommand(verifyConnectionStatus,
+                                                  1000 * 10,
+                                                  1000 * 3600 * 3));
 
     test = new PeerConnectionTest(options);
-    test.setMediaConstraints([{audio: true, video: true}],
-                             [{audio: true, video: true}]);
+    test.setMediaConstraints([{audio: true, video: true, fake: false}],
+                             [{audio: true, video: true, fake: false}]);
     test.run();
   });
 </script>
 </pre>
 </body>
 </html>
-

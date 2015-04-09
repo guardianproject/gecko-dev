@@ -5,7 +5,9 @@ const { ActorPool, appendExtraActors, createExtraActors } = require("devtools/se
 const { RootActor } = require("devtools/server/actors/root");
 const { ThreadActor } = require("devtools/server/actors/script");
 const { DebuggerServer } = require("devtools/server/main");
+const { TabSources } = require("devtools/server/actors/utils/TabSources");
 const promise = require("promise");
+const makeDebugger = require("devtools/server/actors/utils/make-debugger");
 
 var gTestGlobals = [];
 DebuggerServer.addTestGlobal = function(aGlobal) {
@@ -51,8 +53,11 @@ TestTabList.prototype = {
 
 function createRootActor(aConnection)
 {
-  let root = new RootActor(aConnection,
-                           { tabList: new TestTabList(aConnection) });
+  let root = new RootActor(aConnection, {
+    tabList: new TestTabList(aConnection),
+    globalActorFactories: DebuggerServer.globalActorFactories,
+  });
+
   root.applicationType = "xpcshell-tests";
   return root;
 }
@@ -62,10 +67,17 @@ function TestTabActor(aConnection, aGlobal)
   this.conn = aConnection;
   this._global = aGlobal;
   this._global.wrappedJSObject = aGlobal;
-  this._threadActor = new ThreadActor(this, this._global);
-  this.conn.addActor(this._threadActor);
+  this.threadActor = new ThreadActor(this, this._global);
+  this.conn.addActor(this.threadActor);
   this._attached = false;
   this._extraActors = {};
+  this.makeDebugger = makeDebugger.bind(null, {
+    findDebuggees: () => [this._global],
+    shouldAddNewGlobalAsDebuggee: g => g.hostAnnotations &&
+                                       g.hostAnnotations.type == "document" &&
+                                       g.hostAnnotations.element === this._global
+
+  });
 }
 
 TestTabActor.prototype = {
@@ -78,6 +90,13 @@ TestTabActor.prototype = {
 
   get url() {
     return this._global.__name;
+  },
+
+  get sources() {
+    if (!this._sources) {
+      this._sources = new TabSources(this.threadActor);
+    }
+    return this._sources;
   },
 
   form: function() {
@@ -99,7 +118,7 @@ TestTabActor.prototype = {
   onAttach: function(aRequest) {
     this._attached = true;
 
-    let response = { type: "tabAttached", threadActor: this._threadActor.actorID };
+    let response = { type: "tabAttached", threadActor: this.threadActor.actorID };
     this._appendExtraActors(response);
 
     return response;
@@ -112,6 +131,21 @@ TestTabActor.prototype = {
     return { type: "detached" };
   },
 
+  onReload: function(aRequest) {
+    this.sources.reset({ sourceMaps: true });
+    this.threadActor.clearDebuggees();
+    this.threadActor.dbg.addDebuggees();
+    return {};
+  },
+
+  removeActorByName: function(aName) {
+    const actor = this._extraActors[aName];
+    if (this._tabActorPool) {
+      this._tabActorPool.removeActor(actor);
+    }
+    delete this._extraActors[aName];
+  },
+
   /* Support for DebuggerServer.addTabActor. */
   _createExtraActors: createExtraActors,
   _appendExtraActors: appendExtraActors
@@ -119,7 +153,8 @@ TestTabActor.prototype = {
 
 TestTabActor.prototype.requestTypes = {
   "attach": TestTabActor.prototype.onAttach,
-  "detach": TestTabActor.prototype.onDetach
+  "detach": TestTabActor.prototype.onDetach,
+  "reload": TestTabActor.prototype.onReload
 };
 
 exports.register = function(handle) {

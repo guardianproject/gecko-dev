@@ -58,11 +58,15 @@ class AnyContextFlags
     // scope chain.
     bool            hasDebuggerStatement:1;
 
+    // A direct eval occurs in the body of the script.
+    bool            hasDirectEval:1;
+
   public:
     AnyContextFlags()
      :  hasExplicitUseStrict(false),
         bindingsAccessedDynamically(false),
-        hasDebuggerStatement(false)
+        hasDebuggerStatement(false),
+        hasDirectEval(false)
     { }
 };
 
@@ -142,7 +146,7 @@ class Directives
 
   public:
     explicit Directives(bool strict) : strict_(strict), asmJS_(false) {}
-    template <typename ParseHandler> explicit Directives(ParseContext<ParseHandler> *parent);
+    template <typename ParseHandler> explicit Directives(ParseContext<ParseHandler>* parent);
 
     void setStrict() { strict_ = true; }
     bool strict() const { return strict_; }
@@ -150,15 +154,15 @@ class Directives
     void setAsmJS() { asmJS_ = true; }
     bool asmJS() const { return asmJS_; }
 
-    Directives &operator=(Directives rhs) {
+    Directives& operator=(Directives rhs) {
         strict_ = rhs.strict_;
         asmJS_ = rhs.asmJS_;
         return *this;
     }
-    bool operator==(const Directives &rhs) const {
+    bool operator==(const Directives& rhs) const {
         return strict_ == rhs.strict_ && asmJS_ == rhs.asmJS_;
     }
-    bool operator!=(const Directives &rhs) const {
+    bool operator!=(const Directives& rhs) const {
         return !(*this == rhs);
     }
 };
@@ -172,64 +176,67 @@ class Directives
 class SharedContext
 {
   public:
-    ExclusiveContext *const context;
+    ExclusiveContext* const context;
     AnyContextFlags anyCxFlags;
-    bool strict;
+    bool strictScript;
+    bool localStrict;
     bool extraWarnings;
 
     // If it's function code, funbox must be non-nullptr and scopeChain must be
     // nullptr. If it's global code, funbox must be nullptr.
-    SharedContext(ExclusiveContext *cx, Directives directives, bool extraWarnings)
+    SharedContext(ExclusiveContext* cx, Directives directives, bool extraWarnings)
       : context(cx),
         anyCxFlags(),
-        strict(directives.strict()),
+        strictScript(directives.strict()),
+        localStrict(false),
         extraWarnings(extraWarnings)
     {}
 
-    virtual ObjectBox *toObjectBox() = 0;
-    inline bool isGlobalSharedContext() { return toObjectBox() == nullptr; }
+    virtual ObjectBox* toObjectBox() = 0;
     inline bool isFunctionBox() { return toObjectBox() && toObjectBox()->isFunctionBox(); }
-    inline GlobalSharedContext *asGlobalSharedContext();
-    inline FunctionBox *asFunctionBox();
+    inline FunctionBox* asFunctionBox();
 
     bool hasExplicitUseStrict()        const { return anyCxFlags.hasExplicitUseStrict; }
     bool bindingsAccessedDynamically() const { return anyCxFlags.bindingsAccessedDynamically; }
     bool hasDebuggerStatement()        const { return anyCxFlags.hasDebuggerStatement; }
+    bool hasDirectEval()               const { return anyCxFlags.hasDirectEval; }
 
     void setExplicitUseStrict()           { anyCxFlags.hasExplicitUseStrict        = true; }
     void setBindingsAccessedDynamically() { anyCxFlags.bindingsAccessedDynamically = true; }
     void setHasDebuggerStatement()        { anyCxFlags.hasDebuggerStatement        = true; }
+    void setHasDirectEval()               { anyCxFlags.hasDirectEval               = true; }
 
     inline bool allLocalsAliased();
 
+    bool strict() {
+        return strictScript || localStrict;
+    }
+    bool setLocalStrictMode(bool strict) {
+        bool retVal = localStrict;
+        localStrict = strict;
+        return retVal;
+    }
+
     // JSOPTION_EXTRA_WARNINGS warnings or strict mode errors.
     bool needStrictChecks() {
-        return strict || extraWarnings;
+        return strict() || extraWarnings;
+    }
+
+    bool isDotVariable(JSAtom* atom) const {
+        return atom == context->names().dotGenerator || atom == context->names().dotGenRVal;
     }
 };
 
 class GlobalSharedContext : public SharedContext
 {
-  private:
-    const RootedObject scopeChain_; /* scope chain object for the script */
-
   public:
-    GlobalSharedContext(ExclusiveContext *cx, JSObject *scopeChain,
+    GlobalSharedContext(ExclusiveContext* cx,
                         Directives directives, bool extraWarnings)
-      : SharedContext(cx, directives, extraWarnings),
-        scopeChain_(cx, scopeChain)
+      : SharedContext(cx, directives, extraWarnings)
     {}
 
-    ObjectBox *toObjectBox() { return nullptr; }
-    JSObject *scopeChain() const { return scopeChain_; }
+    ObjectBox* toObjectBox() { return nullptr; }
 };
-
-inline GlobalSharedContext *
-SharedContext::asGlobalSharedContext()
-{
-    JS_ASSERT(isGlobalSharedContext());
-    return static_cast<GlobalSharedContext*>(this);
-}
 
 class FunctionBox : public ObjectBox, public SharedContext
 {
@@ -245,22 +252,23 @@ class FunctionBox : public ObjectBox, public SharedContext
     bool            inWith:1;               /* some enclosing scope is a with-statement */
     bool            inGenexpLambda:1;       /* lambda from generator expression */
     bool            hasDestructuringArgs:1; /* arguments list contains destructuring expression */
-    bool            useAsm:1;               /* function contains "use asm" directive */
-    bool            insideUseAsm:1;         /* nested function of function of "use asm" directive */
+    bool            useAsm:1;               /* see useAsmOrInsideUseAsm */
+    bool            insideUseAsm:1;         /* see useAsmOrInsideUseAsm */
 
     // Fields for use in heuristics.
     bool            usesArguments:1;  /* contains a free use of 'arguments' */
     bool            usesApply:1;      /* contains an f.apply() call */
+    bool            usesThis:1;       /* contains 'this' */
 
     FunctionContextFlags funCxFlags;
 
     template <typename ParseHandler>
-    FunctionBox(ExclusiveContext *cx, ObjectBox* traceListHead, JSFunction *fun,
-                ParseContext<ParseHandler> *pc, Directives directives,
+    FunctionBox(ExclusiveContext* cx, ObjectBox* traceListHead, JSFunction* fun,
+                ParseContext<ParseHandler>* pc, Directives directives,
                 bool extraWarnings, GeneratorKind generatorKind);
 
-    ObjectBox *toObjectBox() { return this; }
-    JSFunction *function() const { return &object->as<JSFunction>(); }
+    ObjectBox* toObjectBox() { return this; }
+    JSFunction* function() const { return &object->as<JSFunction>(); }
 
     GeneratorKind generatorKind() const { return GeneratorKindFromBits(generatorKindBits_); }
     bool isGenerator() const { return generatorKind() != NotGenerator; }
@@ -271,7 +279,7 @@ class FunctionBox : public ObjectBox, public SharedContext
         // A generator kind can be set at initialization, or when "yield" is
         // first seen.  In both cases the transition can only happen from
         // NotGenerator.
-        JS_ASSERT(!isGenerator());
+        MOZ_ASSERT(!isGenerator());
         generatorKindBits_ = GeneratorKindAsBits(kind);
     }
 
@@ -285,20 +293,23 @@ class FunctionBox : public ObjectBox, public SharedContext
     void setHasExtensibleScope()           { funCxFlags.hasExtensibleScope       = true; }
     void setNeedsDeclEnvObject()           { funCxFlags.needsDeclEnvObject       = true; }
     void setArgumentsHasLocalBinding()     { funCxFlags.argumentsHasLocalBinding = true; }
-    void setDefinitelyNeedsArgsObj()       { JS_ASSERT(funCxFlags.argumentsHasLocalBinding);
+    void setDefinitelyNeedsArgsObj()       { MOZ_ASSERT(funCxFlags.argumentsHasLocalBinding);
                                              funCxFlags.definitelyNeedsArgsObj   = true; }
 
     bool hasDefaults() const {
         return length != function()->nargs() - function()->hasRest();
     }
 
-    // Return whether this function has either specified "use asm" or is
-    // (transitively) nested inside a function that has.
+    // Return whether this or an enclosing function is being parsed and
+    // validated as asm.js. Note: if asm.js validation fails, this will be false
+    // while the function is being reparsed. This flag can be used to disable
+    // certain parsing features that are necessary in general, but unnecessary
+    // for validated asm.js.
     bool useAsmOrInsideUseAsm() const {
         return useAsm || insideUseAsm;
     }
 
-    void setStart(const TokenStream &tokenStream) {
+    void setStart(const TokenStream& tokenStream) {
         bufStart = tokenStream.currentToken().pos.begin;
         startLine = tokenStream.getLineno();
         startColumn = tokenStream.getColumn();
@@ -314,10 +325,10 @@ class FunctionBox : public ObjectBox, public SharedContext
     }
 };
 
-inline FunctionBox *
+inline FunctionBox*
 SharedContext::asFunctionBox()
 {
-    JS_ASSERT(isFunctionBox());
+    MOZ_ASSERT(isFunctionBox());
     return static_cast<FunctionBox*>(this);
 }
 
@@ -409,9 +420,9 @@ struct StmtInfoBase {
 
     // Compile-time scope chain node for this scope.  Only set if
     // isNestedScope.
-    Rooted<NestedScopeObject *> staticScope;
+    Rooted<NestedScopeObject*> staticScope;
 
-    explicit StmtInfoBase(ExclusiveContext *cx)
+    explicit StmtInfoBase(ExclusiveContext* cx)
         : isBlockScope(false), isNestedScope(false), isForLetBlock(false),
           label(cx), staticScope(cx)
     {}
@@ -424,9 +435,12 @@ struct StmtInfoBase {
         return isNestedScope;
     }
 
+    void setStaticScope() {
+    }
+
     StaticBlockObject& staticBlock() const {
-        JS_ASSERT(isNestedScope);
-        JS_ASSERT(isBlockScope);
+        MOZ_ASSERT(isNestedScope);
+        MOZ_ASSERT(isBlockScope);
         return staticScope->as<StaticBlockObject>();
     }
 
@@ -442,7 +456,7 @@ struct StmtInfoBase {
 // Push the C-stack-allocated struct at stmt onto the StmtInfoPC stack.
 template <class ContextT>
 void
-PushStatement(ContextT *ct, typename ContextT::StmtInfo *stmt, StmtType type)
+PushStatement(ContextT* ct, typename ContextT::StmtInfo* stmt, StmtType type)
 {
     stmt->type = type;
     stmt->isBlockScope = false;
@@ -462,7 +476,7 @@ PushStatement(ContextT *ct, typename ContextT::StmtInfo *stmt, StmtType type)
 
 template <class ContextT>
 void
-FinishPushNestedScope(ContextT *ct, typename ContextT::StmtInfo *stmt, NestedScopeObject &staticScope)
+FinishPushNestedScope(ContextT* ct, typename ContextT::StmtInfo* stmt, NestedScopeObject& staticScope)
 {
     stmt->isNestedScope = true;
     stmt->downScope = ct->topScopeStmt;
@@ -476,14 +490,14 @@ FinishPushNestedScope(ContextT *ct, typename ContextT::StmtInfo *stmt, NestedSco
 // template matching work.
 template <class ContextT>
 void
-FinishPopStatement(ContextT *ct)
+FinishPopStatement(ContextT* ct)
 {
-    typename ContextT::StmtInfo *stmt = ct->topStmt;
+    typename ContextT::StmtInfo* stmt = ct->topStmt;
     ct->topStmt = stmt->down;
     if (stmt->linksScope()) {
         ct->topScopeStmt = stmt->downScope;
         if (stmt->isNestedScope) {
-            JS_ASSERT(stmt->staticScope);
+            MOZ_ASSERT(stmt->staticScope);
             ct->staticScope = stmt->staticScope->enclosingNestedScope();
         }
     }
@@ -504,8 +518,8 @@ FinishPopStatement(ContextT *ct)
  * found. Otherwise return null.
  */
 template <class ContextT>
-typename ContextT::StmtInfo *
-LexicalLookup(ContextT *ct, HandleAtom atom, int *slotp, typename ContextT::StmtInfo *stmt);
+typename ContextT::StmtInfo*
+LexicalLookup(ContextT* ct, HandleAtom atom, int* slotp, typename ContextT::StmtInfo* stmt);
 
 } // namespace frontend
 

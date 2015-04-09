@@ -44,7 +44,7 @@ public:
 
 
 // hash entry class
-class nsClientAuthRememberEntry MOZ_FINAL : public PLDHashEntryHdr
+class nsClientAuthRememberEntry final : public PLDHashEntryHdr
 {
   public:
     // Hash methods
@@ -52,7 +52,7 @@ class nsClientAuthRememberEntry MOZ_FINAL : public PLDHashEntryHdr
     typedef const char* KeyTypePointer;
 
     // do nothing with aHost - we require mHead to be set before we're live!
-    nsClientAuthRememberEntry(KeyTypePointer aHostWithCertUTF8)
+    explicit nsClientAuthRememberEntry(KeyTypePointer aHostWithCertUTF8)
     {
     }
 
@@ -106,8 +106,8 @@ class nsClientAuthRememberEntry MOZ_FINAL : public PLDHashEntryHdr
     nsCString mHostWithCert;
 };
 
-class nsClientAuthRememberService MOZ_FINAL : public nsIObserver,
-                                              public nsSupportsWeakReference
+class nsClientAuthRememberService final : public nsIObserver,
+                                          public nsSupportsWeakReference
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS

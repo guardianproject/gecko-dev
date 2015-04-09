@@ -14,6 +14,7 @@
 #include "nsIEditor.h"
 #include "nsIPersistentProperties2.h"
 #include "nsIPlaintextEditor.h"
+#include "nsFrameSelection.h"
 
 namespace mozilla {
 namespace a11y {
@@ -48,17 +49,28 @@ HyperTextAccessible::AddToSelection(int32_t aStartOffset, int32_t aEndOffset)
 {
   dom::Selection* domSel = DOMSelection();
   return domSel &&
-    SetSelectionBoundsAt(domSel->GetRangeCount(), aStartOffset, aEndOffset);
+    SetSelectionBoundsAt(domSel->RangeCount(), aStartOffset, aEndOffset);
 }
 
 inline void
 HyperTextAccessible::ReplaceText(const nsAString& aText)
 {
-  int32_t numChars = CharacterCount();
-  if (numChars != 0)
-    DeleteText(0, numChars);
+  // We need to call DeleteText() even if there is no contents because we need
+  // to ensure to move focus to the editor via SetSelectionRange() called in
+  // DeleteText().
+  DeleteText(0, CharacterCount());
 
-  InsertText(aText, 0);
+  nsCOMPtr<nsIEditor> editor = GetEditor();
+  nsCOMPtr<nsIPlaintextEditor> plaintextEditor(do_QueryInterface(editor));
+  if (!plaintextEditor) {
+    return;
+  }
+
+  // DeleteText() may cause inserting <br> element in some cases. Let's
+  // select all again and replace whole contents.
+  editor->SelectAll();
+
+  plaintextEditor->InsertText(aText);
 }
 
 inline void
@@ -143,7 +155,7 @@ HyperTextAccessible::IsCaretAtEndOfLine() const
 {
   nsRefPtr<nsFrameSelection> frameSelection = FrameSelection();
   return frameSelection &&
-    frameSelection->GetHint() == nsFrameSelection::HINTLEFT;
+    frameSelection->GetHint() == CARET_ASSOCIATE_BEFORE;
 }
 
 inline already_AddRefed<nsFrameSelection>

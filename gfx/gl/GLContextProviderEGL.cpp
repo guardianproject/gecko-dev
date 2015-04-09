@@ -25,7 +25,6 @@
 /* from widget */
 #if defined(MOZ_WIDGET_ANDROID)
 #include "AndroidBridge.h"
-#include "nsSurfaceTexture.h"
 #endif
 
 #include <android/log.h>
@@ -116,10 +115,6 @@ public:
 
 using namespace mozilla::gfx;
 
-#ifdef MOZ_WIDGET_GONK
-extern nsIntRect gScreenBounds;
-#endif
-
 namespace mozilla {
 namespace gl {
 
@@ -196,7 +191,7 @@ static EGLSurface
 CreateSurfaceForWindow(nsIWidget* widget, const EGLConfig& config) {
     EGLSurface newSurface = EGL_NO_SURFACE;
 
-    #ifdef MOZ_ANDROID_OMTC
+    #ifdef MOZ_WIDGET_ANDROID
         mozilla::AndroidBridge::Bridge()->RegisterCompositor();
         newSurface = mozilla::AndroidBridge::Bridge()->CreateEGLSurfaceForCompositor();
         if (newSurface == EGL_NO_SURFACE) {
@@ -205,12 +200,6 @@ CreateSurfaceForWindow(nsIWidget* widget, const EGLConfig& config) {
     #else
         MOZ_ASSERT(widget != nullptr);
         newSurface = sEGLLibrary.fCreateWindowSurface(EGL_DISPLAY(), config, GET_NATIVE_WINDOW(widget), 0);
-        #ifdef MOZ_WIDGET_GONK
-            gScreenBounds.x = 0;
-            gScreenBounds.y = 0;
-            sEGLLibrary.fQuerySurface(EGL_DISPLAY(), newSurface, LOCAL_EGL_WIDTH, &gScreenBounds.width);
-            sEGLLibrary.fQuerySurface(EGL_DISPLAY(), newSurface, LOCAL_EGL_HEIGHT, &gScreenBounds.height);
-        #endif
     #endif
     return newSurface;
 }
@@ -371,7 +360,7 @@ GLContextEGL::SetEGLSurfaceOverride(EGLSurface surf) {
         Screen()->AssureBlitted();
     }
 
-    mSurfaceOverride = surf ? (EGLSurface) surf : mSurface;
+    mSurfaceOverride = surf;
     MakeCurrent(true);
 }
 
@@ -455,7 +444,7 @@ GLContextEGL::RenewSurface() {
 void
 GLContextEGL::ReleaseSurface() {
     if (mOwnsContext) {
-        DestroySurface(mSurface);
+        mozilla::gl::DestroySurface(mSurface);
     }
     mSurface = EGL_NO_SURFACE;
 }
@@ -470,17 +459,20 @@ GLContextEGL::SetupLookupFunction()
 bool
 GLContextEGL::SwapBuffers()
 {
-    if (mSurface) {
+    EGLSurface surface = mSurfaceOverride != EGL_NO_SURFACE
+                          ? mSurfaceOverride
+                          : mSurface;
+    if (surface) {
 #ifdef MOZ_WIDGET_GONK
         if (!mIsOffscreen) {
             if (mHwc) {
-                return mHwc->Render(EGL_DISPLAY(), mSurface);
+                return mHwc->Render(EGL_DISPLAY(), surface);
             } else {
-                return GetGonkDisplay()->SwapBuffers(EGL_DISPLAY(), mSurface);
+                return GetGonkDisplay()->SwapBuffers(EGL_DISPLAY(), surface);
             }
         } else
 #endif
-            return sEGLLibrary.fSwapBuffers(EGL_DISPLAY(), mSurface);
+            return sEGLLibrary.fSwapBuffers(EGL_DISPLAY(), surface);
     } else {
         return false;
     }
@@ -491,6 +483,32 @@ GLContextEGL::SwapBuffers()
 void
 GLContextEGL::HoldSurface(gfxASurface *aSurf) {
     mThebesSurface = aSurf;
+}
+
+/* static */ EGLSurface
+GLContextEGL::CreateSurfaceForWindow(nsIWidget* aWidget)
+{
+    if (!sEGLLibrary.EnsureInitialized()) {
+        MOZ_CRASH("Failed to load EGL library!\n");
+        return nullptr;
+    }
+
+    EGLConfig config;
+    if (!CreateConfig(&config)) {
+        MOZ_CRASH("Failed to create EGLConfig!\n");
+        return nullptr;
+    }
+
+    EGLSurface surface = mozilla::gl::CreateSurfaceForWindow(aWidget, config);
+    return surface;
+}
+
+/* static */ void
+GLContextEGL::DestroySurface(EGLSurface aSurface)
+{
+    if (aSurface != EGL_NO_SURFACE) {
+        sEGLLibrary.fDestroySurface(EGL_DISPLAY(), aSurface);
+    }
 }
 
 already_AddRefed<GLContextEGL>
@@ -657,10 +675,31 @@ CreateConfig(EGLConfig* aConfig, int32_t depth)
         return false;
     }
 
+#ifdef MOZ_WIDGET_GONK
+    // On gonk, it's important to select a configuration with the
+    // the correct order as well as bits per channel.
+    // EGL_NATIVE_VISUAL_ID gives us the Android pixel format which
+    // is an enum that tells us both order and bits per channel.
+    // For example -
+    //  HAL_PIXEL_FORMAT_RGBX_8888
+    //  HAL_PIXEL_FORMAT_BGRA_8888
+    //  HAL_PIXEL_FORMAT_RGB_565
+    for (int j = 0; j < ncfg; ++j) {
+        EGLConfig config = configs[j];
+        EGLint format;
+        if (sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
+                                         LOCAL_EGL_NATIVE_VISUAL_ID, &format) &&
+            format == GetGonkDisplay()->surfaceformat)
+        {
+            *aConfig = config;
+            return true;
+        }
+    }
+#endif
+
     for (int j = 0; j < ncfg; ++j) {
         EGLConfig config = configs[j];
         EGLint r, g, b, a;
-
         if (sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
                                          LOCAL_EGL_RED_SIZE, &r) &&
             sEGLLibrary.fGetConfigAttrib(EGL_DISPLAY(), config,
@@ -764,7 +803,7 @@ GLContextProviderEGL::CreateForWindow(nsIWidget *aWidget)
 
     if (!glContext) {
         MOZ_CRASH("Failed to create EGLContext!\n");
-        DestroySurface(surface);
+        mozilla::gl::DestroySurface(surface);
         return nullptr;
     }
 
@@ -795,7 +834,7 @@ GLContextEGL::CreateEGLPBufferOffscreenContext(const gfxIntSize& size)
 
     // We absolutely don't care, so just pick the first one.
     config = configs[0];
-    if (GLContext::DebugMode())
+    if (GLContext::ShouldSpew())
         sEGLLibrary.DumpEGLConfig(config);
 
     gfxIntSize pbSize(size);
@@ -867,24 +906,34 @@ GLContextEGL::CreateEGLPixmapOffscreenContext(const gfxIntSize& size)
     return glContext.forget();
 }
 
-// Under EGL, on Android, pbuffers are supported fine, though
-// often without the ability to texture from them directly.
 already_AddRefed<GLContext>
-GLContextProviderEGL::CreateOffscreen(const gfxIntSize& size,
-                                      const SurfaceCaps& caps)
+GLContextProviderEGL::CreateHeadless(bool)
 {
     if (!sEGLLibrary.EnsureInitialized()) {
         return nullptr;
     }
 
     gfxIntSize dummySize = gfxIntSize(16, 16);
-    nsRefPtr<GLContextEGL> glContext;
+    nsRefPtr<GLContext> glContext;
     glContext = GLContextEGL::CreateEGLPBufferOffscreenContext(dummySize);
-
     if (!glContext)
         return nullptr;
 
-    if (!glContext->InitOffscreen(ToIntSize(size), caps))
+    return glContext.forget();
+}
+
+// Under EGL, on Android, pbuffers are supported fine, though
+// often without the ability to texture from them directly.
+already_AddRefed<GLContext>
+GLContextProviderEGL::CreateOffscreen(const gfxIntSize& size,
+                                      const SurfaceCaps& caps,
+                                      bool requireCompatProfile)
+{
+    nsRefPtr<GLContext> glContext = CreateHeadless(requireCompatProfile);
+    if (!glContext)
+        return nullptr;
+
+    if (!glContext->InitOffscreen(size, caps))
         return nullptr;
 
     return glContext.forget();
@@ -893,7 +942,7 @@ GLContextProviderEGL::CreateOffscreen(const gfxIntSize& size,
 // Don't want a global context on Android as 1) share groups across 2 threads fail on many Tegra drivers (bug 759225)
 // and 2) some mobile devices have a very strict limit on global number of GL contexts (bug 754257)
 // and 3) each EGL context eats 750k on B2G (bug 813783)
-GLContext *
+GLContext*
 GLContextProviderEGL::GetGlobalContext()
 {
     return nullptr;

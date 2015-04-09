@@ -26,10 +26,8 @@ NS_IMPL_ISUPPORTS_INHERITED0(HTMLListAccessible, HyperTextAccessible)
 role
 HTMLListAccessible::NativeRole()
 {
-  if (mContent->Tag() == nsGkAtoms::dl)
-    return roles::DEFINITION_LIST;
-
-  return roles::LIST;
+  a11y::role r = GetAccService()->MarkupRole(mContent);
+  return r != roles::NOTHING ? r : roles::LIST;
 }
 
 uint64_t
@@ -69,10 +67,8 @@ HTMLLIAccessible::Shutdown()
 role
 HTMLLIAccessible::NativeRole()
 {
-  if (mContent->Tag() == nsGkAtoms::dt)
-    return roles::TERM;
-
-  return roles::LISTITEM;
+  a11y::role r = GetAccService()->MarkupRole(mContent);
+  return r != roles::NOTHING ? r : roles::LISTITEM;
 }
 
 uint64_t
@@ -81,21 +77,18 @@ HTMLLIAccessible::NativeState()
   return HyperTextAccessibleWrap::NativeState() | states::READONLY;
 }
 
-NS_IMETHODIMP
-HTMLLIAccessible::GetBounds(int32_t* aX, int32_t* aY,
-                            int32_t* aWidth, int32_t* aHeight)
+nsIntRect
+HTMLLIAccessible::Bounds() const
 {
-  nsresult rv = AccessibleWrap::GetBounds(aX, aY, aWidth, aHeight);
-  if (NS_FAILED(rv) || !mBullet || mBullet->IsInside())
-    return rv;
+  nsIntRect rect = AccessibleWrap::Bounds();
+  if (rect.IsEmpty() || !mBullet || mBullet->IsInside())
+    return rect;
 
-  int32_t bulletX = 0, bulletY = 0, bulletWidth = 0, bulletHeight = 0;
-  rv = mBullet->GetBounds(&bulletX, &bulletY, &bulletWidth, &bulletHeight);
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsIntRect bulletRect = mBullet->Bounds();
 
-  *aWidth += *aX - bulletX;
-  *aX = bulletX; // Move x coordinate of list item over to cover bullet as well
-  return NS_OK;
+  rect.width += rect.x - bulletRect.x;
+  rect.x = bulletRect.x; // Move x coordinate of list item over to cover bullet as well
+  return rect;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

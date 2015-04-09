@@ -16,15 +16,11 @@
 #include "nsIWeakReference.h"
 #include "mozilla/Attributes.h"
 
-#ifdef MOZ_LOGGING
-// Uncomment the next line to force logging on in release builds
-// #define FORCE_PR_LOG
-#endif
 #include "prlog.h"
 
 class nsDocumentOpenInfo;
 
-class nsURILoader MOZ_FINAL : public nsIURILoader
+class nsURILoader final : public nsIURILoader
 {
 public:
   NS_DECL_NSIURILOADER

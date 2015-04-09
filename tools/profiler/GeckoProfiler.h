@@ -49,8 +49,11 @@
 #ifndef SAMPLER_H
 #define SAMPLER_H
 
-#include "mozilla/NullPtr.h"
 #include "js/TypeDecls.h"
+#include "mozilla/GuardObjects.h"
+#include "mozilla/UniquePtr.h"
+#include "mozilla/GuardObjects.h"
+#include "ProfilerBacktrace.h"
 
 namespace mozilla {
 class TimeStamp;
@@ -64,14 +67,19 @@ enum TracingMetadata {
   TRACING_EVENT_BACKTRACE
 };
 
-#ifndef MOZ_ENABLE_PROFILER_SPS
+#if !defined(MOZ_ENABLE_PROFILER_SPS) || defined(MOZILLA_XPCOMRT_API)
 
 #include <stdint.h>
+#include <stdarg.h>
 
 // Insert a RAII in this scope to active a pseudo label. Any samples collected
 // in this scope will contain this annotation. For dynamic strings use
 // PROFILER_LABEL_PRINTF. Arguments must be string literals.
 #define PROFILER_LABEL(name_space, info, category) do {} while (0)
+
+// Similar to PROFILER_LABEL, PROFILER_LABEL_FUNC will push/pop the enclosing
+// functon name as the pseudostack label.
+#define PROFILER_LABEL_FUNC(category) do {} while (0)
 
 // Format a dynamic string as a pseudo label. These labels will a considerable
 // storage size in the circular buffer compared to regular labels. This function
@@ -84,7 +92,7 @@ enum TracingMetadata {
 // only recorded if a sample is collected while it is active, marker will always
 // be collected.
 #define PROFILER_MARKER(info) do {} while (0)
-#define PROFILER_MARKER_PAYLOAD(info, payload) do {} while (0)
+#define PROFILER_MARKER_PAYLOAD(info, payload) do { nsAutoPtr<ProfilerMarkerPayload> payloadDeletor(payload); } while (0)
 
 // Main thread specilization to avoid TLS lookup for performance critical use.
 #define PROFILER_MAIN_THREAD_LABEL(name_space, info, category) do {} while (0)
@@ -142,6 +150,11 @@ static inline void profiler_free_backtrace(ProfilerBacktrace* aBacktrace) {}
 
 static inline bool profiler_is_active() { return false; }
 
+// Check if an external profiler feature is active.
+// Supported:
+//  * gpu
+static inline bool profiler_feature_active(const char*) { return false; }
+
 // Internal-only. Used by the event tracer.
 static inline void profiler_responsiveness(const mozilla::TimeStamp& aTime) {}
 
@@ -160,11 +173,6 @@ static inline void profiler_save_profile_to_file(char* aFilename) { }
 // Get the features supported by the profiler that are accepted by profiler_init.
 // Returns a null terminated char* array.
 static inline char** profiler_get_features() { return nullptr; }
-
-// Print the current location to the console. This functill will do it best effort
-// to show the profiler's combined js/c++ if the profiler is running. Note that
-// printing the location require symbolicating which is very slow.
-static inline void profiler_print_location() {}
 
 // Discard the profile, throw away the profile and notify 'profiler-locked'.
 // This function is to be used when entering private browsing to prevent
@@ -192,6 +200,9 @@ static inline double profiler_time(const mozilla::TimeStamp& aTime) { return 0; 
 
 static inline bool profiler_in_privacy_mode() { return false; }
 
+static inline void profiler_log(const char *str) {}
+static inline void profiler_log(const char *fmt, va_list args) {}
+
 #else
 
 #include "GeckoProfilerImpl.h"
@@ -200,7 +211,7 @@ static inline bool profiler_in_privacy_mode() { return false; }
 
 class GeckoProfilerInitRAII {
 public:
-  GeckoProfilerInitRAII(void* stackTop) {
+  explicit GeckoProfilerInitRAII(void* stackTop) {
     profiler_init(stackTop);
   }
   ~GeckoProfilerInitRAII() {
@@ -216,6 +227,30 @@ public:
   ~GeckoProfilerSleepRAII() {
     profiler_sleep_end();
   }
+};
+
+class ProfilerBacktrace;
+
+class MOZ_STACK_CLASS GeckoProfilerTracingRAII {
+public:
+  GeckoProfilerTracingRAII(const char* aCategory, const char* aInfo,
+                           mozilla::UniquePtr<ProfilerBacktrace> aBacktrace
+                           MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    : mCategory(aCategory)
+    , mInfo(aInfo)
+  {
+    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+    profiler_tracing(mCategory, mInfo, aBacktrace.release(), TRACING_INTERVAL_START);
+  }
+
+  ~GeckoProfilerTracingRAII() {
+    profiler_tracing(mCategory, mInfo, TRACING_INTERVAL_END);
+  }
+
+protected:
+  MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
+  const char* mCategory;
+  const char* mInfo;
 };
 
 #endif // ifndef SAMPLER_H

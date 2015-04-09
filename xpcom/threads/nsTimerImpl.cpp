@@ -13,6 +13,9 @@
 #include "pratom.h"
 #include "GeckoProfiler.h"
 #include "mozilla/Atomics.h"
+#ifdef MOZ_NUWA_PROCESS
+#include "ipc/Nuwa.h"
+#endif
 
 using mozilla::Atomic;
 using mozilla::TimeDuration;
@@ -301,9 +304,6 @@ nsTimerImpl::Startup()
   nsTimerEvent::Init();
 
   gThread = new TimerThread();
-  if (!gThread) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
 
   NS_ADDREF(gThread);
   rv = gThread->InitLocks();
@@ -556,10 +556,22 @@ nsTimerImpl::Fire()
     return;
   }
 
+#ifdef MOZ_NUWA_PROCESS
+  if (IsNuwaProcess() && IsNuwaReady()) {
+    // A timer event fired after Nuwa frozen can freeze main thread.
+    return;
+  }
+#endif
+
+#if !defined(MOZILLA_XPCOMRT_API)
   PROFILER_LABEL("Timer", "Fire",
-    js::ProfileEntry::Category::OTHER);
+                 js::ProfileEntry::Category::OTHER);
+#endif
 
 #ifdef MOZ_TASK_TRACER
+  // mTracedTask is an instance of FakeTracedTask created by
+  // DispatchTracedTask(). AutoRunFakeTracedTask logs the begin/end time of the
+  // timer/FakeTracedTask instance in ctor/dtor.
   mozilla::tasktracer::AutoRunFakeTracedTask runTracedTask(mTracedTask);
 #endif
 
@@ -814,9 +826,6 @@ NS_NewTimer(nsITimer** aResult, nsTimerCallbackFunc aCallback, void* aClosure,
             uint32_t aDelay, uint32_t aType)
 {
   nsTimerImpl* timer = new nsTimerImpl();
-  if (!timer) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
   NS_ADDREF(timer);
 
   nsresult rv = timer->InitWithFuncCallback(aCallback, aClosure,

@@ -4,19 +4,21 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "JSStreamWriter.h"
 #include "ProfilerBacktrace.h"
-#include "SyncProfile.h"
 
+#include "JSStreamWriter.h"
+#include "SyncProfile.h"
 
 ProfilerBacktrace::ProfilerBacktrace(SyncProfile* aProfile)
   : mProfile(aProfile)
 {
+  MOZ_COUNT_CTOR(ProfilerBacktrace);
   MOZ_ASSERT(aProfile);
 }
 
 ProfilerBacktrace::~ProfilerBacktrace()
 {
+  MOZ_COUNT_DTOR(ProfilerBacktrace);
   if (mProfile->ShouldDestroy()) {
     delete mProfile;
   }

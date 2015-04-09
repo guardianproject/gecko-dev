@@ -10,7 +10,9 @@
 #include "nsIInputStream.h"
 #include "zlib.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/dom/File.h"
 
+using namespace mozilla::dom;
 USING_ARCHIVEREADER_NAMESPACE
 
 #define ZIP_CHUNK 16384
@@ -18,8 +20,8 @@ USING_ARCHIVEREADER_NAMESPACE
 /**
  * Input stream object for zip files
  */
-class ArchiveInputStream MOZ_FINAL : public nsIInputStream,
-                                     public nsISeekableStream
+class ArchiveInputStream final : public nsIInputStream,
+                                 public nsISeekableStream
 {
 public:
   ArchiveInputStream(uint64_t aParentSize,
@@ -360,13 +362,15 @@ ArchiveZipFileImpl::GetInternalStream(nsIInputStream** aStream)
     return NS_ERROR_FAILURE;
   }
 
-  uint64_t size;
-  nsresult rv = mArchiveReader->GetSize(&size);
-  NS_ENSURE_SUCCESS(rv, rv);
+  ErrorResult rv;
+  uint64_t size = mFileImpl->GetSize(rv);
+  if (NS_WARN_IF(rv.Failed())) {
+    return rv.ErrorCode();
+  }
 
   nsCOMPtr<nsIInputStream> inputStream;
-  rv = mArchiveReader->GetInputStream(getter_AddRefs(inputStream));
-  if (NS_FAILED(rv) || !inputStream) {
+  rv = mFileImpl->GetInternalStream(getter_AddRefs(inputStream));
+  if (NS_WARN_IF(rv.Failed()) || !inputStream) {
     return NS_ERROR_UNEXPECTED;
   }
 
@@ -376,36 +380,21 @@ ArchiveZipFileImpl::GetInternalStream(nsIInputStream** aStream)
                                                                mStart,
                                                                mLength,
                                                                mCentral);
-  NS_ADDREF(stream);
 
-  *aStream = stream;
+  stream.forget(aStream);
   return NS_OK;
 }
 
-void
-ArchiveZipFileImpl::Unlink()
-{
-  ArchiveZipFileImpl* tmp = this;
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mArchiveReader);
-}
-
-void
-ArchiveZipFileImpl::Traverse(nsCycleCollectionTraversalCallback &cb)
-{
-  ArchiveZipFileImpl* tmp = this;
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mArchiveReader);
-}
-
-already_AddRefed<nsIDOMBlob>
+already_AddRefed<mozilla::dom::FileImpl>
 ArchiveZipFileImpl::CreateSlice(uint64_t aStart,
                                 uint64_t aLength,
-                                const nsAString& aContentType)
+                                const nsAString& aContentType,
+                                mozilla::ErrorResult& aRv)
 {
-  nsCOMPtr<nsIDOMBlob> t =
-    new DOMFile(new ArchiveZipFileImpl(mFilename, mContentType,
-                                       aStart, mLength, mCentral,
-                                       mArchiveReader));
-  return t.forget();
+  nsRefPtr<FileImpl> impl =
+    new ArchiveZipFileImpl(mFilename, mContentType, aStart, mLength, mCentral,
+                           mFileImpl);
+  return impl.forget();
 }
 
-NS_IMPL_ISUPPORTS_INHERITED0(ArchiveZipFileImpl, DOMFileImpl)
+NS_IMPL_ISUPPORTS_INHERITED0(ArchiveZipFileImpl, FileImpl)

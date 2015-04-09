@@ -10,7 +10,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/dom/BluetoothDevice2Binding.h"
-#include "BluetoothCommon.h"
+#include "mozilla/dom/bluetooth/BluetoothCommon.h"
 #include "nsString.h"
 #include "nsCOMPtr.h"
 
@@ -23,25 +23,23 @@ namespace dom {
 BEGIN_BLUETOOTH_NAMESPACE
 
 class BluetoothClassOfDevice;
+class BluetoothGatt;
 class BluetoothNamedValue;
 class BluetoothValue;
 class BluetoothSignal;
 class BluetoothSocket;
 
-class BluetoothDevice MOZ_FINAL : public DOMEventTargetHelper
-                                , public BluetoothSignalObserver
+class BluetoothDevice final : public DOMEventTargetHelper
+                            , public BluetoothSignalObserver
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
-
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(BluetoothDevice,
                                            DOMEventTargetHelper)
 
-  static already_AddRefed<BluetoothDevice>
-  Create(nsPIDOMWindow* aOwner, const BluetoothValue& aValue);
-
-  void Notify(const BluetoothSignal& aParam);
-
+  /****************************************************************************
+   * Attribute Getters
+   ***************************************************************************/
   void GetAddress(nsString& aAddress) const
   {
     aAddress = mAddress;
@@ -62,47 +60,177 @@ public:
     return mPaired;
   }
 
-  void GetUuids(nsTArray<nsString>& aUuids) {
+  void GetUuids(nsTArray<nsString>& aUuids) const
+  {
     aUuids = mUuids;
   }
 
-  already_AddRefed<Promise> FetchUuids(ErrorResult& aRv);
+  BluetoothDeviceType Type() const
+  {
+    return mType;
+  }
 
-  void SetPropertyByValue(const BluetoothNamedValue& aValue);
+  BluetoothGatt* GetGatt();
 
-  BluetoothDeviceAttribute
-  ConvertStringToDeviceAttribute(const nsAString& aString);
-
-  bool
-  IsDeviceAttributeChanged(BluetoothDeviceAttribute aType,
-                           const BluetoothValue& aValue);
-
-  void HandlePropertyChanged(const BluetoothValue& aValue);
-
-  void DispatchAttributeEvent(const nsTArray<nsString>& aTypes);
-
+  /****************************************************************************
+   * Event Handlers
+   ***************************************************************************/
   IMPL_EVENT_HANDLER(attributechanged);
 
+  /****************************************************************************
+   * Methods (Web API Implementation)
+   ***************************************************************************/
+  already_AddRefed<Promise> FetchUuids(ErrorResult& aRv);
+
+  /****************************************************************************
+   * Others
+   ***************************************************************************/
+  static already_AddRefed<BluetoothDevice>
+    Create(nsPIDOMWindow* aOwner, const BluetoothValue& aValue);
+
+  void Notify(const BluetoothSignal& aParam); // BluetoothSignalObserver
   nsPIDOMWindow* GetParentObject() const
   {
      return GetOwner();
   }
 
-  virtual JSObject* WrapObject(JSContext* aCx) MOZ_OVERRIDE;
-  virtual void DisconnectFromOwner() MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx,
+                               JS::Handle<JSObject*> aGivenProto) override;
+  virtual void DisconnectFromOwner() override;
 
 private:
   BluetoothDevice(nsPIDOMWindow* aOwner, const BluetoothValue& aValue);
   ~BluetoothDevice();
 
+  /**
+   * Set device properties according to properties array
+   *
+   * @param aValue [in] Properties array to set with
+   */
+  void SetPropertyByValue(const BluetoothNamedValue& aValue);
+
+  /**
+   * Handle "PropertyChanged" bluetooth signal.
+   *
+   * @param aValue [in] Array of changed properties
+   */
+  void HandlePropertyChanged(const BluetoothValue& aValue);
+
+  /**
+   * Fire BluetoothAttributeEvent to trigger onattributechanged event handler.
+   */
+  void DispatchAttributeEvent(const nsTArray<nsString>& aTypes);
+
+  /**
+   * Convert uint32_t to BluetoothDeviceType.
+   *
+   * @param aValue [in] uint32_t to convert
+   */
+  BluetoothDeviceType ConvertUint32ToDeviceType(const uint32_t aValue);
+
+  /**
+   * Convert string to BluetoothDeviceAttribute.
+   *
+   * @param aString [in] String to convert
+   */
+  BluetoothDeviceAttribute
+    ConvertStringToDeviceAttribute(const nsAString& aString);
+
+  /**
+   * Check whether value of given device property has changed.
+   *
+   * @param aType  [in] Device property to check
+   * @param aValue [in] New value of the device property
+   */
+  bool IsDeviceAttributeChanged(BluetoothDeviceAttribute aType,
+                                const BluetoothValue& aValue);
+
+  /****************************************************************************
+   * Variables
+   ***************************************************************************/
+  /**
+   * BD address of this device.
+   */
   nsString mAddress;
+
+  /**
+   * Class of device (CoD) that describes this device's capabilities.
+   */
   nsRefPtr<BluetoothClassOfDevice> mCod;
+
+  /**
+   * Human-readable name of this device.
+   */
   nsString mName;
+
+  /**
+   * Whether this device is paired or not.
+   */
   bool mPaired;
+
+  /**
+   * Cached UUID list of services which this device provides.
+   */
   nsTArray<nsString> mUuids;
 
+  /**
+   * Type of this device. Can be unknown/classic/le/dual.
+   */
+  BluetoothDeviceType mType;
+
+  /**
+   * GATT client object to interact with the remote device.
+   */
+  nsRefPtr<BluetoothGatt> mGatt;
 };
 
 END_BLUETOOTH_NAMESPACE
+
+/**
+ * Explicit Specialization of Function Templates
+ *
+ * Allows customizing the template code for a given set of template arguments.
+ * With this function template, nsTArray can handle comparison of
+ * 'nsRefPtr<BluetoothDevice>' properly, including IndexOf() and Contains();
+ */
+template <>
+class nsDefaultComparator <nsRefPtr<mozilla::dom::bluetooth::BluetoothDevice>,
+                           nsRefPtr<mozilla::dom::bluetooth::BluetoothDevice>> {
+  public:
+
+    bool Equals(
+      const nsRefPtr<mozilla::dom::bluetooth::BluetoothDevice>& aDeviceA,
+      const nsRefPtr<mozilla::dom::bluetooth::BluetoothDevice>& aDeviceB) const
+    {
+      nsString addressA, addressB;
+      aDeviceA->GetAddress(addressA);
+      aDeviceB->GetAddress(addressB);
+
+      return addressA.Equals(addressB);
+    }
+};
+
+/**
+ * Explicit Specialization of Function Templates
+ *
+ * Allows customizing the template code for a given set of template arguments.
+ * With this function template, nsTArray can handle comparison between
+ * 'nsRefPtr<BluetoothDevice>' and nsString properly, including IndexOf() and
+ * Contains();
+ */
+template <>
+class nsDefaultComparator <nsRefPtr<mozilla::dom::bluetooth::BluetoothDevice>,
+                           nsString> {
+public:
+  bool Equals(
+    const nsRefPtr<mozilla::dom::bluetooth::BluetoothDevice>& aDevice,
+    const nsString& aAddress) const
+  {
+    nsString deviceAddress;
+    aDevice->GetAddress(deviceAddress);
+
+    return deviceAddress.Equals(aAddress);
+  }
+};
 
 #endif

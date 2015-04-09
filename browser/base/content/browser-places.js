@@ -238,7 +238,7 @@ var StarUI = {
 
   cancelButtonOnCommand: function SU_cancelButtonOnCommand() {
     this._actionOnHide = "cancel";
-    this.panel.hidePopup();
+    this.panel.hidePopup(true);
   },
 
   removeBookmarkButtonCommand: function SU_removeBookmarkButtonCommand() {
@@ -274,25 +274,18 @@ var PlacesCommandHook = {
     var uri = aBrowser.currentURI;
     var itemId = PlacesUtils.getMostRecentBookmarkForURI(uri);
     if (itemId == -1) {
-      // Copied over from addBookmarkForBrowser:
-      // Bug 52536: We obtain the URL and title from the nsIWebNavigation
-      // associated with a <browser/> rather than from a DOMWindow.
-      // This is because when a full page plugin is loaded, there is
-      // no DOMWindow (?) but information about the loaded document
-      // may still be obtained from the webNavigation.
-      var webNav = aBrowser.webNavigation;
-      var url = webNav.currentURI;
+      // Bug 1148838 - Make this code work for full page plugins.
       var title;
       var description;
       var charset;
       try {
         let isErrorPage = /^about:(neterror|certerror|blocked)/
-                          .test(webNav.document.documentURI);
-        title = isErrorPage ? PlacesUtils.history.getPageTitle(url)
-                            : webNav.document.title;
-        title = title || url.spec;
-        description = PlacesUIUtils.getDescriptionFromDocument(webNav.document);
-        charset = webNav.document.characterSet;
+                          .test(aBrowser.contentDocumentAsCPOW.documentURI);
+        title = isErrorPage ? PlacesUtils.history.getPageTitle(uri)
+                            : aBrowser.contentTitle;
+        title = title || uri.spec;
+        description = PlacesUIUtils.getDescriptionFromDocument(aBrowser.contentDocumentAsCPOW);
+        charset = aBrowser.characterSet;
       }
       catch (e) { }
 
@@ -312,7 +305,7 @@ var PlacesCommandHook = {
       PlacesUtils.transactionManager.doTransaction(txn);
       itemId = txn.item.id;
       // Set the character-set
-      if (charset && !PrivateBrowsingUtils.isWindowPrivate(aBrowser.contentWindow))
+      if (charset && !PrivateBrowsingUtils.isBrowserPrivate(aBrowser))
         PlacesUtils.setCharsetForURI(uri, charset);
     }
 
@@ -441,10 +434,10 @@ var PlacesCommandHook = {
    */
   addLiveBookmark: function PCH_addLiveBookmark(url, feedTitle, feedSubtitle) {
     var feedURI = makeURI(url);
-    
-    var doc = gBrowser.contentDocument;
+
+    var doc = gBrowser.contentDocumentAsCPOW;
     var title = (arguments.length > 1) ? feedTitle : doc.title;
- 
+
     var description;
     if (arguments.length > 2)
       description = feedSubtitle;
@@ -474,7 +467,8 @@ var PlacesCommandHook = {
    */
   showPlacesOrganizer: function PCH_showPlacesOrganizer(aLeftPaneRoot) {
     var organizer = Services.wm.getMostRecentWindow("Places:Organizer");
-    if (!organizer) {
+    // Due to bug 528706, getMostRecentWindow can return closed windows.
+    if (!organizer || organizer.closed) {
       // No currently open places window, so open one with the specified mode.
       openDialog("chrome://browser/content/places/places.xul", 
                  "", "chrome,toolbar=yes,dialog=no,resizable", aLeftPaneRoot);
@@ -504,12 +498,21 @@ function HistoryMenu(aPopupShowingEvent) {
 }
 
 HistoryMenu.prototype = {
+  _getClosedTabCount() {
+    // SessionStore doesn't track the hidden window, so just return zero then.
+    if (window == Services.appShell.hiddenDOMWindow) {
+      return 0;
+    }
+
+    return SessionStore.getClosedTabCount(window);
+  },
+
   toggleRecentlyClosedTabs: function HM_toggleRecentlyClosedTabs() {
     // enable/disable the Recently Closed Tabs sub menu
     var undoMenu = this._rootElt.getElementsByClassName("recentlyClosedTabsMenu")[0];
 
     // no restorable tabs, so disable menu
-    if (SessionStore.getClosedTabCount(window) == 0)
+    if (this._getClosedTabCount() == 0)
       undoMenu.setAttribute("disabled", true);
     else
       undoMenu.removeAttribute("disabled");
@@ -527,7 +530,7 @@ HistoryMenu.prototype = {
       undoPopup.removeChild(undoPopup.firstChild);
 
     // no restorable tabs, so make sure menu is disabled, and return
-    if (SessionStore.getClosedTabCount(window) == 0) {
+    if (this._getClosedTabCount() == 0) {
       undoMenu.setAttribute("disabled", true);
       return;
     }
@@ -699,13 +702,12 @@ var BookmarksEventHandler = {
 
     if (aDocument.tooltipNode.localName == "treechildren") {
       var tree = aDocument.tooltipNode.parentNode;
-      var row = {}, column = {};
       var tbo = tree.treeBoxObject;
-      tbo.getCellAt(aEvent.clientX, aEvent.clientY, row, column, {});
-      if (row.value == -1)
+      var cell = tbo.getCellAt(aEvent.clientX, aEvent.clientY);
+      if (cell.row == -1)
         return false;
-      node = tree.view.nodeForTreeIndex(row.value);
-      cropped = tbo.isCellCropped(row.value, column.value);
+      node = tree.view.nodeForTreeIndex(cell.row);
+      cropped = tbo.isCellCropped(cell.row, cell.col);
     }
     else {
       // Check whether the tooltipNode is a Places node.

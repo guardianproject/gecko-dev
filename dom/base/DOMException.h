@@ -22,6 +22,7 @@
 #include "nsWrapperCache.h"
 #include "xpcexception.h"
 #include "nsString.h"
+#include "mozilla/dom/BindingDeclarations.h"
 
 class nsIStackFrame;
 class nsString;
@@ -35,6 +36,8 @@ namespace mozilla {
 class ErrorResult;
 
 namespace dom {
+
+class GlobalObject;
 
 #define MOZILLA_EXCEPTION_IID \
 { 0x55eda557, 0xeba0, 0x4fe3, \
@@ -60,8 +63,8 @@ public:
   void StowJSVal(JS::Value& aVp);
 
   // WebIDL API
-  virtual JSObject* WrapObject(JSContext* cx)
-    MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* cx, JS::Handle<JSObject*> aGivenProto)
+    override;
 
   nsISupports* GetParentObject() const { return nullptr; }
 
@@ -71,7 +74,8 @@ public:
 
   void GetName(nsString& retval);
 
-  // The XPCOM GetFilename does the right thing.
+  // The XPCOM GetFilename does the right thing.  It might throw, but we want to
+  // return an empty filename in that case anyway, instead of throwing.
 
   uint32_t LineNumber() const;
 
@@ -129,11 +133,17 @@ public:
   NS_DECL_NSIDOMDOMEXCEPTION
 
   // nsIException overrides
-  NS_IMETHOD ToString(nsACString& aReturn) MOZ_OVERRIDE;
+  NS_IMETHOD ToString(nsACString& aReturn) override;
 
   // nsWrapperCache overrides
-  virtual JSObject* WrapObject(JSContext* aCx)
-    MOZ_OVERRIDE;
+  virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
+    override;
+
+  static already_AddRefed<DOMException>
+  Constructor(GlobalObject& /* unused */,
+              const nsAString& aMessage,
+              const Optional<nsAString>& aName,
+              ErrorResult& aError);
 
   uint16_t Code() const {
     return mCode;

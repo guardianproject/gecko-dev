@@ -17,7 +17,7 @@ let PAGE_CONTENT = [
   '<span>This is a span</span>'
 ].join("\n");
 
-let test = asyncTest(function*() {
+add_task(function*() {
   yield addTab("data:text/html;charset=utf-8,test rule view add rule");
 
   info("Creating the test document");
@@ -40,7 +40,7 @@ let test = asyncTest(function*() {
   ok(!view.menuitemAddRule.hidden, "Add rule is visible");
 
   info("Waiting for rule view to change");
-  let onRuleViewChanged = once(view.element, "CssRuleViewChanged");
+  let onRuleViewChanged = once(view, "ruleview-changed");
 
   info("Adding the new rule");
   view.menuitemAddRule.click();
@@ -63,7 +63,7 @@ function* testEditSelector(view, name) {
   editor.value = name;
 
   info("Waiting for rule view to refresh");
-  let onRuleViewRefresh = once(view.element, "CssRuleViewRefreshed");
+  let onRuleViewRefresh = once(view, "ruleview-refreshed");
 
   info("Entering the commit key");
   EventUtils.synthesizeKey("VK_RETURN", {});

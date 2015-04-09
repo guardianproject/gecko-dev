@@ -29,7 +29,7 @@
 #include "nsIObserver.h"
 #include "mozilla/Attributes.h"
 
-class nsICertificatePrincipal;
+class nsIX509Cert;
 class nsIInputStream;
 class nsJARManifestItem;
 class nsZipReaderCache;
@@ -52,7 +52,7 @@ typedef enum
  * nsJAR serves as an XPCOM wrapper for nsZipArchive with the addition of
  * JAR manifest file parsing.
  *------------------------------------------------------------------------*/
-class nsJAR : public nsIZipReader
+class nsJAR final : public nsIZipReader
 {
   // Allows nsJARInputStream to call the verification functions
   friend class nsJARInputStream;
@@ -95,6 +95,8 @@ class nsJAR : public nsIZipReader
       mCache = cache;
     }
 
+    nsresult GetNSPRFileDesc(PRFileDesc** aNSPRFileDesc);
+
   protected:
     typedef nsClassHashtable<nsCStringHashKey, nsJARManifestItem> ManifestDataHashtable;
 
@@ -104,7 +106,7 @@ class nsJAR : public nsIZipReader
     nsRefPtr<nsZipArchive>   mZip;            // The underlying zip archive
     ManifestDataHashtable    mManifestData;   // Stores metadata for each entry
     bool                     mParsedManifest; // True if manifest has been parsed
-    nsCOMPtr<nsICertificatePrincipal> mPrincipal; // The entity which signed this file
+    nsCOMPtr<nsIX509Cert>    mSigningCert;    // The entity which signed this file
     int16_t                  mGlobalStatus;   // Global signature verification status
     PRIntervalTime           mReleaseTime;    // used by nsZipReaderCache for flushing entries
     nsZipReaderCache*        mCache;          // if cached, this points to the cache it's contained in
@@ -138,7 +140,7 @@ public:
     NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSIZIPENTRY
 
-    nsJARItem(nsZipItem* aZipItem);
+    explicit nsJARItem(nsZipItem* aZipItem);
 
 private:
     virtual ~nsJARItem() {}
@@ -159,13 +161,13 @@ private:
  * Enumerates a list of files in a zip archive
  * (based on a pattern match in its member nsZipFind).
  */
-class nsJAREnumerator MOZ_FINAL : public nsIUTF8StringEnumerator
+class nsJAREnumerator final : public nsIUTF8StringEnumerator
 {
 public:
     NS_DECL_THREADSAFE_ISUPPORTS
     NS_DECL_NSIUTF8STRINGENUMERATOR
 
-    nsJAREnumerator(nsZipFind *aFind) : mFind(aFind), mName(nullptr) {
+    explicit nsJAREnumerator(nsZipFind *aFind) : mFind(aFind), mName(nullptr) {
       NS_ASSERTION(mFind, "nsJAREnumerator: Missing zipFind.");
     }
 
@@ -195,6 +197,10 @@ public:
 
   nsresult ReleaseZip(nsJAR* reader);
 
+  bool IsMustCacheFdEnabled() {
+    return mMustCacheFd;
+  }
+
   typedef nsRefPtrHashtable<nsCStringHashKey, nsJAR> ZipsHashtable;
 
 protected:
@@ -204,6 +210,7 @@ protected:
   mozilla::Mutex        mLock;
   uint32_t              mCacheSize;
   ZipsHashtable         mZips;
+  bool                  mMustCacheFd;
 
 #ifdef ZIP_CACHE_HIT_RATE
   uint32_t              mZipCacheLookups;

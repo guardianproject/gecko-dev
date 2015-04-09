@@ -18,6 +18,7 @@
 #include "mozilla/mozalloc.h"           // for operator delete, etc
 #include "nscore.h"                     // for nsACString
 #include "mozilla/EnumeratedArray.h"
+#include "gfxVR.h"
 
 namespace mozilla {
 namespace layers {
@@ -42,7 +43,7 @@ struct Effect
 {
   NS_INLINE_DECL_REFCOUNTING(Effect)
 
-  Effect(EffectTypes aType) : mType(aType) {}
+  explicit Effect(EffectTypes aType) : mType(aType) {}
 
   EffectTypes mType;
 
@@ -96,9 +97,39 @@ struct EffectMask : public Effect
   gfx::Matrix4x4 mMaskTransform;
 };
 
+struct EffectVRDistortion : public Effect
+{
+  EffectVRDistortion(gfx::VRHMDInfo* aHMD,
+                     CompositingRenderTarget* aRenderTarget)
+    : Effect(EffectTypes::VR_DISTORTION)
+    , mHMD(aHMD)
+    , mRenderTarget(aRenderTarget)
+    , mTexture(aRenderTarget)
+  {}
+
+  EffectVRDistortion(gfx::VRHMDInfo* aHMD,
+                     TextureSource* aTexture)
+    : Effect(EffectTypes::VR_DISTORTION)
+    , mHMD(aHMD)
+    , mRenderTarget(nullptr)
+    , mTexture(aTexture)
+  {}
+
+  virtual const char* Name() { return "EffectVRDistortion"; }
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
+
+  nsRefPtr<gfx::VRHMDInfo> mHMD;
+  RefPtr<CompositingRenderTarget> mRenderTarget;
+  TextureSource* mTexture;
+
+  // The viewport for each eye in the source and
+  // destination textures.
+  gfx::IntRect mViewports[2];
+};
+
 struct EffectBlendMode : public Effect
 {
-  EffectBlendMode(gfx::CompositionOp aBlendMode)
+  explicit EffectBlendMode(gfx::CompositionOp aBlendMode)
     : Effect(EffectTypes::BLEND_MODE)
     , mBlendMode(aBlendMode)
   { }
@@ -112,7 +143,7 @@ struct EffectBlendMode : public Effect
 // Render to a render target rather than the screen.
 struct EffectRenderTarget : public TexturedEffect
 {
-  EffectRenderTarget(CompositingRenderTarget *aRenderTarget)
+  explicit EffectRenderTarget(CompositingRenderTarget *aRenderTarget)
     : TexturedEffect(EffectTypes::RENDER_TARGET, aRenderTarget, true, gfx::Filter::LINEAR)
     , mRenderTarget(aRenderTarget)
   {}
@@ -121,7 +152,28 @@ struct EffectRenderTarget : public TexturedEffect
   virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
 
   RefPtr<CompositingRenderTarget> mRenderTarget;
+
+protected:
+  EffectRenderTarget(EffectTypes aType, CompositingRenderTarget *aRenderTarget)
+    : TexturedEffect(aType, aRenderTarget, true, gfx::Filter::LINEAR)
+    , mRenderTarget(aRenderTarget)
+  {}
+
 };
+
+// Render to a render target rather than the screen.
+struct EffectColorMatrix : public Effect
+{
+  explicit EffectColorMatrix(gfx::Matrix5x4 aMatrix)
+    : Effect(EffectTypes::COLOR_MATRIX)
+    , mColorMatrix(aMatrix)
+  {}
+
+  virtual const char* Name() { return "EffectColorMatrix"; }
+  virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix);
+  const gfx::Matrix5x4 mColorMatrix;
+};
+
 
 struct EffectRGB : public TexturedEffect
 {
@@ -162,7 +214,7 @@ struct EffectComponentAlpha : public TexturedEffect
 
 struct EffectSolidColor : public Effect
 {
-  EffectSolidColor(const gfx::Color &aColor)
+  explicit EffectSolidColor(const gfx::Color &aColor)
     : Effect(EffectTypes::SOLID_COLOR)
     , mColor(aColor)
   {}

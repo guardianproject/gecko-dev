@@ -2,7 +2,14 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const TESTCASE_URI = TEST_BASE + "autocomplete.html";
+///////////////////
+//
+// Whitelisting this test.
+// As part of bug 1077403, the leaking uncaught rejection should be fixed. 
+//
+thisTestLeaksUncaughtRejectionsAndShouldBeFixed("Error: Unknown sheet source");
+
+const TESTCASE_URI = TEST_BASE_HTTP + "autocomplete.html";
 const MAX_SUGGESTIONS = 15;
 
 // Pref which decides if CSS autocompletion is enabled in Style Editor or not.

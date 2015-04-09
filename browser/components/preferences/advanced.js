@@ -30,44 +30,13 @@ var gAdvancedPane = {
         advancedPrefs.selectedIndex = preference.value;
     }
 
-#ifdef HAVE_SHELL_SERVICE
-    this.updateSetDefaultBrowser();
-#ifdef XP_WIN
-    // In Windows 8 we launch the control panel since it's the only
-    // way to get all file type association prefs. So we don't know
-    // when the user will select the default.  We refresh here periodically
-    // in case the default changes.  On other Windows OS's defaults can also
-    // be set while the prefs are open.
-    window.setInterval(this.updateSetDefaultBrowser, 1000);
-
-#ifdef MOZ_METRO
-    // Pre Windows 8, we should hide the update related settings
-    // for the Metro browser
-    let version = Components.classes["@mozilla.org/system-info;1"].
-                  getService(Components.interfaces.nsIPropertyBag2).
-                  getProperty("version");
-    let preWin8 = parseFloat(version) < 6.2;
-    this._showingWin8Prefs = !preWin8;
-    if (preWin8) {
-      ["autoMetro", "autoMetroIndent"].forEach(
-        function(id) document.getElementById(id).collapsed = true
-      );
-    } else {
-      let brandShortName =
-        document.getElementById("bundleBrand").getString("brandShortName");
-      let bundlePrefs = document.getElementById("bundlePreferences");
-      let autoDesktop = document.getElementById("autoDesktop");
-      autoDesktop.label =
-        bundlePrefs.getFormattedString("updateAutoDesktop.label",
-                                       [brandShortName]);
-      autoDesktop.accessKey =
-        bundlePrefs.getString("updateAutoDesktop.accessKey");
-    }
-#endif
-#endif
-#endif
-
 #ifdef MOZ_UPDATER
+    let onUnload = function () {
+      window.removeEventListener("unload", onUnload, false);
+      Services.prefs.removeObserver("app.update.", this);
+    }.bind(this);
+    window.addEventListener("unload", onUnload, false);
+    Services.prefs.addObserver("app.update.", this, false);
     this.updateReadPrefs();
 #endif
     this.updateOfflineApps();
@@ -81,6 +50,10 @@ var gAdvancedPane = {
 
     this.updateActualCacheSize();
     this.updateActualAppCacheSize();
+
+    let bundlePrefs = document.getElementById("bundlePreferences");
+    document.getElementById("offlineAppsList")
+            .style.height = bundlePrefs.getString("offlineAppsList.height");
 
     // Notify observers that the UI is now ready
     Services.obs.notifyObservers(window, "advanced-pane-loaded", null);
@@ -261,6 +234,24 @@ var gAdvancedPane = {
 #endif
   },
 
+  /**
+   * Set the status of the telemetry controls based on the input argument.
+   * @param {Boolean} aEnabled False disables the controls, true enables them.
+   */
+  setTelemetrySectionEnabled: function (aEnabled)
+  {
+#ifdef MOZ_TELEMETRY_REPORTING
+    // If FHR is disabled, additional data sharing should be disabled as well.
+    let disabled = !aEnabled;
+    document.getElementById("submitTelemetryBox").disabled = disabled;
+    if (disabled) {
+      // If we disable FHR, untick the telemetry checkbox.
+      document.getElementById("submitTelemetryBox").checked = false;
+    }
+    document.getElementById("telemetryDataDesc").disabled = disabled;
+#endif
+  },
+
 #ifdef MOZ_SERVICES_HEALTHREPORT
   /**
    * Initialize the health report service reference and checkbox.
@@ -281,6 +272,7 @@ var gAdvancedPane = {
     }
 
     checkbox.checked = policy.healthReportUploadEnabled;
+    this.setTelemetrySectionEnabled(checkbox.checked);
   },
 
   /**
@@ -299,6 +291,7 @@ var gAdvancedPane = {
     let checkbox = document.getElementById("submitHealthReportBox");
     policy.recordHealthReportUploadEnabled(checkbox.checked,
                                            "Checkbox from preferences pane");
+    this.setTelemetrySectionEnabled(checkbox.checked);
   },
 #endif
 
@@ -416,6 +409,7 @@ var gAdvancedPane = {
       cache.clear();
     } catch(ex) {}
     this.updateActualCacheSize();
+    Services.obs.notifyObservers(null, "clear-private-data", null);
   },
 
   /**
@@ -428,6 +422,7 @@ var gAdvancedPane = {
 
     this.updateActualAppCacheSize();
     this.updateOfflineApps();
+    Services.obs.notifyObservers(null, "clear-private-data", null);
   },
 
   readOfflineNotify: function()
@@ -451,7 +446,7 @@ var gAdvancedPane = {
                    introText        : bundlePreferences.getString("offlinepermissionstext") };
     document.documentElement.openWindow("Browser:Permissions",
                                         "chrome://browser/content/preferences/permissions.xul",
-                                        "", params);
+                                        "resizable", params);
   },
 
   // XXX: duplicated in browser.js
@@ -692,7 +687,7 @@ var gAdvancedPane = {
     }
     try {
       const DRIVE_FIXED = 3;
-      const LPCWSTR = ctypes.jschar.ptr;
+      const LPCWSTR = ctypes.char16_t.ptr;
       const UINT = ctypes.uint32_t;
       let kernel32 = ctypes.open("kernel32");
       let GetDriveType = kernel32.declare("GetDriveTypeW", ctypes.default_abi, UINT, LPCWSTR);
@@ -853,50 +848,15 @@ var gAdvancedPane = {
     document.documentElement.openWindow("mozilla:devicemanager",
                                         "chrome://pippki/content/device_manager.xul",
                                         "", null);
-  }
-#ifdef HAVE_SHELL_SERVICE
-  ,
-
-  // SYSTEM DEFAULTS
-
-  /*
-   * Preferences:
-   *
-   * browser.shell.checkDefault
-   * - true if a default-browser check (and prompt to make it so if necessary)
-   *   occurs at startup, false otherwise
-   */
-
-  /**
-   * Show button for setting browser as default browser or information that
-   * browser is already the default browser.
-   */
-  updateSetDefaultBrowser: function()
-  {
-    let shellSvc = getShellService();
-    let setDefaultPane = document.getElementById("setDefaultPane");
-    if (!shellSvc) {
-      setDefaultPane.hidden = true;
-      document.getElementById("alwaysCheckDefault").disabled = true;
-      return;
-    }
-    let selectedIndex =
-      shellSvc.isDefaultBrowser(false, true) ? 1 : 0;
-    setDefaultPane.selectedIndex = selectedIndex;
   },
 
-  /**
-   * Set browser as the operating system default browser.
-   */
-  setDefaultBrowser: function()
-  {
-    let shellSvc = getShellService();
-    if (!shellSvc)
-      return;
-    shellSvc.setDefaultBrowser(true, false);
-    let selectedIndex =
-      shellSvc.isDefaultBrowser(false, true) ? 1 : 0;
-    document.getElementById("setDefaultPane").selectedIndex = selectedIndex;
-  }
+#ifdef MOZ_UPDATER
+  observe: function (aSubject, aTopic, aData) {
+    switch(aTopic) {
+      case "nsPref:changed":
+        this.updateReadPrefs();
+        break;
+    }
+  },
 #endif
 };

@@ -9,13 +9,12 @@
 #include "nsXBLPrototypeHandler.h"
 #include "nsXBLPrototypeBinding.h"
 #include "nsContentUtils.h"
-#include "nsCxPusher.h"
+#include "nsGlobalWindow.h"
 #include "nsIContent.h"
 #include "nsIAtom.h"
 #include "nsIDOMKeyEvent.h"
 #include "nsIDOMMouseEvent.h"
 #include "nsNameSpaceManager.h"
-#include "nsIScriptContext.h"
 #include "nsIDocument.h"
 #include "nsIController.h"
 #include "nsIControllers.h"
@@ -45,7 +44,10 @@
 #include "mozilla/BasicEvents.h"
 #include "mozilla/JSEventHandler.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/dom/EventHandlerBinding.h"
+#include "mozilla/dom/ScriptSettings.h"
+#include "xpcpublic.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -122,7 +124,7 @@ nsXBLPrototypeHandler::~nsXBLPrototypeHandler()
   if (mType & NS_HANDLER_TYPE_XUL) {
     NS_IF_RELEASE(mHandlerElement);
   } else if (mHandlerText) {
-    nsMemory::Free(mHandlerText);
+    free(mHandlerText);
   }
 
   // We own the next handler in the chain, so delete it now.
@@ -147,7 +149,7 @@ nsXBLPrototypeHandler::AppendHandlerText(const nsAString& aText)
     // Append our text to the existing text.
     char16_t* temp = mHandlerText;
     mHandlerText = ToNewUnicode(nsDependentString(temp) + aText);
-    nsMemory::Free(temp);
+    free(temp);
   }
   else {
     mHandlerText = ToNewUnicode(aText);
@@ -259,10 +261,6 @@ nsXBLPrototypeHandler::ExecuteHandler(EventTarget* aTarget,
   if (!boundGlobal)
     return NS_OK;
 
-  nsIScriptContext *boundContext = boundGlobal->GetScriptContext();
-  if (!boundContext)
-    return NS_OK;
-
   nsISupports *scriptTarget;
 
   if (winRoot) {
@@ -271,16 +269,18 @@ nsXBLPrototypeHandler::ExecuteHandler(EventTarget* aTarget,
     scriptTarget = aTarget;
   }
 
-  // We're about to create a new JSEventHandler, which means that we're
-  // responsible for pushing the context of the event target. See the similar
-  // comment in nsEventManagerListener.cpp.
-  nsCxPusher pusher;
-  NS_ENSURE_STATE(pusher.Push(aTarget));
-
-  AutoPushJSContext cx(boundContext->GetNativeContext());
+  // We're about to create a new JSEventHandler, which means that we need to
+  // Initiatize an AutoJSAPI with aTarget's bound global to make sure any errors
+  // are reported to the correct place.
+  AutoJSAPI jsapi;
+  if (NS_WARN_IF(!jsapi.Init(boundGlobal))) {
+    return NS_OK;
+  }
+  jsapi.TakeOwnershipOfErrorReporting();
+  JSContext* cx = jsapi.cx();
   JS::Rooted<JSObject*> handler(cx);
 
-  rv = EnsureEventHandler(boundGlobal, boundContext, onEventAtom, &handler);
+  rv = EnsureEventHandler(jsapi, onEventAtom, &handler);
   NS_ENSURE_SUCCESS(rv, rv);
 
   JSAddonId* addonId = MapURIToAddonID(mPrototypeBinding->DocURI());
@@ -301,23 +301,16 @@ nsXBLPrototypeHandler::ExecuteHandler(EventTarget* aTarget,
   NS_ENSURE_TRUE(ok, NS_ERROR_OUT_OF_MEMORY);
   MOZ_ASSERT(!js::IsCrossCompartmentWrapper(genericHandler));
 
-  // Wrap the native into the XBL scope. This creates a reflector in the document
-  // scope if one doesn't already exist, and potentially wraps it cross-
-  // compartment into our scope (via aAllowWrapping=true).
-  JS::Rooted<JS::Value> targetV(cx, JS::UndefinedValue());
-  rv = nsContentUtils::WrapNative(cx, scriptTarget, &targetV);
-  NS_ENSURE_SUCCESS(rv, rv);
+  // Build a scope chain in the XBL scope.
+  nsRefPtr<Element> targetElement = do_QueryObject(scriptTarget);
+  JS::AutoObjectVector scopeChain(cx);
+  ok = nsJSUtils::GetScopeChainForElement(cx, targetElement, scopeChain);
+  NS_ENSURE_TRUE(ok, NS_ERROR_OUT_OF_MEMORY);
 
-  // Next, clone the generic handler to be parented to the target.
-  JS::Rooted<JSObject*> target(cx, &targetV.toObject());
-  JS::Rooted<JSObject*> bound(cx, JS_CloneFunctionObject(cx, genericHandler, target));
+  // Next, clone the generic handler with our desired scope chain.
+  JS::Rooted<JSObject*> bound(cx, JS::CloneFunctionObject(cx, genericHandler,
+                                                          scopeChain));
   NS_ENSURE_TRUE(bound, NS_ERROR_FAILURE);
-
-  // Now, wrap the bound handler into the content compartment and use it.
-  JSAutoCompartment ac2(cx, globalObject);
-  if (!JS_WrapObject(cx, &bound)) {
-    return NS_ERROR_FAILURE;
-  }
 
   nsRefPtr<EventHandlerNonNull> handlerCallback =
     new EventHandlerNonNull(bound, /* aIncumbentGlobal = */ nullptr);
@@ -338,15 +331,14 @@ nsXBLPrototypeHandler::ExecuteHandler(EventTarget* aTarget,
 }
 
 nsresult
-nsXBLPrototypeHandler::EnsureEventHandler(nsIScriptGlobalObject* aGlobal,
-                                          nsIScriptContext *aBoundContext,
-                                          nsIAtom *aName,
+nsXBLPrototypeHandler::EnsureEventHandler(AutoJSAPI& jsapi, nsIAtom* aName,
                                           JS::MutableHandle<JSObject*> aHandler)
 {
-  AutoPushJSContext cx(aBoundContext->GetNativeContext());
+  JSContext* cx = jsapi.cx();
 
   // Check to see if we've already compiled this
-  nsCOMPtr<nsPIDOMWindow> pWindow = do_QueryInterface(aGlobal);
+  JS::Rooted<JSObject*> globalObject(cx, JS::CurrentGlobalOrNull(cx));
+  nsCOMPtr<nsPIDOMWindow> pWindow = xpc::WindowOrNull(globalObject);
   if (pWindow) {
     JS::Rooted<JSObject*> cachedHandler(cx, pWindow->GetCachedXBLPrototypeHandler(this));
     if (cachedHandler) {
@@ -363,7 +355,6 @@ nsXBLPrototypeHandler::EnsureEventHandler(nsIScriptGlobalObject* aGlobal,
 
   JSAddonId* addonId = MapURIToAddonID(mPrototypeBinding->DocURI());
 
-  JS::Rooted<JSObject*> globalObject(cx, aGlobal->GetGlobalJSObject());
   JS::Rooted<JSObject*> scopeObject(cx, xpc::GetScopeForXBLExecution(cx, globalObject, addonId));
   NS_ENSURE_TRUE(scopeObject, NS_ERROR_OUT_OF_MEMORY);
 
@@ -382,7 +373,8 @@ nsXBLPrototypeHandler::EnsureEventHandler(nsIScriptGlobalObject* aGlobal,
          .setVersion(JSVERSION_LATEST);
 
   JS::Rooted<JSObject*> handlerFun(cx);
-  nsresult rv = nsJSUtils::CompileFunction(cx, JS::NullPtr(), options,
+  JS::AutoObjectVector emptyVector(cx);
+  nsresult rv = nsJSUtils::CompileFunction(jsapi, emptyVector, options,
                                            nsAtomCString(aName), argCount,
                                            argNames, handlerText,
                                            handlerFun.address());
@@ -492,7 +484,7 @@ nsXBLPrototypeHandler::DispatchXBLCommand(EventTarget* aTarget, nsIDOMEvent* aEv
     // element is focused and has a parent.
     if (focusedContent && focusedContent->GetParent()) {
       while (content) {
-        if (content->Tag() == nsGkAtoms::a && content->IsHTML()) {
+        if (content->IsHTMLElement(nsGkAtoms::a)) {
           isLink = true;
           break;
         }
@@ -611,9 +603,10 @@ nsXBLPrototypeHandler::GetController(EventTarget* aTarget)
 }
 
 bool
-nsXBLPrototypeHandler::KeyEventMatched(nsIDOMKeyEvent* aKeyEvent,
-                                       uint32_t aCharCode,
-                                       bool aIgnoreShiftKey)
+nsXBLPrototypeHandler::KeyEventMatched(
+                         nsIDOMKeyEvent* aKeyEvent,
+                         uint32_t aCharCode,
+                         const IgnoreModifierState& aIgnoreModifierState)
 {
   if (mDetail != -1) {
     // Get the keycode or charcode of the key event.
@@ -634,7 +627,7 @@ nsXBLPrototypeHandler::KeyEventMatched(nsIDOMKeyEvent* aKeyEvent,
       return false;
   }
 
-  return ModifiersMatchMask(aKeyEvent, aIgnoreShiftKey);
+  return ModifiersMatchMask(aKeyEvent, aIgnoreModifierState);
 }
 
 bool
@@ -653,7 +646,7 @@ nsXBLPrototypeHandler::MouseEventMatched(nsIDOMMouseEvent* aMouseEvent)
   if (mMisc != 0 && (clickcount != mMisc))
     return false;
 
-  return ModifiersMatchMask(aMouseEvent);
+  return ModifiersMatchMask(aMouseEvent, IgnoreModifierState());
 }
 
 struct keyCodeData {
@@ -841,7 +834,7 @@ nsXBLPrototypeHandler::ConstructPrototype(nsIContent* aKeyElement,
       token = nsCRT::strtok( newStr, ", \t", &newStr );
     }
 
-    nsMemory::Free(str);
+    free(str);
   }
 
   nsAutoString key(aCharCode);
@@ -925,8 +918,9 @@ nsXBLPrototypeHandler::ReportKeyConflict(const char16_t* aKey, const char16_t* a
 }
 
 bool
-nsXBLPrototypeHandler::ModifiersMatchMask(nsIDOMUIEvent* aEvent,
-                                          bool aIgnoreShiftKey)
+nsXBLPrototypeHandler::ModifiersMatchMask(
+                         nsIDOMUIEvent* aEvent,
+                         const IgnoreModifierState& aIgnoreModifierState)
 {
   WidgetInputEvent* inputEvent = aEvent->GetInternalNSEvent()->AsInputEvent();
   NS_ENSURE_TRUE(inputEvent, false);
@@ -937,13 +931,13 @@ nsXBLPrototypeHandler::ModifiersMatchMask(nsIDOMUIEvent* aEvent,
     }
   }
 
-  if (mKeyMask & cOSMask) {
+  if ((mKeyMask & cOSMask) && !aIgnoreModifierState.mOS) {
     if (inputEvent->IsOS() != ((mKeyMask & cOS) != 0)) {
       return false;
     }
   }
 
-  if (mKeyMask & cShiftMask && !aIgnoreShiftKey) {
+  if (mKeyMask & cShiftMask && !aIgnoreModifierState.mShift) {
     if (inputEvent->IsShift() != ((mKeyMask & cShift) != 0)) {
       return false;
     }

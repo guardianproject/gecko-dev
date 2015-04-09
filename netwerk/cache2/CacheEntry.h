@@ -20,6 +20,7 @@
 #include "nsString.h"
 #include "nsCOMArray.h"
 #include "nsThreadUtils.h"
+#include "mozilla/Attributes.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/TimeStamp.h"
 
@@ -46,9 +47,9 @@ class CacheFileOutputStream;
 class CacheOutputCloseListener;
 class CacheEntryHandle;
 
-class CacheEntry : public nsICacheEntry
-                 , public nsIRunnable
-                 , public CacheFileListener
+class CacheEntry final : public nsICacheEntry
+                       , public nsIRunnable
+                       , public CacheFileListener
 {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -112,7 +113,7 @@ public:
 
   // Accessed only on the service management thread
   double mFrecency;
-  uint32_t mSortingExpirationTime;
+  ::mozilla::Atomic<uint32_t, ::mozilla::Relaxed> mSortingExpirationTime;
 
   // Memory reporting
   size_t SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
@@ -122,8 +123,8 @@ private:
   virtual ~CacheEntry();
 
   // CacheFileListener
-  NS_IMETHOD OnFileReady(nsresult aResult, bool aIsNew);
-  NS_IMETHOD OnFileDoomed(nsresult aResult);
+  NS_IMETHOD OnFileReady(nsresult aResult, bool aIsNew) override;
+  NS_IMETHOD OnFileDoomed(nsresult aResult) override;
 
   // Keep the service alive during life-time of an entry
   nsRefPtr<CacheStorageService> mService;
@@ -136,7 +137,7 @@ private:
   public:
     Callback(CacheEntry* aEntry,
              nsICacheEntryOpenCallback *aCallback,
-             bool aReadOnly, bool aCheckOnAnyThread);
+             bool aReadOnly, bool aCheckOnAnyThread, bool aSecret);
     Callback(Callback const &aThat);
     ~Callback();
 
@@ -151,9 +152,11 @@ private:
     nsCOMPtr<nsICacheEntryOpenCallback> mCallback;
     nsCOMPtr<nsIThread> mTargetThread;
     bool mReadOnly : 1;
+    bool mRevalidating : 1;
     bool mCheckOnAnyThread : 1;
     bool mRecheckAfterWrite : 1;
     bool mNotWanted : 1;
+    bool mSecret : 1;
 
     nsresult OnCheckThread(bool *aOnCheckThread) const;
     nsresult OnAvailThread(bool *aOnAvailThread) const;
@@ -245,7 +248,7 @@ private:
   // When executed on the management thread directly, the operation(s)
   // is (are) executed immediately.
   void BackgroundOp(uint32_t aOperation, bool aForceAsync = false);
-  void StoreFrecency();
+  void StoreFrecency(double aFrecency);
 
   // Called only from DoomAlreadyRemoved()
   void DoomFile();
@@ -263,7 +266,11 @@ private:
   nsCOMPtr<nsICacheEntryDoomCallback> mDoomCallback;
 
   nsRefPtr<CacheFile> mFile;
-  nsresult mFileStatus;
+
+  // Using ReleaseAcquire since we only control access to mFile with this.
+  // When mFileStatus is read and found success it is ensured there is mFile and
+  // that it is after a successful call to Init().
+  ::mozilla::Atomic<nsresult, ::mozilla::ReleaseAcquire> mFileStatus;
   nsCOMPtr<nsIURI> mURI;
   nsCString mEnhanceID;
   nsCString mStorageID;
@@ -353,7 +360,7 @@ private:
 class CacheEntryHandle : public nsICacheEntry
 {
 public:
-  CacheEntryHandle(CacheEntry* aEntry);
+  explicit CacheEntryHandle(CacheEntry* aEntry);
   CacheEntry* Entry() const { return mEntry; }
 
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -364,17 +371,18 @@ private:
 };
 
 
-class CacheOutputCloseListener : public nsRunnable
+class CacheOutputCloseListener final : public nsRunnable
 {
 public:
   void OnOutputClosed();
-  virtual ~CacheOutputCloseListener();
 
 private:
   friend class CacheEntry;
 
+  virtual ~CacheOutputCloseListener();
+
   NS_DECL_NSIRUNNABLE
-  CacheOutputCloseListener(CacheEntry* aEntry);
+  explicit CacheOutputCloseListener(CacheEntry* aEntry);
 
 private:
   nsRefPtr<CacheEntry> mEntry;

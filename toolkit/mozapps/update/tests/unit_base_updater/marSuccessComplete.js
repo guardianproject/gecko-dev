@@ -9,7 +9,16 @@ function run_test() {
   setupTestCommon();
   gTestFiles = gTestFilesCompleteSuccess;
   gTestDirs = gTestDirsCompleteSuccess;
-  setupUpdaterTest(FILE_COMPLETE_MAR, false, false);
+  preventDistributionFiles();
+  setupUpdaterTest(FILE_COMPLETE_MAR);
+  if (IS_MACOSX) {
+    // Create files in the old distribution directory location to verify that
+    // the directory and its contents are moved to the new location on update.
+    let testFile = getApplyDirFile(DIR_MACOS + "distribution/testFile", true);
+    writeFile(testFile, "test\n");
+    testFile = getApplyDirFile(DIR_MACOS + "distribution/test/testFile", true);
+    writeFile(testFile, "test\n");
+  }
 
   createUpdaterINI();
 
@@ -31,7 +40,7 @@ function run_test() {
  * support launching post update process.
  */
 function checkUpdateApplied() {
-  if (IS_MACOSX || IS_WIN) {
+  if (IS_WIN || IS_MACOSX) {
     gCheckFunc = finishCheckUpdateApplied;
     checkPostUpdateAppLog();
   } else {
@@ -45,19 +54,43 @@ function checkUpdateApplied() {
  */
 function finishCheckUpdateApplied() {
   if (IS_MACOSX) {
-    logTestInfo("testing last modified time on the apply to directory has " +
-                "changed after a successful update (bug 600098)");
+    debugDump("testing last modified time on the apply to directory has " +
+              "changed after a successful update (bug 600098)");
     let now = Date.now();
     let applyToDir = getApplyDirFile();
     let timeDiff = Math.abs(applyToDir.lastModifiedTime - now);
     do_check_true(timeDiff < MAC_MAX_TIME_DIFFERENCE);
   }
 
-  checkFilesAfterUpdateSuccess();
-  // Sorting on Linux is different so skip this check for now.
-  if (!IS_UNIX) {
-    checkUpdateLogContents(LOG_COMPLETE_SUCCESS);
+  let distributionDir = getApplyDirFile(DIR_RESOURCES + "distribution", true);
+  if (IS_MACOSX) {
+    debugDump("testing that the distribution directory is moved from the " +
+              "old location to the new location");
+    debugDump("testing " + distributionDir.path + " should exist");
+    do_check_true(distributionDir.exists());
+
+    let testFile = getApplyDirFile(DIR_RESOURCES + "distribution/testFile", true);
+    debugDump("testing " + testFile.path + " should exist");
+    do_check_true(testFile.exists());
+
+    testFile = getApplyDirFile(DIR_RESOURCES + "distribution/test/testFile", true);
+    debugDump("testing " + testFile.path + " should exist");
+    do_check_true(testFile.exists());
+
+    distributionDir = getApplyDirFile(DIR_MACOS + "distribution", true);
+    debugDump("testing " + distributionDir.path + " shouldn't exist");
+    do_check_false(distributionDir.exists());
+
+    checkUpdateLogContains("Moving old distribution directory to new location");
+  } else {
+    debugDump("testing that files aren't added with an add-if instruction " +
+              "when the file's destination directory doesn't exist");
+    debugDump("testing " + distributionDir.path + " shouldn't exist");
+    do_check_false(distributionDir.exists());
   }
 
+  checkFilesAfterUpdateSuccess(getApplyDirFile, false, false);
+  checkUpdateLogContents(LOG_COMPLETE_SUCCESS, true);
+  standardInit();
   checkCallbackAppLog();
 }

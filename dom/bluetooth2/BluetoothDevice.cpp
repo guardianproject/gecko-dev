@@ -4,15 +4,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "BluetoothClassOfDevice.h"
-#include "BluetoothDevice.h"
 #include "BluetoothReplyRunnable.h"
 #include "BluetoothService.h"
 #include "BluetoothUtils.h"
 
-#include "mozilla/dom/bluetooth/BluetoothTypes.h"
 #include "mozilla/dom/BluetoothAttributeEvent.h"
 #include "mozilla/dom/BluetoothDevice2Binding.h"
+#include "mozilla/dom/bluetooth/BluetoothClassOfDevice.h"
+#include "mozilla/dom/bluetooth/BluetoothDevice.h"
+#include "mozilla/dom/bluetooth/BluetoothGatt.h"
+#include "mozilla/dom/bluetooth/BluetoothTypes.h"
 #include "mozilla/dom/Promise.h"
 
 using namespace mozilla;
@@ -20,14 +21,17 @@ using namespace mozilla::dom;
 
 USING_BLUETOOTH_NAMESPACE
 
-NS_IMPL_CYCLE_COLLECTION_INHERITED(BluetoothDevice, DOMEventTargetHelper, mCod)
+NS_IMPL_CYCLE_COLLECTION_INHERITED(BluetoothDevice,
+                                   DOMEventTargetHelper,
+                                   mCod,
+                                   mGatt)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(BluetoothDevice)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
 NS_IMPL_ADDREF_INHERITED(BluetoothDevice, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(BluetoothDevice, DOMEventTargetHelper)
 
-class FetchUuidsTask : public BluetoothReplyRunnable
+class FetchUuidsTask final : public BluetoothReplyRunnable
 {
 public:
   FetchUuidsTask(Promise* aPromise,
@@ -61,7 +65,7 @@ public:
     return true;
   }
 
-  virtual void ReleaseMembers() MOZ_OVERRIDE
+  virtual void ReleaseMembers() override
   {
     BluetoothReplyRunnable::ReleaseMembers();
     mDevice = nullptr;
@@ -74,9 +78,10 @@ private:
 BluetoothDevice::BluetoothDevice(nsPIDOMWindow* aWindow,
                                  const BluetoothValue& aValue)
   : DOMEventTargetHelper(aWindow)
+  , mPaired(false)
+  , mType(BluetoothDeviceType::Unknown)
 {
   MOZ_ASSERT(aWindow);
-  MOZ_ASSERT(IsDOMBinding());
 
   mCod = BluetoothClassOfDevice::Create(aWindow);
 
@@ -109,6 +114,22 @@ BluetoothDevice::DisconnectFromOwner()
   bs->UnregisterBluetoothSignalHandler(mAddress, this);
 }
 
+BluetoothDeviceType
+BluetoothDevice::ConvertUint32ToDeviceType(const uint32_t aValue)
+{
+  static const BluetoothDeviceType sDeviceType[] = {
+    CONVERT(TYPE_OF_DEVICE_BREDR, BluetoothDeviceType::Classic),
+    CONVERT(TYPE_OF_DEVICE_BLE, BluetoothDeviceType::Le),
+    CONVERT(TYPE_OF_DEVICE_DUAL, BluetoothDeviceType::Dual),
+  };
+
+  BluetoothTypeOfDevice type = static_cast<BluetoothTypeOfDevice>(aValue);
+  if (type >= MOZ_ARRAY_LENGTH(sDeviceType)) {
+    return BluetoothDeviceType::Unknown;
+  }
+  return sDeviceType[type];
+}
+
 void
 BluetoothDevice::SetPropertyByValue(const BluetoothNamedValue& aValue)
 {
@@ -128,6 +149,8 @@ BluetoothDevice::SetPropertyByValue(const BluetoothNamedValue& aValue)
     // directly.
     mUuids = value.get_ArrayOfnsString();
     BluetoothDeviceBinding::ClearCachedUuidsValue(this);
+  } else if (name.EqualsLiteral("Type")) {
+    mType = ConvertUint32ToDeviceType(value.get_uint32_t());
   } else {
     BT_WARNING("Not handling device property: %s",
                NS_ConvertUTF16toUTF8(name).get());
@@ -143,7 +166,8 @@ BluetoothDevice::FetchUuids(ErrorResult& aRv)
     return nullptr;
   }
 
-  nsRefPtr<Promise> promise = new Promise(global);
+  nsRefPtr<Promise> promise = Promise::Create(global, aRv);
+  NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
 
   BluetoothService* bs = BluetoothService::Get();
   BT_ENSURE_TRUE_REJECT(bs, NS_ERROR_NOT_AVAILABLE);
@@ -282,8 +306,22 @@ BluetoothDevice::DispatchAttributeEvent(const nsTArray<nsString>& aTypes)
   DispatchTrustedEvent(event);
 }
 
-JSObject*
-BluetoothDevice::WrapObject(JSContext* aContext)
+BluetoothGatt*
+BluetoothDevice::GetGatt()
 {
-  return BluetoothDeviceBinding::Wrap(aContext, this);
+  NS_ENSURE_TRUE(mType == BluetoothDeviceType::Le ||
+                 mType == BluetoothDeviceType::Dual,
+                 nullptr);
+  if (!mGatt) {
+    mGatt = new BluetoothGatt(GetOwner(), mAddress);
+  }
+
+  return mGatt;
+}
+
+JSObject*
+BluetoothDevice::WrapObject(JSContext* aContext,
+                            JS::Handle<JSObject*> aGivenProto)
+{
+  return BluetoothDeviceBinding::Wrap(aContext, this, aGivenProto);
 }

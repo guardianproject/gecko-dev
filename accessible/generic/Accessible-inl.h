@@ -7,8 +7,9 @@
 #ifndef mozilla_a11y_Accessible_inl_h_
 #define mozilla_a11y_Accessible_inl_h_
 
-#include "Accessible.h"
+#include "DocAccessible.h"
 #include "ARIAMap.h"
+#include "nsCoreUtils.h"
 
 namespace mozilla {
 namespace a11y {
@@ -28,6 +29,12 @@ Accessible::IsARIARole(nsIAtom* aARIARole) const
   return mRoleMapEntry && mRoleMapEntry->Is(aARIARole);
 }
 
+inline bool
+Accessible::HasStrongARIARole() const
+{
+  return mRoleMapEntry && mRoleMapEntry->roleRule == kUseMapRole;
+}
+
 inline mozilla::a11y::role
 Accessible::ARIARole()
 {
@@ -35,6 +42,15 @@ Accessible::ARIARole()
     return mozilla::a11y::roles::NOTHING;
 
   return ARIATransformRole(mRoleMapEntry->role);
+}
+
+inline bool
+Accessible::IsSearchbox() const
+{
+  return (mRoleMapEntry && mRoleMapEntry->Is(nsGkAtoms::searchbox)) ||
+    (mContent->IsHTMLElement(nsGkAtoms::input) &&
+     mContent->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
+                           nsGkAtoms::textInputType, eCaseMatters));
 }
 
 inline bool
@@ -51,6 +67,13 @@ Accessible::HasNumericValue() const
     return true;
 
   return mRoleMapEntry && mRoleMapEntry->valueRule != eNoValue;
+}
+
+inline void
+Accessible::ScrollTo(uint32_t aHow) const
+{
+  if (mContent)
+    nsCoreUtils::ScrollTo(mDoc->PresShell(), mContent, aHow);
 }
 
 } // namespace a11y

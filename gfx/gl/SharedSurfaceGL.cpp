@@ -5,11 +5,11 @@
 
 #include "SharedSurfaceGL.h"
 
-#include "GLContext.h"
 #include "GLBlitHelper.h"
-#include "ScopedGLHelpers.h"
-#include "mozilla/gfx/2D.h"
+#include "GLContext.h"
 #include "GLReadTexImageHelper.h"
+#include "mozilla/gfx/2D.h"
+#include "ScopedGLHelpers.h"
 
 namespace mozilla {
 namespace gl {
@@ -17,17 +17,27 @@ namespace gl {
 using gfx::IntSize;
 using gfx::SurfaceFormat;
 
-SharedSurface_Basic*
+/*static*/ UniquePtr<SharedSurface_Basic>
 SharedSurface_Basic::Create(GLContext* gl,
                             const GLFormats& formats,
                             const IntSize& size,
                             bool hasAlpha)
 {
+    UniquePtr<SharedSurface_Basic> ret;
     gl->MakeCurrent();
+
+    GLContext::LocalErrorScope localError(*gl);
     GLuint tex = CreateTexture(gl, formats.color_texInternalFormat,
                                formats.color_texFormat,
                                formats.color_texType,
                                size);
+
+    GLenum err = localError.GetError();
+    MOZ_ASSERT_IF(err != LOCAL_GL_NO_ERROR, err == LOCAL_GL_OUT_OF_MEMORY);
+    if (err) {
+        gl->fDeleteTextures(1, &tex);
+        return Move(ret);
+    }
 
     SurfaceFormat format = SurfaceFormat::B8G8R8X8;
     switch (formats.color_texInternalFormat) {
@@ -40,12 +50,16 @@ SharedSurface_Basic::Create(GLContext* gl,
         break;
     case LOCAL_GL_RGBA:
     case LOCAL_GL_RGBA8:
+    case LOCAL_GL_BGRA:
+    case LOCAL_GL_BGRA8_EXT:
         format = SurfaceFormat::B8G8R8A8;
         break;
     default:
         MOZ_CRASH("Unhandled Tex format.");
     }
-    return new SharedSurface_Basic(gl, size, hasAlpha, format, tex);
+
+    ret.reset( new SharedSurface_Basic(gl, size, hasAlpha, format, tex) );
+    return Move(ret);
 }
 
 SharedSurface_Basic::SharedSurface_Basic(GLContext* gl,
@@ -71,14 +85,8 @@ SharedSurface_Basic::SharedSurface_Basic(GLContext* gl,
                               mTex,
                               0);
 
-    GLenum status = mGL->fCheckFramebufferStatus(LOCAL_GL_FRAMEBUFFER);
-    if (status != LOCAL_GL_FRAMEBUFFER_COMPLETE) {
-        mGL->fDeleteFramebuffers(1, &mFB);
-        mFB = 0;
-    }
-
-    int32_t stride = gfx::GetAlignedStride<4>(size.width * BytesPerPixel(format));
-    mData = gfx::Factory::CreateDataSourceSurfaceWithStride(size, format, stride);
+    DebugOnly<GLenum> status = mGL->fCheckFramebufferStatus(LOCAL_GL_FRAMEBUFFER);
+    MOZ_ASSERT(status == LOCAL_GL_FRAMEBUFFER_COMPLETE);
 }
 
 SharedSurface_Basic::~SharedSurface_Basic()
@@ -92,17 +100,10 @@ SharedSurface_Basic::~SharedSurface_Basic()
     mGL->fDeleteTextures(1, &mTex);
 }
 
-void
-SharedSurface_Basic::Fence()
-{
-    mGL->MakeCurrent();
-    ScopedBindFramebuffer autoFB(mGL, mFB);
-    ReadPixelsIntoDataSurface(mGL, mData);
-}
+////////////////////////////////////////////////////////////////////////
+// SharedSurface_GLTexture
 
-
-
-SharedSurface_GLTexture*
+/*static*/ UniquePtr<SharedSurface_GLTexture>
 SharedSurface_GLTexture::Create(GLContext* prodGL,
                                 GLContext* consGL,
                                 const GLFormats& formats,
@@ -119,12 +120,26 @@ SharedSurface_GLTexture::Create(GLContext* prodGL,
 
     bool ownsTex = false;
 
+    UniquePtr<SharedSurface_GLTexture> ret;
+
     if (!tex) {
-      tex = CreateTextureForOffscreen(prodGL, formats, size);
-      ownsTex = true;
+        GLContext::LocalErrorScope localError(*prodGL);
+
+        tex = CreateTextureForOffscreen(prodGL, formats, size);
+
+        GLenum err = localError.GetError();
+        MOZ_ASSERT_IF(err != LOCAL_GL_NO_ERROR, err == LOCAL_GL_OUT_OF_MEMORY);
+        if (err) {
+            prodGL->fDeleteTextures(1, &tex);
+            return Move(ret);
+        }
+
+        ownsTex = true;
     }
 
-    return new SharedSurface_GLTexture(prodGL, consGL, size, hasAlpha, tex, ownsTex);
+    ret.reset( new SharedSurface_GLTexture(prodGL, consGL, size,
+                                           hasAlpha, tex, ownsTex) );
+    return Move(ret);
 }
 
 SharedSurface_GLTexture::~SharedSurface_GLTexture()
@@ -169,7 +184,8 @@ SharedSurface_GLTexture::WaitSync()
 {
     MutexAutoLock lock(mMutex);
     if (!mSync) {
-        // We must have used glFinish instead of glFenceSync.
+        // We either used glFinish, or we passed this fence already.
+        // (PollSync/WaitSync returned true previously)
         return true;
     }
 
@@ -179,6 +195,34 @@ SharedSurface_GLTexture::WaitSync()
     mConsGL->fWaitSync(mSync,
                        0,
                        LOCAL_GL_TIMEOUT_IGNORED);
+    mConsGL->fDeleteSync(mSync);
+    mSync = 0;
+
+    return true;
+}
+
+bool
+SharedSurface_GLTexture::PollSync()
+{
+    MutexAutoLock lock(mMutex);
+    if (!mSync) {
+        // We either used glFinish, or we passed this fence already.
+        // (PollSync/WaitSync returned true previously)
+        return true;
+    }
+
+    mConsGL->MakeCurrent();
+    MOZ_ASSERT(mConsGL->IsExtensionSupported(GLContext::ARB_sync));
+
+    GLint status = 0;
+    mConsGL->fGetSynciv(mSync,
+                        LOCAL_GL_SYNC_STATUS,
+                        1,
+                        nullptr,
+                        &status);
+    if (status != LOCAL_GL_SIGNALED)
+        return false;
+
     mConsGL->fDeleteSync(mSync);
     mSync = 0;
 

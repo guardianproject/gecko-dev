@@ -16,9 +16,10 @@
 #include "GeckoProfilerFunc.h"
 #include "PseudoStack.h"
 #include "nsISupports.h"
+#include "ProfilerBacktrace.h"
 
 #ifdef MOZ_TASK_TRACER
-#include "GeckoTaskTracerImpl.h"
+#include "GeckoTaskTracer.h"
 #endif
 
 /* QT has a #define for the word "slots" and jsfriendapi.h has a struct with
@@ -74,9 +75,9 @@ void profiler_shutdown()
 }
 
 static inline
-void profiler_start(int aProfileEntries, int aInterval,
-                       const char** aFeatures, uint32_t aFeatureCount,
-                       const char** aThreadNameFilters, uint32_t aFilterCount)
+void profiler_start(int aProfileEntries, double aInterval,
+                    const char** aFeatures, uint32_t aFeatureCount,
+                    const char** aThreadNameFilters, uint32_t aFilterCount)
 {
   mozilla_sampler_start(aProfileEntries, aInterval, aFeatures, aFeatureCount, aThreadNameFilters, aFilterCount);
 }
@@ -124,6 +125,12 @@ bool profiler_is_active()
 }
 
 static inline
+bool profiler_feature_active(const char* aName)
+{
+  return mozilla_sampler_feature_active(aName);
+}
+
+static inline
 void profiler_responsiveness(const mozilla::TimeStamp& aTime)
 {
   mozilla_sampler_responsiveness(aTime);
@@ -157,16 +164,6 @@ static inline
 const char** profiler_get_features()
 {
   return mozilla_sampler_get_features();
-}
-
-static inline
-void profiler_print_location()
-{
-  if (!sps_version2()) {
-    return mozilla_sampler_print_location1();
-  } else {
-    return mozilla_sampler_print_location2();
-  }
 }
 
 static inline
@@ -242,12 +239,10 @@ static inline void profiler_tracing(const char* aCategory, const char* aInfo,
                                     ProfilerBacktrace* aCause,
                                     TracingMetadata aMetaData = TRACING_DEFAULT)
 {
-  if (!stack_key_initialized)
-    return;
-
   // Don't insert a marker if we're not profiling to avoid
   // the heap copy (malloc).
-  if (!profiler_is_active()) {
+  if (!stack_key_initialized || !profiler_is_active()) {
+    delete aCause;
     return;
   }
 
@@ -273,7 +268,9 @@ static inline void profiler_tracing(const char* aCategory, const char* aInfo,
 // ac_add_options --enable-systace
 //#define MOZ_USE_SYSTRACE
 #ifdef MOZ_USE_SYSTRACE
+#ifndef ATRACE_TAG
 # define ATRACE_TAG ATRACE_TAG_ALWAYS
+#endif
 // We need HAVE_ANDROID_OS to be defined for Trace.h.
 // If its not set we will set it temporary and remove it.
 # ifndef HAVE_ANDROID_OS
@@ -305,6 +302,7 @@ static inline void profiler_tracing(const char* aCategory, const char* aInfo,
 #define SAMPLER_APPEND_LINE_NUMBER(id) SAMPLER_APPEND_LINE_NUMBER_EXPAND(id, __LINE__)
 
 #define PROFILER_LABEL(name_space, info, category) MOZ_PLATFORM_TRACING(name_space "::" info) mozilla::SamplerStackFrameRAII SAMPLER_APPEND_LINE_NUMBER(sampler_raii)(name_space "::" info, category, __LINE__)
+#define PROFILER_LABEL_FUNC(category) MOZ_PLATFORM_TRACING(SAMPLE_FUNCTION_NAME) mozilla::SamplerStackFrameRAII SAMPLER_APPEND_LINE_NUMBER(sampler_raii)(SAMPLE_FUNCTION_NAME, category, __LINE__)
 #define PROFILER_LABEL_PRINTF(name_space, info, category, ...) MOZ_PLATFORM_TRACING(name_space "::" info) mozilla::SamplerStackFramePrintfRAII SAMPLER_APPEND_LINE_NUMBER(sampler_raii)(name_space "::" info, category, __LINE__, __VA_ARGS__)
 
 #define PROFILER_MARKER(info) mozilla_sampler_add_marker(info)
@@ -449,9 +447,21 @@ inline void mozilla_sampler_call_exit(void *aHandle)
     return;
 
   PseudoStack *stack = (PseudoStack*)aHandle;
-  stack->pop();
+  stack->popAndMaybeDelete();
 }
 
 void mozilla_sampler_add_marker(const char *aMarker, ProfilerMarkerPayload *aPayload);
+
+static inline
+void profiler_log(const char *str)
+{
+  profiler_tracing("log", str, TRACING_EVENT);
+}
+
+static inline
+void profiler_log(const char *fmt, va_list args)
+{
+  mozilla_sampler_log(fmt, args);
+}
 
 #endif /* ndef TOOLS_SPS_SAMPLER_H_ */

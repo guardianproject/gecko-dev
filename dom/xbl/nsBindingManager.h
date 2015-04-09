@@ -36,7 +36,7 @@ namespace mozilla {
 class CSSStyleSheet;
 } // namespace mozilla
 
-class nsBindingManager MOZ_FINAL : public nsStubMutationObserver
+class nsBindingManager final : public nsStubMutationObserver
 {
   ~nsBindingManager();
 
@@ -47,7 +47,7 @@ public:
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
 
-  nsBindingManager(nsIDocument* aDocument);
+  explicit nsBindingManager(nsIDocument* aDocument);
 
   nsXBLBinding* GetBindingWithContent(nsIContent* aContent);
 

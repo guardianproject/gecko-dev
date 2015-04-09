@@ -12,17 +12,15 @@ SOURCES += [
     'nsToolkitCompsModule.cpp',
 ]
 
-LIBRARY_NAME = 'toolkitcomps'
-
 FINAL_LIBRARY = 'xul'
 
 LOCAL_INCLUDES += [
     '../../xre',
+    '../aboutperformance',
     '../alerts',
     '../downloads',
     '../feeds',
     '../find',
-    '../intl',
     '../jsdownloads/src',
     '../protobuf',
     '../startup',
@@ -35,3 +33,5 @@ if not CONFIG['MOZ_DISABLE_PARENTAL_CONTROLS']:
     LOCAL_INCLUDES += [
         '../parentalcontrols',
     ]
+
+FAIL_ON_WARNINGS = True

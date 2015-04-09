@@ -95,6 +95,7 @@ add_task(function test_initialializeWithNoKeys() {
     yield browseridManager.whenReadyToAuthenticate.promise;
     do_check_eq(Status.login, LOGIN_SUCCEEDED, "login succeeded even without keys");
     do_check_false(browseridManager._canFetchKeys(), "_canFetchKeys reflects lack of keys");
+    do_check_eq(browseridManager._token, null, "we don't have a token");
 });
 
 add_test(function test_getResourceAuthenticator() {
@@ -269,12 +270,12 @@ add_task(function test_ensureLoggedIn() {
   Assert.ok(!browseridManager._shouldHaveSyncKeyBundle,
             "_shouldHaveSyncKeyBundle should be false so we know we are testing what we think we are.");
   Status.login = LOGIN_FAILED_NO_USERNAME;
-  yield Assert_rejects(browseridManager.ensureLoggedIn(), "expecting rejection due to no user");
+  yield Assert.rejects(browseridManager.ensureLoggedIn(), "expecting rejection due to no user");
   Assert.ok(browseridManager._shouldHaveSyncKeyBundle,
             "_shouldHaveSyncKeyBundle should always be true after ensureLogin completes.");
   fxa.internal.currentAccountState.signedInUser = signedInUser;
   Status.login = LOGIN_FAILED_LOGIN_REJECTED;
-  yield Assert_rejects(browseridManager.ensureLoggedIn(),
+  yield Assert.rejects(browseridManager.ensureLoggedIn(),
                        "LOGIN_FAILED_LOGIN_REJECTED should have caused immediate rejection");
   Assert.equal(Status.login, LOGIN_FAILED_LOGIN_REJECTED,
                "status should remain LOGIN_FAILED_LOGIN_REJECTED");
@@ -360,7 +361,7 @@ add_task(function test_getTokenErrors() {
   let browseridManager = Service.identity;
 
   yield browseridManager.initializeWithCurrentIdentity();
-  yield Assert_rejects(browseridManager.whenReadyToAuthenticate.promise,
+  yield Assert.rejects(browseridManager.whenReadyToAuthenticate.promise,
                        "should reject due to 401");
   Assert.equal(Status.login, LOGIN_FAILED_LOGIN_REJECTED, "login was rejected");
 
@@ -376,7 +377,7 @@ add_task(function test_getTokenErrors() {
   });
   browseridManager = Service.identity;
   yield browseridManager.initializeWithCurrentIdentity();
-  yield Assert_rejects(browseridManager.whenReadyToAuthenticate.promise,
+  yield Assert.rejects(browseridManager.whenReadyToAuthenticate.promise,
                        "should reject due to non-JSON response");
   Assert.equal(Status.login, LOGIN_FAILED_NETWORK_ERROR, "login state is LOGIN_FAILED_NETWORK_ERROR");
 });
@@ -397,7 +398,7 @@ add_task(function test_getTokenErrorWithRetry() {
   let browseridManager = Service.identity;
 
   yield browseridManager.initializeWithCurrentIdentity();
-  yield Assert_rejects(browseridManager.whenReadyToAuthenticate.promise,
+  yield Assert.rejects(browseridManager.whenReadyToAuthenticate.promise,
                        "should reject due to 503");
 
   // The observer should have fired - check it got the value in the response.
@@ -416,7 +417,7 @@ add_task(function test_getTokenErrorWithRetry() {
   browseridManager = Service.identity;
 
   yield browseridManager.initializeWithCurrentIdentity();
-  yield Assert_rejects(browseridManager.whenReadyToAuthenticate.promise,
+  yield Assert.rejects(browseridManager.whenReadyToAuthenticate.promise,
                        "should reject due to no token in response");
 
   // The observer should have fired - check it got the value in the response.
@@ -448,7 +449,7 @@ add_task(function test_getKeysErrorWithBackoff() {
   });
 
   let browseridManager = Service.identity;
-  yield Assert_rejects(browseridManager.whenReadyToAuthenticate.promise,
+  yield Assert.rejects(browseridManager.whenReadyToAuthenticate.promise,
                        "should reject due to 503");
 
   // The observer should have fired - check it got the value in the response.
@@ -482,7 +483,7 @@ add_task(function test_getKeysErrorWithRetry() {
   });
 
   let browseridManager = Service.identity;
-  yield Assert_rejects(browseridManager.whenReadyToAuthenticate.promise,
+  yield Assert.rejects(browseridManager.whenReadyToAuthenticate.promise,
                        "should reject due to 503");
 
   // The observer should have fired - check it got the value in the response.
@@ -666,7 +667,7 @@ function* initializeIdentityWithHAWKResponseFactory(config, cbGetResponse) {
   browseridManager._fxaService = fxa;
   browseridManager._signedInUser = null;
   yield browseridManager.initializeWithCurrentIdentity();
-  yield Assert_rejects(browseridManager.whenReadyToAuthenticate.promise,
+  yield Assert.rejects(browseridManager.whenReadyToAuthenticate.promise,
                        "expecting rejection due to hawk error");
 }
 

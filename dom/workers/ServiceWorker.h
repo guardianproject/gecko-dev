@@ -19,11 +19,16 @@ class Promise;
 
 namespace workers {
 
+class ServiceWorkerInfo;
+class ServiceWorkerManager;
 class SharedWorker;
 
-class ServiceWorker MOZ_FINAL : public DOMEventTargetHelper
+bool
+ServiceWorkerVisible(JSContext* aCx, JSObject* aObj);
+
+class ServiceWorker final : public DOMEventTargetHelper
 {
-  friend class RuntimeService;
+  friend class ServiceWorkerManager;
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(ServiceWorker, DOMEventTargetHelper)
@@ -32,7 +37,7 @@ public:
   IMPL_EVENT_HANDLER(error)
 
   virtual JSObject*
-  WrapObject(JSContext* aCx) MOZ_OVERRIDE;
+  WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override;
 
   ServiceWorkerState
   State() const
@@ -41,30 +46,46 @@ public:
   }
 
   void
-  GetScope(nsString& aScope) const
+  SetState(ServiceWorkerState aState)
   {
-    aScope = mScope;
+    mState = aState;
   }
 
   void
-  GetUrl(nsString& aURL) const
+  GetScriptURL(nsString& aURL) const;
+
+  void
+  DispatchStateChange(ServiceWorkerState aState)
   {
-    aURL = mURL;
+    SetState(aState);
+    DOMEventTargetHelper::DispatchTrustedEvent(NS_LITERAL_STRING("statechange"));
   }
+
+  void
+  QueueStateChangeEvent(ServiceWorkerState aState);
+
+#ifdef XP_WIN
+#undef PostMessage
+#endif
+
+  void
+  PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
+              const Optional<Sequence<JS::Value>>& aTransferable,
+              ErrorResult& aRv);
 
   WorkerPrivate*
   GetWorkerPrivate() const;
 
 private:
-  // This class can only be created from the RuntimeService.
-  ServiceWorker(nsPIDOMWindow* aWindow, SharedWorker* aSharedWorker);
+  // This class can only be created from the ServiceWorkerManager.
+  ServiceWorker(nsPIDOMWindow* aWindow, ServiceWorkerInfo* aInfo,
+                SharedWorker* aSharedWorker);
 
   // This class is reference-counted and will be destroyed from Release().
   ~ServiceWorker();
 
   ServiceWorkerState mState;
-  nsString mScope;
-  nsString mURL;
+  const nsRefPtr<ServiceWorkerInfo> mInfo;
 
   // To allow ServiceWorkers to potentially drop the backing DOMEventTargetHelper and
   // re-instantiate it later, they simply own a SharedWorker member that

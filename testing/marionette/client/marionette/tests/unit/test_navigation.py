@@ -2,8 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from marionette_test import MarionetteTestCase
-from errors import MarionetteException, TimeoutException
+from marionette.marionette_test import MarionetteTestCase, skip_if_b2g
+from marionette_driver.errors import MarionetteException, TimeoutException
 
 class TestNavigate(MarionetteTestCase):
     def test_navigate(self):
@@ -13,6 +13,12 @@ class TestNavigate(MarionetteTestCase):
         self.marionette.navigate(test_html)
         self.assertNotEqual("about:blank", self.marionette.execute_script("return window.location.href;"))
         self.assertEqual("Marionette Test", self.marionette.title)
+
+    @skip_if_b2g # we currently allow this in b2g
+    def test_navigate_chrome_error(self):
+        with self.marionette.using_context("chrome"):
+            self.assertRaisesRegexp(MarionetteException, "Cannot navigate in chrome context",
+                                    self.marionette.navigate, "about:blank")
 
     def test_getUrl(self):
         test_html = self.marionette.absolute_url("test.html")
@@ -60,6 +66,8 @@ class TestNavigate(MarionetteTestCase):
         self.assertEqual("Marionette Test", self.marionette.title)
         self.assertTrue(self.marionette.execute_script("return window.document.getElementById('someDiv') == undefined;"))
 
+    ''' Disabled due to Bug 977899
+    @skip_if_b2g
     def test_navigate_frame(self):
         self.marionette.navigate(self.marionette.absolute_url("test_iframe.html"))
         self.marionette.switch_to_frame(0)
@@ -67,6 +75,7 @@ class TestNavigate(MarionetteTestCase):
         self.assertTrue('empty.html' in self.marionette.get_url())
         self.marionette.switch_to_frame()
         self.assertTrue('test_iframe.html' in self.marionette.get_url())
+    '''
 
     def test_shouldnt_error_if_nonexistent_url_used(self):
         try:
@@ -80,6 +89,14 @@ class TestNavigate(MarionetteTestCase):
             import traceback
             print traceback.format_exc()
             self.fail("Should have thrown a MarionetteException instead of %s" % type(inst))
+
+    @skip_if_b2g # about:blocked isn't a well formed uri on b2g
+    def test_should_navigate_to_requested_about_page(self):
+        self.marionette.navigate("about:neterror")
+        self.assertEqual(self.marionette.get_url(), "about:neterror")
+        self.marionette.navigate(self.marionette.absolute_url("test.html"))
+        self.marionette.navigate("about:blocked")
+        self.assertEqual(self.marionette.get_url(), "about:blocked")
 
     def test_find_element_state_complete(self):
         test_html = self.marionette.absolute_url("test.html")
@@ -95,12 +112,12 @@ class TestNavigate(MarionetteTestCase):
             self.marionette.navigate(test_html)
             self.assertTrue(self.marionette.find_element("id", "mozLink"))
             self.fail("Should have thrown a MarionetteException")
-        except MarionetteException as e:
+        except TimeoutException as e:
             self.assertTrue("Error loading page, timed out" in str(e))
         except Exception as inst:
             import traceback
             print traceback.format_exc()
-            self.fail("Should have thrown a MarionetteException instead of %s" % type(inst))
+            self.fail("Should have thrown a TimeoutException instead of %s" % type(inst))
 
     def test_navigate_iframe(self):
         test_iframe = self.marionette.absolute_url("test_iframe.html")

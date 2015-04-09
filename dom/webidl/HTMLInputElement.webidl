@@ -151,8 +151,11 @@ partial interface HTMLInputElement {
   [ChromeOnly]
   sequence<DOMString> mozGetFileNameArray();
 
-  [ChromeOnly]
+  [ChromeOnly, Throws]
   void mozSetFileNameArray(sequence<DOMString> fileNames);
+
+  [ChromeOnly]
+  void mozSetFileArray(sequence<File> files);
 
   // Number controls (<input type=number>) have an anonymous text control
   // (<input type=text>) in the anonymous shadow tree that they contain. On
@@ -169,7 +172,9 @@ partial interface HTMLInputElement {
   boolean mozIsTextField(boolean aExcludePassword);
 
   [ChromeOnly]
-  AutocompleteInfo getAutocompleteInfo();
+  // This function will return null if @autocomplete is not defined for the
+  // current @type
+  AutocompleteInfo? getAutocompleteInfo();
 };
 
 partial interface HTMLInputElement {

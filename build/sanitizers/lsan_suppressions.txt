@@ -15,9 +15,6 @@ leak:nsComponentManagerImpl
 leak:mozJSComponentLoader::LoadModule
 leak:nsNativeModuleLoader::LoadModule
 
-# Bug 980109 - Freeing this properly on shutdown is hard.
-leak:profiler_init
-
 # Bug 981220 - Pixman fails to free TLS memory.
 leak:pixman_implementation_lookup_composite
 
@@ -26,17 +23,30 @@ leak:libfontconfig.so
 leak:GI___strdup
 # The symbol is really __GI___strdup, but if you have the leading _, it doesn't suppress it.
 
+# Bug 1078015 - If the process terminates during a PR_Sleep, LSAN  detects a leak
+leak:PR_Sleep
+
+###
+### Bug 979928 - WebRTC leaks. m2, m3.
+###
+
+# WebRTC leaks added for Mochitest 2.
+leak:NR_reg_init
+# nr_reg_local_init should be redundant with NR_reg_init, but with 34 on Aurora
+# we get less stack frames for some reason.
+leak:nr_reg_local_init
+leak:r_log_register
+leak:nr_reg_set
+
+# Additional WebRTC leak suppressions added for Mochitest 3.
+leak:mozilla::TransportLayerDtls::Setup
 
 ###
 ### Many leaks only affect some test suites.  The suite annotations are not checked.
 ###
 
-# Bug 979928 - WebRTC is leaky. m2, m3
-leak:/media/mtransport/
-leak:/media/webrtc/signaling/
-
 # Bug 981195 - Small leak in the parser. m4
-leak:TypeCompartment::fixObjectType
+leak:ObjectGroup::fixPlainObjectGroup
 
 # Bug 982111 - WebM is leaking. m1
 leak:nestegg_read_packet
@@ -58,9 +68,6 @@ leak:event_base_once
 
 # Bug 1021854 - nsFileStreamBase::DoOpen() leaking fds. bc1, oth
 leak:nsLocalFile::OpenNSPRFileDesc
-
-# Bug 1023585 - Leak of array buffer in JSStructuredCloneWriter::transferOwnership(). m1
-leak:AllocateArrayBufferContents
 
 # Bug 1022010 - Small leak under _render_glyph_outline. bc1
 leak:_render_glyph_outline
@@ -84,6 +91,7 @@ leak:processInternalEntity
 ###
 
 leak:libcairo.so
+leak:libdl.so
 leak:libdricore.so
 leak:libGL.so
 leak:libglib-2.0.so

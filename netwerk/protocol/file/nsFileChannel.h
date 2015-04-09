@@ -20,7 +20,7 @@ public:
   NS_DECL_NSIFILECHANNEL
   NS_DECL_NSIUPLOADCHANNEL
 
-  nsFileChannel(nsIURI *uri);
+  explicit nsFileChannel(nsIURI *uri);
 
 protected:
   ~nsFileChannel();
@@ -33,7 +33,7 @@ protected:
                                nsCString &contentType, bool async);
 
   virtual nsresult OpenContentStream(bool async, nsIInputStream **result,
-                                     nsIChannel** channel);
+                                     nsIChannel** channel) override;
 
 private:
   nsCOMPtr<nsIInputStream> mUploadStream;

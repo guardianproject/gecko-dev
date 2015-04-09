@@ -10,6 +10,7 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/dom/ContentChild.h"
+#include "mozilla/dom/ipc/BlobChild.h"
 
 #include "BluetoothChild.h"
 #include "MainThreadUtils.h"
@@ -140,7 +141,7 @@ BluetoothServiceChildProcess::GetPairedDevicePropertiesInternal(
 
 nsresult
 BluetoothServiceChildProcess::FetchUuidsInternal(
-    const nsAString& aDeviceAddress, BluetoothReplyRunnable* aRunnable)
+  const nsAString& aDeviceAddress, BluetoothReplyRunnable* aRunnable)
 {
   SendRequest(aRunnable, FetchUuidsRequest(nsString(aDeviceAddress)));
   return NS_OK;
@@ -207,7 +208,29 @@ BluetoothServiceChildProcess::UpdateSdpRecords(const nsAString& aDeviceAddress,
   MOZ_CRASH("This should never be called!");
 }
 
-bool
+void
+BluetoothServiceChildProcess::PinReplyInternal(
+  const nsAString& aDeviceAddress, bool aAccept,
+  const nsAString& aPinCode, BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable,
+              PinReplyRequest(nsString(aDeviceAddress),
+                              aAccept,
+                              nsString(aPinCode)));
+}
+
+void
+BluetoothServiceChildProcess::SspReplyInternal(
+  const nsAString& aDeviceAddress, BluetoothSspVariant aVariant,
+  bool aAccept, BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable,
+              SspReplyRequest(nsString(aDeviceAddress),
+                              aVariant,
+                              aAccept));
+}
+
+void
 BluetoothServiceChildProcess::SetPinCodeInternal(
                                                 const nsAString& aDeviceAddress,
                                                 const nsAString& aPinCode,
@@ -215,10 +238,9 @@ BluetoothServiceChildProcess::SetPinCodeInternal(
 {
   SendRequest(aRunnable,
               SetPinCodeRequest(nsString(aDeviceAddress), nsString(aPinCode)));
-  return true;
 }
 
-bool
+void
 BluetoothServiceChildProcess::SetPasskeyInternal(
                                                 const nsAString& aDeviceAddress,
                                                 uint32_t aPasskey,
@@ -226,10 +248,9 @@ BluetoothServiceChildProcess::SetPasskeyInternal(
 {
   SendRequest(aRunnable,
               SetPasskeyRequest(nsString(aDeviceAddress), aPasskey));
-  return true;
 }
 
-bool
+void
 BluetoothServiceChildProcess::SetPairingConfirmationInternal(
                                                 const nsAString& aDeviceAddress,
                                                 bool aConfirm,
@@ -242,7 +263,6 @@ BluetoothServiceChildProcess::SetPairingConfirmationInternal(
     SendRequest(aRunnable,
                 DenyPairingConfirmationRequest(nsString(aDeviceAddress)));
   }
-  return true;
 }
 
 void
@@ -379,6 +399,67 @@ BluetoothServiceChildProcess::SendPlayStatus(int64_t aDuration,
   SendRequest(aRunnable,
               SendPlayStatusRequest(aDuration, aPosition,
                                     nsString(aPlayStatus)));
+}
+
+void
+BluetoothServiceChildProcess::ConnectGattClientInternal(
+  const nsAString& aAppUuid, const nsAString& aDeviceAddress,
+  BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable, ConnectGattClientRequest(nsString(aAppUuid),
+                                                  nsString(aDeviceAddress)));
+}
+
+void
+BluetoothServiceChildProcess::DisconnectGattClientInternal(
+  const nsAString& aAppUuid, const nsAString& aDeviceAddress,
+  BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable,
+    DisconnectGattClientRequest(nsString(aAppUuid), nsString(aDeviceAddress)));
+}
+
+void
+BluetoothServiceChildProcess::DiscoverGattServicesInternal(
+  const nsAString& aAppUuid, BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable,
+    DiscoverGattServicesRequest(nsString(aAppUuid)));
+}
+
+void
+BluetoothServiceChildProcess::GattClientStartNotificationsInternal(
+  const nsAString& aAppUuid, const BluetoothGattServiceId& aServId,
+  const BluetoothGattId& aCharId, BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable,
+    GattClientStartNotificationsRequest(nsString(aAppUuid), aServId, aCharId));
+}
+
+void
+BluetoothServiceChildProcess::GattClientStopNotificationsInternal(
+  const nsAString& aAppUuid, const BluetoothGattServiceId& aServId,
+  const BluetoothGattId& aCharId, BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable,
+    GattClientStopNotificationsRequest(nsString(aAppUuid), aServId, aCharId));
+}
+
+void
+BluetoothServiceChildProcess::UnregisterGattClientInternal(
+  int aClientIf, BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable, UnregisterGattClientRequest(aClientIf));
+}
+
+void
+BluetoothServiceChildProcess::GattClientReadRemoteRssiInternal(
+  int aClientIf, const nsAString& aDeviceAddress,
+  BluetoothReplyRunnable* aRunnable)
+{
+  SendRequest(aRunnable,
+              GattClientReadRemoteRssiRequest(aClientIf,
+                                              nsString(aDeviceAddress)));
 }
 
 nsresult

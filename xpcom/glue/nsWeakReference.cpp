@@ -11,7 +11,7 @@
 #include "nsWeakReference.h"
 #include "nsCOMPtr.h"
 
-class nsWeakReference MOZ_FINAL : public nsIWeakReference
+class nsWeakReference final : public nsIWeakReference
 {
 public:
   // nsISupports...
@@ -19,12 +19,12 @@ public:
 
   // nsIWeakReference...
   NS_DECL_NSIWEAKREFERENCE
-  virtual size_t SizeOfOnlyThis(mozilla::MallocSizeOf aMallocSizeOf) const;
+  virtual size_t SizeOfOnlyThis(mozilla::MallocSizeOf aMallocSizeOf) const override;
 
 private:
   friend class nsSupportsWeakReference;
 
-  nsWeakReference(nsSupportsWeakReference* aReferent)
+  explicit nsWeakReference(nsSupportsWeakReference* aReferent)
     : mReferent(aReferent)
     // ...I can only be constructed by an |nsSupportsWeakReference|
   {
@@ -45,7 +45,7 @@ private:
     mReferent = 0;
   }
 
-  nsSupportsWeakReference*  mReferent;
+  nsSupportsWeakReference* MOZ_NON_OWNING_REF mReferent;
 };
 
 nsresult
@@ -66,7 +66,7 @@ nsQueryReferent::operator()(const nsIID& aIID, void** aAnswer) const
   return status;
 }
 
-NS_COM_GLUE nsIWeakReference*  // or else |already_AddRefed<nsIWeakReference>|
+nsIWeakReference*  // or else |already_AddRefed<nsIWeakReference>|
 NS_GetWeakReference(nsISupports* aInstancePtr, nsresult* aErrorPtr)
 {
   nsresult status;
@@ -90,7 +90,7 @@ NS_GetWeakReference(nsISupports* aInstancePtr, nsresult* aErrorPtr)
   return result;
 }
 
-NS_COM_GLUE nsresult
+nsresult
 nsSupportsWeakReference::GetWeakReference(nsIWeakReference** aInstancePtr)
 {
   if (!aInstancePtr) {

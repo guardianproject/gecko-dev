@@ -4,6 +4,126 @@
 
 /*global intl_Collator: false, */
 
+/* ES6 Draft Oct 14, 2014 21.1.3.19 */
+function String_substring(start, end) {
+    // Steps 1-3.
+    CheckObjectCoercible(this);
+    var str = ToString(this);
+
+    // Step 4.
+    var len = str.length;
+
+    // Step 5.
+    var intStart = ToInteger(start);
+
+    // Step 6.
+    var intEnd = (end === undefined) ? len : ToInteger(end);
+
+    // Step 7.
+    var finalStart = std_Math_min(std_Math_max(intStart, 0), len);
+
+    // Step 8.
+    var finalEnd = std_Math_min(std_Math_max(intEnd, 0), len);
+
+    // Steps 9-10.
+    var from, to;
+    if (finalStart < finalEnd) {
+        from = finalStart;
+        to = finalEnd;
+    } else {
+        from = finalEnd;
+        to = finalStart;
+    }
+
+    // Step 11.
+    // While |from| and |to - from| are bounded to the length of |str| and this
+    // and thus definitely in the int32 range, they can still be typed as
+    // double. Eagerly truncate since SubstringKernel only accepts int32.
+    return SubstringKernel(str, from | 0, (to - from) | 0);
+}
+
+function String_static_substring(string, start, end) {
+    if (arguments.length < 1)
+        ThrowError(JSMSG_MISSING_FUN_ARG, 0, 'String.substring');
+    return callFunction(String_substring, string, start, end);
+}
+
+/* ES6 Draft Oct 14, 2014 B.2.3.1 */
+function String_substr(start, length) {
+    // Steps 1-2.
+    CheckObjectCoercible(this);
+    var str = ToString(this);
+
+    // Steps 3-4.
+    var intStart = ToInteger(start);
+
+    // Steps 5-7.
+    var size = str.length;
+    // Use |size| instead of +Infinity to avoid performing calculations with
+    // doubles. (The result is the same either way.)
+    var end = (length === undefined) ? size : ToInteger(length);
+
+    // Step 8.
+    if (intStart < 0)
+        intStart = std_Math_max(intStart + size, 0);
+
+    // Step 9.
+    var resultLength = std_Math_min(std_Math_max(end, 0), size - intStart)
+
+    // Step 10.
+    if (resultLength <= 0)
+        return "";
+
+    // Step 11.
+    // While |intStart| and |resultLength| are bounded to the length of |str|
+    // and thus definitely in the int32 range, they can still be typed as
+    // double. Eagerly truncate since SubstringKernel only accepts int32.
+    return SubstringKernel(str, intStart | 0, resultLength | 0);
+}
+
+function String_static_substr(string, start, length) {
+    if (arguments.length < 1)
+        ThrowError(JSMSG_MISSING_FUN_ARG, 0, 'String.substr');
+    return callFunction(String_substr, string, start, length);
+}
+
+/* ES6 Draft Oct 14, 2014 21.1.3.16 */
+function String_slice(start, end) {
+    // Steps 1-3.
+    CheckObjectCoercible(this);
+    var str = ToString(this);
+
+    // Step 4.
+    var len = str.length;
+
+    // Step 5.
+    var intStart = ToInteger(start);
+
+    // Step 6.
+    var intEnd = (end === undefined) ? len : ToInteger(end);
+
+    // Step 7.
+    var from = (intStart < 0) ? std_Math_max(len + intStart, 0) : std_Math_min(intStart, len);
+
+    // Step 8.
+    var to = (intEnd < 0) ? std_Math_max(len + intEnd, 0) : std_Math_min(intEnd, len);
+
+    // Step 9.
+    var span = std_Math_max(to - from, 0);
+
+    // Step 10.
+    // While |from| and |span| are bounded to the length of |str|
+    // and thus definitely in the int32 range, they can still be typed as
+    // double. Eagerly truncate since SubstringKernel only accepts int32.
+    return SubstringKernel(str, from | 0, span | 0);
+}
+
+function String_static_slice(string, start, end) {
+    if (arguments.length < 1)
+        ThrowError(JSMSG_MISSING_FUN_ARG, 0, 'String.slice');
+    return callFunction(String_slice, string, start, end);
+}
+
 /* ES6 Draft September 5, 2013 21.1.3.3 */
 function String_codePointAt(pos) {
     // Steps 1-3.
@@ -69,7 +189,7 @@ function String_repeat(count) {
     return T;
 }
 
-#define STRING_ITERATOR_SLOT_ITERATED_OBJECT 0
+#define STRING_ITERATOR_SLOT_ITERATED_STRING 0
 #define STRING_ITERATOR_SLOT_NEXT_INDEX 1
 
 // ES6 draft specification, section 21.1.3.27, version 2013-09-27.
@@ -77,7 +197,7 @@ function String_iterator() {
     CheckObjectCoercible(this);
     var S = ToString(this);
     var iterator = NewStringIterator();
-    UnsafeSetReservedSlot(iterator, STRING_ITERATOR_SLOT_ITERATED_OBJECT, S);
+    UnsafeSetReservedSlot(iterator, STRING_ITERATOR_SLOT_ITERATED_STRING, S);
     UnsafeSetReservedSlot(iterator, STRING_ITERATOR_SLOT_NEXT_INDEX, 0);
     return iterator;
 }
@@ -87,16 +207,22 @@ function StringIteratorIdentity() {
 }
 
 function StringIteratorNext() {
-    // FIXME: Cross-compartment wrapper StringIterator objects should pass this test.  Bug 924059.
-    if (!IsObject(this) || !IsStringIterator(this))
-        ThrowError(JSMSG_INCOMPATIBLE_METHOD, "StringIterator", "next", ToString(this));
+    if (!IsObject(this) || !IsStringIterator(this)) {
+        return callFunction(CallStringIteratorMethodIfWrapped, this,
+                            "StringIteratorNext");
+    }
 
-    var S = UnsafeGetReservedSlot(this, STRING_ITERATOR_SLOT_ITERATED_OBJECT);
-    var index = UnsafeGetReservedSlot(this, STRING_ITERATOR_SLOT_NEXT_INDEX);
+    var S = UnsafeGetStringFromReservedSlot(this, STRING_ITERATOR_SLOT_ITERATED_STRING);
+    // We know that JSString::MAX_LENGTH <= INT32_MAX (and assert this in
+    // SelfHostring.cpp) so our current index can never be anything other than
+    // an Int32Value.
+    var index = UnsafeGetInt32FromReservedSlot(this, STRING_ITERATOR_SLOT_NEXT_INDEX);
     var size = S.length;
+    var result = { value: undefined, done: false };
 
     if (index >= size) {
-        return { value: undefined, done: true };
+        result.done = true;
+        return result;
     }
 
     var charCount = 1;
@@ -109,9 +235,9 @@ function StringIteratorNext() {
     }
 
     UnsafeSetReservedSlot(this, STRING_ITERATOR_SLOT_NEXT_INDEX, index + charCount);
-    var value = callFunction(std_String_substring, S, index, index + charCount);
+    result.value = callFunction(std_String_substring, S, index, index + charCount);
 
-    return { value: value, done: false };
+    return result;
 }
 
 /**
@@ -146,8 +272,8 @@ function String_localeCompare(that) {
     return intl_CompareStrings(collator, S, That);
 }
 
-/* ES6 Draft September 5, 2013 21.1.2.2 */
-function String_static_fromCodePoint() {
+// ES6 draft rev27 (2014/08/24) 21.1.2.2 String.fromCodePoint(...codePoints)
+function String_static_fromCodePoint(codePoints) {
     // Step 1. is not relevant
     // Step 2.
     var length = arguments.length;
@@ -163,7 +289,7 @@ function String_static_fromCodePoint() {
         var nextCP = ToNumber(next);
 
         // Step 5d.
-        if (nextCP !== ToInteger(nextCP) || std_isNaN(nextCP))
+        if (nextCP !== ToInteger(nextCP) || Number_isNaN(nextCP))
             ThrowError(JSMSG_NOT_A_CODEPOINT, ToString(nextCP));
 
         // Step 5e.
@@ -183,6 +309,59 @@ function String_static_fromCodePoint() {
 
     // Step 6.
     return callFunction(std_Function_apply, std_String_fromCharCode, null, elements);
+}
+
+/* ES6 Draft May 22, 2014 21.1.2.4 */
+function String_static_raw(callSite, ...substitutions) {
+    // Step 1 (implicit).
+    // Step 2.
+    var numberOfSubstitutions = substitutions.length;
+
+    // Steps 3-4.
+    var cooked = ToObject(callSite);
+
+    // Steps 5-7.
+    var raw = ToObject(cooked.raw);
+
+    // Steps 8-10.
+    var literalSegments = ToLength(raw.length);
+
+    // Step 11.
+    if (literalSegments <= 0)
+        return "";
+
+    // Step 12.
+    var resultString = "";
+
+    // Step 13.
+    var nextIndex = 0;
+
+    // Step 14.
+    while (true) {
+        // Steps a-d.
+        var nextSeg = ToString(raw[nextIndex]);
+
+        // Step e.
+        resultString = resultString + nextSeg;
+
+        // Step f.
+        if (nextIndex + 1 === literalSegments)
+            // Step f.i.
+            return resultString;
+
+        // Steps g-j.
+        var nextSub;
+        if (nextIndex < numberOfSubstitutions)
+            nextSub = ToString(substitutions[nextIndex]);
+        else
+            nextSub = "";
+
+        // Step k.
+        resultString = resultString + nextSub;
+
+        // Step l.
+        nextIndex++;
+    }
 }
 
 /**

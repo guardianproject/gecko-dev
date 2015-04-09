@@ -27,8 +27,8 @@ const PAGE_CONTENT = [
 
 const TYPE = "CssTransformHighlighter";
 
-let test = asyncTest(function*() {
-  yield addTab("data:text/html," + PAGE_CONTENT);
+add_task(function*() {
+  yield addTab("data:text/html;charset=utf-8," + PAGE_CONTENT);
 
   let {view: rView, inspector} = yield openRuleView();
   yield selectNode(".test", inspector);
@@ -48,13 +48,13 @@ let test = asyncTest(function*() {
   yield classRuleEditor.rule._applyingModifications;
 
   info("Faking a mousemove on the disabled property");
-  let {valueSpan} = getRuleViewProperty(rView, ".test", "transform");
+  ({valueSpan} = getRuleViewProperty(rView, ".test", "transform"));
   hs._onMouseMove({target: valueSpan});
   ok(!hs.highlighters[TYPE], "No highlighter was created for the disabled property");
   ok(!hs.promises[TYPE], "And no highlighter is being initialized either");
 
   info("Faking a mousemove on the now unoverriden property");
-  let {valueSpan} = getRuleViewProperty(rView, "div", "transform");
+  ({valueSpan} = getRuleViewProperty(rView, "div", "transform"));
   hs._onMouseMove({target: valueSpan});
   ok(hs.promises[TYPE], "The highlighter is being initialized now");
   let h = yield hs.promises[TYPE];

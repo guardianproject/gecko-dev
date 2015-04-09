@@ -120,10 +120,11 @@ public:
    * 
    * Convenience function that generates nsZipHandle
    *
-   * @param   aFile  The file used to access the zip
+   * @param   aFile         The file used to access the zip
+   * @param   aMustCacheFd  Optional flag to keep the PRFileDesc in nsZipHandle
    * @return  status code
    */
-  nsresult OpenArchive(nsIFile *aFile);
+  nsresult OpenArchive(nsIFile *aFile, bool aMustCacheFd = false);
 
   /**
    * Test the integrity of items in this archive by running
@@ -232,8 +233,8 @@ private:
   nsresult          BuildFileList(PRFileDesc *aFd = nullptr);
   nsresult          BuildSynthetics();
 
-  nsZipArchive& operator=(const nsZipArchive& rhs) MOZ_DELETE;
-  nsZipArchive(const nsZipArchive& rhs) MOZ_DELETE;
+  nsZipArchive& operator=(const nsZipArchive& rhs) = delete;
+  nsZipArchive(const nsZipArchive& rhs) = delete;
 };
 
 /** 
@@ -256,8 +257,8 @@ private:
   uint16_t      mSlot;
   bool          mRegExp;
 
-  nsZipFind& operator=(const nsZipFind& rhs) MOZ_DELETE;
-  nsZipFind(const nsZipFind& rhs) MOZ_DELETE;
+  nsZipFind& operator=(const nsZipFind& rhs) = delete;
+  nsZipFind(const nsZipFind& rhs) = delete;
 };
 
 /** 
@@ -380,15 +381,19 @@ class nsZipHandle {
 friend class nsZipArchive;
 friend class mozilla::FileLocation;
 public:
-  static nsresult Init(nsIFile *file, nsZipHandle **ret,
+  static nsresult Init(nsIFile *file, bool aMustCacheFd, nsZipHandle **ret,
                        PRFileDesc **aFd = nullptr);
   static nsresult Init(nsZipArchive *zip, const char *entry,
                        nsZipHandle **ret);
+  static nsresult Init(const uint8_t* aData, uint32_t aLen,
+                       nsZipHandle **aRet);
 
   NS_METHOD_(MozExternalRefCountType) AddRef(void);
   NS_METHOD_(MozExternalRefCountType) Release(void);
 
   int64_t SizeOfMapping();
+
+  nsresult GetNSPRFileDesc(PRFileDesc** aNSPRFileDesc);
 
 protected:
   const uint8_t * mFileData; /* pointer to mmaped file */
@@ -400,6 +405,7 @@ private:
   ~nsZipHandle();
 
   PRFileMap *                       mMap;    /* nspr datastructure for mmap */
+  mozilla::AutoFDClose              mNSPRFileDesc;
   nsAutoPtr<nsZipItemPtr<uint8_t> > mBuf;
   mozilla::ThreadSafeAutoRefCnt     mRefCnt; /* ref count */
   NS_DECL_OWNINGTHREAD

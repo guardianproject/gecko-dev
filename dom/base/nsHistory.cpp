@@ -46,7 +46,6 @@ NS_INTERFACE_MAP_END
 nsHistory::nsHistory(nsPIDOMWindow* aInnerWindow)
   : mInnerWindow(do_GetWeakReference(aInnerWindow))
 {
-  SetIsDOMBinding();
 }
 
 nsHistory::~nsHistory()
@@ -61,9 +60,9 @@ nsHistory::GetParentObject() const
 }
 
 JSObject*
-nsHistory::WrapObject(JSContext* aCx)
+nsHistory::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return HistoryBinding::Wrap(aCx, this);
+  return HistoryBinding::Wrap(aCx, this, aGivenProto);
 }
 
 uint32_t
@@ -168,7 +167,7 @@ nsHistory::Go(int32_t aDelta, ErrorResult& aRv)
       nsIPresShell *shell;
       nsPresContext *pcx;
       if (doc && (shell = doc->GetShell()) && (pcx = shell->GetPresContext())) {
-        pcx->RebuildAllStyleData(NS_STYLE_HINT_REFLOW);
+        pcx->RebuildAllStyleData(NS_STYLE_HINT_REFLOW, eRestyle_Subtree);
       }
 
       return;

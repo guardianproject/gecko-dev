@@ -78,8 +78,6 @@ add_task(function* test_setup() {
   });
   do_register_cleanup(() => gHttpServer.stop(() => {}));
 
-  disableCertificateChecks();
-
   Services.prefs.setBoolPref(PREF_EXPERIMENTS_ENABLED, true);
   Services.prefs.setIntPref(PREF_LOGGING_LEVEL, 0);
   Services.prefs.setBoolPref(PREF_LOGGING_DUMP, true);
@@ -105,8 +103,8 @@ add_task(function* test_setup() {
 // Test basic starting and stopping of experiments.
 
 add_task(function* test_telemetryBasics() {
-  // Check TelemetryLog instead of TelemetryPing.getPayload().log because
-  // TelemetryPing gets Experiments.instance() and side-effects log entries.
+  // Check TelemetryLog instead of TelemetrySession.getPayload().log because
+  // TelemetrySession gets Experiments.instance() and side-effects log entries.
 
   const OBSERVER_TOPIC = "experiments-changed";
   let observerFireCount = 0;

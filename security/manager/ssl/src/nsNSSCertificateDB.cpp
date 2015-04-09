@@ -20,7 +20,6 @@
 #include "nsNSSCertificate.h"
 #include "nsNSSHelper.h"
 #include "nsNSSCertHelper.h"
-#include "nsNSSCertCache.h"
 #include "nsCRT.h"
 #include "nsICertificateDialogs.h"
 #include "nsNSSCertTrust.h"
@@ -355,7 +354,7 @@ nsNSSCertificateDB::handleCACertDownload(nsIArray *x509Certs,
     tmpCert = CERT_NewTempCertificate(certdb, &der,
                                       nullptr, false, true);
   }
-  nsMemory::Free(der.data);
+  free(der.data);
   der.data = nullptr;
   der.len = 0;
   
@@ -424,7 +423,7 @@ nsNSSCertificateDB::handleCACertDownload(nsIArray *x509Certs,
     CERTCertificate *tmpCert2 = 
       CERT_NewTempCertificate(certdb, &der, nullptr, false, true);
 
-    nsMemory::Free(der.data);
+    free(der.data);
     der.data = nullptr;
     der.len = 0;
 
@@ -571,7 +570,6 @@ nsNSSCertificateDB::ImportEmailCertificate(uint8_t * data, uint32_t length,
   NS_ENSURE_TRUE(certVerifier, NS_ERROR_UNEXPECTED);
 
   certdb = CERT_GetDefaultCertDB();
-  const PRTime now = PR_Now();
 
   numcerts = certCollection->numcerts;
 
@@ -626,8 +624,8 @@ nsNSSCertificateDB::ImportEmailCertificate(uint8_t * data, uint32_t length,
 
     SECStatus rv = certVerifier->VerifyCert(node->cert,
                                             certificateUsageEmailRecipient,
-                                            now, ctx, nullptr, 0,
-                                            nullptr, &certChain);
+                                            mozilla::pkix::Now(), ctx,
+                                            nullptr, 0, nullptr, &certChain);
 
     if (rv != SECSuccess) {
       nsCOMPtr<nsIX509Cert> certToShow = nsNSSCertificate::Create(node->cert);
@@ -794,8 +792,8 @@ nsNSSCertificateDB::ImportValidCACertsInList(CERTCertList *certList, nsIInterfac
     ScopedCERTCertList certChain;
     SECStatus rv = certVerifier->VerifyCert(node->cert,
                                             certificateUsageVerifyCA,
-                                            PR_Now(), ctx, nullptr, 0, nullptr,
-                                            &certChain);
+                                            mozilla::pkix::Now(), ctx,
+                                            nullptr, 0, nullptr, &certChain);
     if (rv != SECSuccess) {
       nsCOMPtr<nsIX509Cert> certToShow = nsNSSCertificate::Create(node->cert);
       DisplayCertificateAlert(ctx, "NotImportingUnverifiedCert", certToShow, proofOfLock);
@@ -1234,17 +1232,17 @@ nsNSSCertificateDB::getCertNames(CERTCertList *certList,
   }
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("num certs: %d\n", numcerts));
   int nc = (numcerts == 0) ? 1 : numcerts;
-  tmpArray = (char16_t **)nsMemory::Alloc(sizeof(char16_t *) * nc);
+  tmpArray = (char16_t **)moz_xmalloc(sizeof(char16_t *) * nc);
   if (numcerts == 0) goto finish;
   for (node = CERT_LIST_HEAD(certList);
        !CERT_LIST_END(node, certList);
        node = CERT_LIST_NEXT(node)) {
     if (getCertType(node->cert) == type) {
-      nsNSSCertificate pipCert(node->cert);
+      RefPtr<nsNSSCertificate> pipCert(new nsNSSCertificate(node->cert));
       char *dbkey = nullptr;
       char *namestr = nullptr;
       nsAutoString certstr;
-      pipCert.GetDbKey(&dbkey);
+      pipCert->GetDbKey(&dbkey);
       nsAutoString keystr = NS_ConvertASCIItoUTF16(dbkey);
       PR_FREEIF(dbkey);
       if (type == nsIX509Cert::EMAIL_CERT) {
@@ -1375,7 +1373,8 @@ nsNSSCertificateDB::FindCertByEmailAddress(nsISupports *aToken, const char *aEma
 
     SECStatus srv = certVerifier->VerifyCert(node->cert,
                                              certificateUsageEmailRecipient,
-                                             PR_Now(), nullptr /*XXX pinarg*/,
+                                             mozilla::pkix::Now(),
+                                             nullptr /*XXX pinarg*/,
                                              nullptr /*hostname*/);
     if (srv == SECSuccess) {
       break;
@@ -1620,7 +1619,7 @@ NS_IMETHODIMP nsNSSCertificateDB::AddCertFromBase64(const char* aBase64,
   if (!tmpCert)
     tmpCert = CERT_NewTempCertificate(certdb, &der,
                                       nullptr, false, true);
-  nsMemory::Free(der.data);
+  free(der.data);
   der.data = nullptr;
   der.len = 0;
 
@@ -1743,8 +1742,7 @@ nsNSSCertificateDB::VerifyCertNow(nsIX509Cert* aCert,
   SECOidTag evOidPolicy;
   SECStatus srv;
 
-  srv = certVerifier->VerifyCert(nssCert,
-                                 aUsage, PR_Now(),
+  srv = certVerifier->VerifyCert(nssCert, aUsage, mozilla::pkix::Now(),
                                  nullptr, // Assume no context
                                  nullptr, // hostname
                                  aFlags,

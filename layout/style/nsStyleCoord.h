@@ -72,17 +72,17 @@ public:
 
   // Reference counted calc() value.  This is the type that is used to store
   // the calc() value in nsStyleCoord.
-  struct Calc MOZ_FINAL : public CalcValue {
+  struct Calc final : public CalcValue {
     NS_INLINE_DECL_REFCOUNTING(Calc)
     Calc() {}
 
   private:
-    Calc(const Calc&) MOZ_DELETE;
+    Calc(const Calc&) = delete;
     ~Calc() {}
-    Calc& operator=(const Calc&) MOZ_DELETE;
+    Calc& operator=(const Calc&) = delete;
   };
 
-  nsStyleCoord(nsStyleUnit aUnit = eStyleUnit_Null);
+  explicit nsStyleCoord(nsStyleUnit aUnit = eStyleUnit_Null);
   enum CoordConstructorType { CoordConstructor };
   inline nsStyleCoord(nscoord aValue, CoordConstructorType);
   nsStyleCoord(int32_t aValue, nsStyleUnit aUnit);
@@ -152,7 +152,9 @@ public:
   int32_t     GetIntValue() const;
   float       GetPercentValue() const;
   float       GetFactorValue() const;
+  float       GetFactorOrPercentValue() const;
   float       GetAngleValue() const;
+  double      GetAngleValueInDegrees() const;
   double      GetAngleValueInRadians() const;
   float       GetFlexFractionValue() const;
   Calc*       GetCalcValue() const;
@@ -328,6 +330,16 @@ inline float nsStyleCoord::GetFactorValue() const
 {
   NS_ASSERTION(mUnit == eStyleUnit_Factor, "not a factor value");
   if (mUnit == eStyleUnit_Factor) {
+    return mValue.mFloat;
+  }
+  return 0.0f;
+}
+
+inline float nsStyleCoord::GetFactorOrPercentValue() const
+{
+  NS_ASSERTION(mUnit == eStyleUnit_Factor || mUnit == eStyleUnit_Percent,
+               "not a percent or factor value");
+  if (mUnit == eStyleUnit_Factor || mUnit == eStyleUnit_Percent) {
     return mValue.mFloat;
   }
   return 0.0f;

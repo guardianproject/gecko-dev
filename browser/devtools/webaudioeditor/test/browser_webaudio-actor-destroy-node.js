@@ -5,11 +5,11 @@
  * Test `destroy-node` event on WebAudioActor.
  */
 
-function spawnTest () {
-  let [target, debuggee, front] = yield initBackend(DESTROY_NODES_URL);
+add_task(function*() {
+  let { target, front } = yield initBackend(DESTROY_NODES_URL);
 
   let waitUntilDestroyed = getN(front, "destroy-node", 10);
-  let [_, _, created] = yield Promise.all([
+  let [, , created] = yield Promise.all([
     front.setup({ reload: true }),
     once(front, "start-context"),
     // Should create 1 destination node and 10 disposable buffer nodes
@@ -29,8 +29,7 @@ function spawnTest () {
   });
 
   yield removeTab(target.tab);
-  finish();
-}
+});
 
 function actorIsInList (list, actor) {
   for (let i = 0; i < list.length; i++) {

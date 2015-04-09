@@ -5,15 +5,15 @@
 "use strict";
 
 // Testing selector inplace-editor behaviors in the rule-view with pseudo
-// classes and elements
+// classes.
 
 let PAGE_CONTENT = [
   '<style type="text/css">',
   '  .testclass {',
   '    text-align: center;',
   '  }',
-  '  #testid3:after {',
-  '    content: "+"',
+  '  #testid3:first-letter {',
+  '    text-decoration: "italic"',
   '  }',
   '</style>',
   '<div id="testid">Styled Node</div>',
@@ -22,8 +22,8 @@ let PAGE_CONTENT = [
   '<div id="testid3">B</div>'
 ].join("\n");
 
-let test = asyncTest(function*() {
-  yield addTab("data:text/html,test rule view selector changes");
+add_task(function*() {
+  yield addTab("data:text/html;charset=utf-8,test rule view selector changes");
 
   info("Creating the test document");
   content.document.body.innerHTML = PAGE_CONTENT;
@@ -41,17 +41,18 @@ let test = asyncTest(function*() {
 
   info("Selecting the test element");
   yield selectNode("#testid3", inspector);
-  yield testEditSelector(view, ".testclass2:after");
+  yield testEditSelector(view, ".testclass2::first-letter");
 
   info("Selecting the modified element");
   yield selectNode(".testclass2", inspector);
-  yield checkModifiedElement(view, ".testclass2:after");
+  yield checkModifiedElement(view, ".testclass2::first-letter");
 });
 
 function* testEditSelector(view, name) {
   info("Test editing existing selector fields");
 
-  let idRuleEditor = getRuleViewRuleEditor(view, 1);
+  let idRuleEditor = getRuleViewRuleEditor(view, 1) ||
+    getRuleViewRuleEditor(view, 1, 0);
 
   info("Focusing an existing selector name in the rule-view");
   let editor = yield focusEditableField(idRuleEditor.selectorText);
@@ -63,7 +64,7 @@ function* testEditSelector(view, name) {
   editor.input.value = name;
 
   info("Waiting for rule view to refresh");
-  let onRuleViewRefresh = once(view.element, "CssRuleViewRefreshed");
+  let onRuleViewRefresh = once(view, "ruleview-refreshed");
 
   info("Entering the commit key");
   EventUtils.synthesizeKey("VK_RETURN", {});

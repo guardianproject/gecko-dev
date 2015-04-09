@@ -6,6 +6,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 include LayersSurfaces;
+include LayersMessages;
 include protocol PLayerTransaction;
 include "mozilla/GfxMessageUtils.h";
 include "nsRegion.h";
@@ -28,9 +29,7 @@ namespace layers {
  * the main thread and the compositor thread context. It's primary
  * purpose is to manage the PLayerTransaction sub protocol.
  */
-// This should really be 'sync', but we're using 'rpc' as a workaround
-// for Bug 716631.
-intr protocol PCompositor
+sync protocol PCompositor
 {
   // A Compositor manages a single Layer Manager (PLayerTransaction)
   manages PLayerTransaction;
@@ -47,8 +46,31 @@ child:
   // The parent sends the child the requested fill ratio numbers.
   async Overfill(uint32_t aOverfill);
 
-parent:
+  /**
+   * Parent informs the child that the graphics objects are ready for
+   * compositing.  This usually means that the graphics objects (textures
+   * and the like) are available on the GPU.  This is used for chrome UI.
+   * @see RequestNotifyAfterRemotePaint
+   * @see PBrowser
+   */
+  async RemotePaintIsReady();
 
+  /**
+   * Bounce plugin widget configurations over to the main thread for
+   * application on the widgets. Used on Windows and Linux in managing
+   * plugin widgets.
+   */
+  async UpdatePluginConfigurations(nsIntPoint aContentOffset,
+                                   nsIntRegion aVisibleRegion,
+                                   PluginWindowData[] aPlugins);
+
+  /**
+   * Sets the list of currently visible plugin windows based on a
+   * list of plugin window ids.
+   */
+  async UpdatePluginVisibility(uintptr_t[] aVisibleIdList);
+
+parent:
   // Child sends the parent a request for fill ratio numbers.
   async RequestOverfill();
 
@@ -64,6 +86,7 @@ parent:
   sync Resume();
 
   async NotifyChildCreated(uint64_t id);
+  async AdoptChild(uint64_t id);
 
   // Make a snapshot of the content that would have been drawn to our
   // render target at the time this message is received.  If the size
@@ -77,6 +100,10 @@ parent:
   // Make sure any pending composites are started immediately and
   // block until they are completed.
   sync FlushRendering();
+
+  // Get the size of the tiles. This number should not change at runtime.
+  sync GetTileSize()
+    returns (int32_t tileWidth, int32_t tileHeight);
 
   sync StartFrameTimeRecording(int32_t bufferSize)
     returns (uint32_t startIndex);
@@ -93,10 +120,18 @@ parent:
   // Notify the compositor that a region of the screen has been invalidated.
   async NotifyRegionInvalidated(nsIntRegion region);
 
+  /**
+   * The child (content/chrome thread) requests that the parent inform it when
+   * the graphics objects are ready to display.
+   * @see PBrowser
+   * @see RemotePaintIsReady
+   */
+  async RequestNotifyAfterRemotePaint();
+
 child:
   // Send back Compositor Frame Metrics from APZCs so tiled layers can
   // update progressively.
-  async SharedCompositorFrameMetrics(Handle metrics, CrossProcessMutexHandle mutex, uint32_t aAPZCId);
+  async SharedCompositorFrameMetrics(Handle metrics, CrossProcessMutexHandle mutex, uint64_t aLayersId, uint32_t aAPZCId);
   async ReleaseSharedCompositorFrameMetrics(ViewID aId, uint32_t aAPZCId);
 };
 

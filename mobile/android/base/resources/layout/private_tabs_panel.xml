@@ -6,15 +6,8 @@
 <merge xmlns:android="http://schemas.android.com/apk/res/android"
        xmlns:gecko="http://schemas.android.com/apk/res-auto">
 
-   <FrameLayout android:layout_width="match_parent"
+    <ScrollView android:layout_width="match_parent"
                 android:layout_height="match_parent">
-
-        <org.mozilla.gecko.tabspanel.TabsTray android:id="@+id/private_tabs_tray"
-                                              style="@style/TabsList"
-                                              android:layout_width="match_parent"
-                                              android:layout_height="match_parent"
-                                              android:choiceMode="singleChoice"
-                                              gecko:tabs="tabs_private"/>
 
         <LinearLayout android:id="@+id/private_tabs_empty"
                       style="@style/TabsPanelFrame.PrivateTabs"
@@ -25,7 +18,8 @@
                           android:layout_width="match_parent"
                           android:layout_height="wrap_content">
 
-                <TextView style="@style/TabsPanelItem.TextAppearance.Header.PrivateTabs"
+                <TextView android:id="@+id/private_tabs_empty_header"
+                          style="@style/TabsPanelItem.TextAppearance.Header.PrivateTabs"
                           android:layout_width="match_parent"
                           android:layout_height="wrap_content"
                           android:text="@string/private_browsing_title"/>
@@ -50,6 +44,16 @@
 
         </LinearLayout>
 
-    </FrameLayout>
+    </ScrollView>
+
+    <!-- Note: for an unknown reason, scrolling in the TabsLayout
+         does not work unless it is laid out after the empty view. -->
+    <view class="org.mozilla.gecko.tabs.TabsPanel$TabsLayout"
+          android:id="@+id/private_tabs_layout"
+          style="@style/TabsLayout"
+          android:layout_width="match_parent"
+          android:layout_height="match_parent"
+          android:choiceMode="singleChoice"
+          gecko:tabs="tabs_private"/>
 
 </merge>

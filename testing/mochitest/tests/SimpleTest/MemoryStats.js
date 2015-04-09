@@ -53,12 +53,17 @@ MemoryStats.constructPathname = function (directory, basename) {
     return d.path;
 }
 
-MemoryStats.dump = function (dumpFn,
-                             testNumber,
+MemoryStats.dump = function (testNumber,
                              testURL,
                              dumpOutputDirectory,
                              dumpAboutMemory,
                              dumpDMD) {
+    // Use dump because treeherder uses --quiet, which drops 'info'
+    // from the structured logger.
+    var info = function(message) {
+        dump(message + "\n");
+    };
+
     var mrm = MemoryStats._getService("@mozilla.org/memory-reporter-manager;1",
                                       "nsIMemoryReporterManager");
     for (var stat in MemoryStats._hasMemoryStatistics) {
@@ -75,9 +80,9 @@ MemoryStats.dump = function (dumpFn,
             MemoryStats._hasMemoryStatistics[stat] = supported;
         }
         if (supported == MEM_STAT_SUPPORTED) {
-            dumpFn("TEST-INFO | MEMORY STAT " + stat + " after test: " + mrm[stat]);
+            info("MEMORY STAT " + stat + " after test: " + mrm[stat]);
         } else if (firstAccess) {
-            dumpFn("TEST-INFO | MEMORY STAT " + stat + " not supported in this build configuration.");
+            info("MEMORY STAT " + stat + " not supported in this build configuration.");
         }
     }
 
@@ -85,20 +90,28 @@ MemoryStats.dump = function (dumpFn,
         var basename = "about-memory-" + testNumber + ".json.gz";
         var dumpfile = MemoryStats.constructPathname(dumpOutputDirectory,
                                                      basename);
-        dumpFn("TEST-INFO | " + testURL + " | MEMDUMP-START " + dumpfile);
+        info(testURL + " | MEMDUMP-START " + dumpfile);
         var md = MemoryStats._getService("@mozilla.org/memory-info-dumper;1",
                                          "nsIMemoryInfoDumper");
         md.dumpMemoryReportsToNamedFile(dumpfile, function () {
-            dumpFn("TEST-INFO | " + testURL + " | MEMDUMP-END");
+            info("TEST-INFO | " + testURL + " | MEMDUMP-END");
         }, null, /* anonymize = */ false);
-
     }
 
+    // This is the old, deprecated function.
     if (dumpDMD && typeof(DMDReportAndDump) != undefined) {
+        var basename = "dmd-" + testNumber + "-deprecated.txt";
+        var dumpfile = MemoryStats.constructPathname(dumpOutputDirectory,
+                                                     basename);
+        info(testURL + " | DMD-DUMP-deprecated " + dumpfile);
+        DMDReportAndDump(dumpfile);
+    }
+
+    if (dumpDMD && typeof(DMDAnalyzeReports) != undefined) {
         var basename = "dmd-" + testNumber + ".txt";
         var dumpfile = MemoryStats.constructPathname(dumpOutputDirectory,
                                                      basename);
-        dumpFn("TEST-INFO | " + testURL + " | DMD-DUMP " + dumpfile);
-        DMDReportAndDump(dumpfile);
+        info(testURL + " | DMD-DUMP " + dumpfile);
+        DMDAnalyzeReports(dumpfile);
     }
 };

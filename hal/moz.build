@@ -189,9 +189,14 @@ if CONFIG['MOZ_GAMEPAD']:
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
     # So that we can call nsScreenManagerGonk::GetConfiguration().
     LOCAL_INCLUDES += [
+        '/widget',
         '/widget/gonk',
-        '/widget/xpwidgets'
     ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
     CXXFLAGS += ['-I%s/hardware/libhardware_legacy/include' % CONFIG['ANDROID_SOURCE']]
+
+CFLAGS += CONFIG['GLIB_CFLAGS']
+CFLAGS += CONFIG['MOZ_DBUS_GLIB_CFLAGS']
+CXXFLAGS += CONFIG['GLIB_CFLAGS']
+CXXFLAGS += CONFIG['MOZ_DBUS_GLIB_CFLAGS']

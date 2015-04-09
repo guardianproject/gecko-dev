@@ -27,7 +27,6 @@ using namespace mozilla::dom;
 nsPluginArray::nsPluginArray(nsPIDOMWindow* aWindow)
   : mWindow(aWindow)
 {
-  SetIsDOMBinding();
 }
 
 void
@@ -52,9 +51,9 @@ nsPluginArray::GetParentObject() const
 }
 
 JSObject*
-nsPluginArray::WrapObject(JSContext* aCx)
+nsPluginArray::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return PluginArrayBinding::Wrap(aCx, this);
+  return PluginArrayBinding::Wrap(aCx, this, aGivenProto);
 }
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(nsPluginArray)
@@ -81,6 +80,13 @@ GetPluginMimeTypes(const nsTArray<nsRefPtr<nsPluginElement> >& aPlugins,
   }
 }
 
+static bool
+operator<(const nsRefPtr<nsMimeType>& lhs, const nsRefPtr<nsMimeType>& rhs)
+{
+  // Sort MIME types alphabetically by type name.
+  return lhs->Type() < rhs->Type();
+}
+
 void
 nsPluginArray::GetMimeTypes(nsTArray<nsRefPtr<nsMimeType> >& aMimeTypes,
                             nsTArray<nsRefPtr<nsMimeType> >& aHiddenMimeTypes)
@@ -96,6 +102,10 @@ nsPluginArray::GetMimeTypes(nsTArray<nsRefPtr<nsMimeType> >& aMimeTypes,
 
   GetPluginMimeTypes(mPlugins, aMimeTypes);
   GetPluginMimeTypes(mHiddenPlugins, aHiddenMimeTypes);
+
+  // Alphabetize the enumeration order of non-hidden MIME types to reduce
+  // fingerprintable entropy based on plugins' installation file times.
+  aMimeTypes.Sort();
 }
 
 nsPluginElement*
@@ -297,6 +307,14 @@ IsPluginEnumerable(const nsTArray<nsCString>& enumerableNames,
   return false; // hide plugin!
 }
 
+static bool
+operator<(const nsRefPtr<nsPluginElement>& lhs,
+          const nsRefPtr<nsPluginElement>& rhs)
+{
+  // Sort plugins alphabetically by name.
+  return lhs->PluginTag()->mName < rhs->PluginTag()->mName;
+}
+
 void
 nsPluginArray::EnsurePlugins()
 {
@@ -345,6 +363,10 @@ nsPluginArray::EnsurePlugins()
 
     pluginArray.AppendElement(new nsPluginElement(mWindow, pluginTag));
   }
+
+  // Alphabetize the enumeration order of non-hidden plugins to reduce
+  // fingerprintable entropy based on plugins' installation file times.
+  mPlugins.Sort();
 }
 
 // nsPluginElement implementation.
@@ -363,7 +385,6 @@ nsPluginElement::nsPluginElement(nsPIDOMWindow* aWindow,
   : mWindow(aWindow),
     mPluginTag(aPluginTag)
 {
-  SetIsDOMBinding();
 }
 
 nsPluginElement::~nsPluginElement()
@@ -378,9 +399,9 @@ nsPluginElement::GetParentObject() const
 }
 
 JSObject*
-nsPluginElement::WrapObject(JSContext* aCx)
+nsPluginElement::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 {
-  return PluginBinding::Wrap(aCx, this);
+  return PluginBinding::Wrap(aCx, this, aGivenProto);
 }
 
 void

@@ -6,7 +6,7 @@ loadRelativeToScript('utility.js');
 loadRelativeToScript('annotations.js');
 loadRelativeToScript('CFG.js');
 
-var sourceRoot = (environment['SOURCE'] || '') + '/'
+var sourceRoot = (os.getenv('SOURCE') || '') + '/'
 
 var functionBodies;
 
@@ -59,17 +59,25 @@ for (var line of text) {
 }
 text = null;
 
+function isGCType(type)
+{
+    if (type.Kind == "CSU")
+        return type.Name in gcThings;
+    else if (type.Kind == "Array")
+        return isGCType(type.Type);
+    return false;
+}
+
 function isUnrootedType(type)
 {
-    if (type.Kind == "Pointer") {
-        var target = type.Type;
-        if (target.Kind == "CSU")
-            return target.Name in gcThings;
-        return false;
-    }
-    if (type.Kind == "CSU")
+    if (type.Kind == "Pointer")
+        return isGCType(type.Type);
+    else if (type.Kind == "Array")
+        return isUnrootedType(type.Type);
+    else if (type.Kind == "CSU")
         return type.Name in gcPointers;
-    return false;
+    else
+        return false;
 }
 
 function expressionUsesVariable(exp, variable)
@@ -81,6 +89,21 @@ function expressionUsesVariable(exp, variable)
     for (var childExp of exp.Exp) {
         if (expressionUsesVariable(childExp, variable))
             return true;
+    }
+    return false;
+}
+
+function expressionUsesVariableContents(exp, variable)
+{
+    if (!("Exp" in exp))
+        return false;
+    for (var childExp of exp.Exp) {
+        if (childExp.Kind == 'Drf') {
+            if (expressionUsesVariable(childExp, variable))
+                return true;
+        } else if (expressionUsesVariableContents(childExp, variable)) {
+            return true;
+        }
     }
     return false;
 }
@@ -128,7 +151,7 @@ function edgeUsesVariable(edge, variable, body)
         return expressionUsesVariable(edge.Exp[1], variable) ? src : 0;
 
     case "Assume":
-        return expressionUsesVariable(edge.Exp[0], variable) ? src : 0;
+        return expressionUsesVariableContents(edge.Exp[0], variable) ? src : 0;
 
     case "Call":
         if (expressionUsesVariable(edge.Exp[0], variable))
@@ -421,7 +444,7 @@ function unsafeVariableAddressTaken(suppressed, variable)
 
 function computePrintedLines(functionName)
 {
-    assert(!system("xdbfind src_body.xdb '" + functionName + "' > " + tmpfile));
+    assert(!os.system("xdbfind src_body.xdb '" + functionName + "' > " + tmpfile));
     var lines = snarf(tmpfile).split('\n');
 
     for (var body of functionBodies)
